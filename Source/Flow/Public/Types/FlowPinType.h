@@ -18,8 +18,9 @@ class IPropertyHandle;
 class UFlowNodeBase;
 class UFlowNode;
 struct FFlowDataPinResult;
-struct FFlowPin;
 struct FFlowDataPinValue;
+struct FFlowPin;
+struct FFlowPinTypeName;
 
 USTRUCT(BlueprintType)
 struct FFlowPinType

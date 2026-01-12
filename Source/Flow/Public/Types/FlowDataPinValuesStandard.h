@@ -19,7 +19,7 @@
 //======================================================================
 // Bool
 //======================================================================
-USTRUCT(MinimalApi, BlueprintType, DisplayName = "Bool - Flow DataPin Value", meta = (FlowPinType = "Bool", HasNativeMake = "/Script/Flow.FlowDataPinBlueprintLibrary.MakeStructBool"))
+USTRUCT(BlueprintType, DisplayName = "Bool - Flow DataPin Value", meta = (FlowPinType = "Bool", HasNativeMake = "/Script/Flow.FlowDataPinBlueprintLibrary.MakeStructBool"))
 struct FFlowDataPinValue_Bool : public FFlowDataPinValue
 {
 	GENERATED_BODY()
@@ -42,7 +42,7 @@ public:
 //======================================================================
 // Int (int32)
 //======================================================================
-USTRUCT(MinimalApi, BlueprintType, DisplayName = "Int - Flow DataPin Value", meta = (FlowPinType = "Int", HasNativeMake = "/Script/Flow.FlowDataPinBlueprintLibrary.MakeStructInt"))
+USTRUCT(BlueprintType, DisplayName = "Int - Flow DataPin Value", meta = (FlowPinType = "Int", HasNativeMake = "/Script/Flow.FlowDataPinBlueprintLibrary.MakeStructInt"))
 struct FFlowDataPinValue_Int : public FFlowDataPinValue
 {
 	GENERATED_BODY()
@@ -65,7 +65,7 @@ public:
 //======================================================================
 // Int64
 //======================================================================
-USTRUCT(MinimalApi, BlueprintType, DisplayName = "Int64 - Flow DataPin Value", meta = (FlowPinType = "Int64", HasNativeMake = "/Script/Flow.FlowDataPinBlueprintLibrary.MakeStructInt64"))
+USTRUCT(BlueprintType, DisplayName = "Int64 - Flow DataPin Value", meta = (FlowPinType = "Int64", HasNativeMake = "/Script/Flow.FlowDataPinBlueprintLibrary.MakeStructInt64"))
 struct FFlowDataPinValue_Int64 : public FFlowDataPinValue
 {
 	GENERATED_BODY()
@@ -88,7 +88,7 @@ public:
 //======================================================================
 // Float
 //======================================================================
-USTRUCT(MinimalApi, BlueprintType, DisplayName = "Float - Flow DataPin Value", meta = (FlowPinType = "Float", HasNativeMake = "/Script/Flow.FlowDataPinBlueprintLibrary.MakeStructFloat"))
+USTRUCT(BlueprintType, DisplayName = "Float - Flow DataPin Value", meta = (FlowPinType = "Float", HasNativeMake = "/Script/Flow.FlowDataPinBlueprintLibrary.MakeStructFloat"))
 struct FFlowDataPinValue_Float : public FFlowDataPinValue
 {
 	GENERATED_BODY()
@@ -111,7 +111,7 @@ public:
 //======================================================================
 // Double
 //======================================================================
-USTRUCT(MinimalApi, BlueprintType, DisplayName = "Double - Flow DataPin Value", meta = (FlowPinType = "Double", HasNativeMake = "/Script/Flow.FlowDataPinBlueprintLibrary.MakeStructDouble"))
+USTRUCT(BlueprintType, DisplayName = "Double - Flow DataPin Value", meta = (FlowPinType = "Double", HasNativeMake = "/Script/Flow.FlowDataPinBlueprintLibrary.MakeStructDouble"))
 struct FFlowDataPinValue_Double : public FFlowDataPinValue
 {
 	GENERATED_BODY()
@@ -134,7 +134,7 @@ public:
 //======================================================================
 // Name
 //======================================================================
-USTRUCT(MinimalApi, BlueprintType, DisplayName = "Name - Flow DataPin Value", meta = (FlowPinType = "Name", HasNativeMake = "/Script/Flow.FlowDataPinBlueprintLibrary.MakeStructName"))
+USTRUCT(BlueprintType, DisplayName = "Name - Flow DataPin Value", meta = (FlowPinType = "Name", HasNativeMake = "/Script/Flow.FlowDataPinBlueprintLibrary.MakeStructName"))
 struct FFlowDataPinValue_Name : public FFlowDataPinValue
 {
 	GENERATED_BODY()
@@ -157,7 +157,7 @@ public:
 //======================================================================
 // String
 //======================================================================
-USTRUCT(MinimalApi, BlueprintType, DisplayName = "String - Flow DataPin Value", meta = (FlowPinType = "String", HasNativeMake = "/Script/Flow.FlowDataPinBlueprintLibrary.MakeStructString"))
+USTRUCT(BlueprintType, DisplayName = "String - Flow DataPin Value", meta = (FlowPinType = "String", HasNativeMake = "/Script/Flow.FlowDataPinBlueprintLibrary.MakeStructString"))
 struct FFlowDataPinValue_String : public FFlowDataPinValue
 {
 	GENERATED_BODY()
@@ -180,7 +180,7 @@ public:
 //======================================================================
 // Text
 //======================================================================
-USTRUCT(MinimalApi, BlueprintType, DisplayName = "Text - Flow DataPin Value", meta = (FlowPinType = "Text", HasNativeMake = "/Script/Flow.FlowDataPinBlueprintLibrary.MakeStructText"))
+USTRUCT(BlueprintType, DisplayName = "Text - Flow DataPin Value", meta = (FlowPinType = "Text", HasNativeMake = "/Script/Flow.FlowDataPinBlueprintLibrary.MakeStructText"))
 struct FFlowDataPinValue_Text : public FFlowDataPinValue
 {
 	GENERATED_BODY()
@@ -203,7 +203,7 @@ public:
 //======================================================================
 // Enum
 //======================================================================
-USTRUCT(MinimalApi, BlueprintType, DisplayName = "Enum - Flow DataPin Value", meta = (FlowPinType = "Enum", HasNativeMake = "/Script/Flow.FlowDataPinBlueprintLibrary.MakeStructEnum"))
+USTRUCT(BlueprintType, DisplayName = "Enum - Flow DataPin Value", meta = (FlowPinType = "Enum", HasNativeMake = "/Script/Flow.FlowDataPinBlueprintLibrary.MakeStructEnum"))
 struct FFlowDataPinValue_Enum : public FFlowDataPinValue
 {
 	GENERATED_BODY()
@@ -299,7 +299,7 @@ public:
 //======================================================================
 // Vector
 //======================================================================
-USTRUCT(MinimalApi, BlueprintType, DisplayName = "Vector - Flow DataPin Value", meta = (FlowPinType = "Vector", HasNativeMake = "/Script/Flow.FlowDataPinBlueprintLibrary.MakeStructVector"))
+USTRUCT(BlueprintType, DisplayName = "Vector - Flow DataPin Value", meta = (FlowPinType = "Vector", HasNativeMake = "/Script/Flow.FlowDataPinBlueprintLibrary.MakeStructVector"))
 struct FFlowDataPinValue_Vector : public FFlowDataPinValue
 {
 	GENERATED_BODY()
@@ -322,7 +322,7 @@ public:
 //======================================================================
 // Rotator
 //======================================================================
-USTRUCT(MinimalApi, BlueprintType, DisplayName = "Rotator - Flow DataPin Value", meta = (FlowPinType = "Rotator", HasNativeMake = "/Script/Flow.FlowDataPinBlueprintLibrary.MakeStructRotator"))
+USTRUCT(BlueprintType, DisplayName = "Rotator - Flow DataPin Value", meta = (FlowPinType = "Rotator", HasNativeMake = "/Script/Flow.FlowDataPinBlueprintLibrary.MakeStructRotator"))
 struct FFlowDataPinValue_Rotator : public FFlowDataPinValue
 {
 	GENERATED_BODY()
@@ -345,7 +345,7 @@ public:
 //======================================================================
 // Transform
 //======================================================================
-USTRUCT(MinimalApi, BlueprintType, DisplayName = "Transform - Flow DataPin Value", meta = (FlowPinType = "Transform", HasNativeMake = "/Script/Flow.FlowDataPinBlueprintLibrary.MakeStructTransform"))
+USTRUCT(BlueprintType, DisplayName = "Transform - Flow DataPin Value", meta = (FlowPinType = "Transform", HasNativeMake = "/Script/Flow.FlowDataPinBlueprintLibrary.MakeStructTransform"))
 struct FFlowDataPinValue_Transform : public FFlowDataPinValue
 {
 	GENERATED_BODY()
@@ -368,7 +368,7 @@ public:
 //======================================================================
 // GameplayTag
 //======================================================================
-USTRUCT(MinimalApi, BlueprintType, DisplayName = "GameplayTag - Flow DataPin Value", meta = (FlowPinType = "GameplayTag", HasNativeMake = "/Script/Flow.FlowDataPinBlueprintLibrary.MakeStructGameplayTag"))
+USTRUCT(BlueprintType, DisplayName = "GameplayTag - Flow DataPin Value", meta = (FlowPinType = "GameplayTag", HasNativeMake = "/Script/Flow.FlowDataPinBlueprintLibrary.MakeStructGameplayTag"))
 struct FFlowDataPinValue_GameplayTag : public FFlowDataPinValue
 {
 	GENERATED_BODY()
@@ -391,7 +391,7 @@ public:
 //======================================================================
 // GameplayTagContainer
 //======================================================================
-USTRUCT(MinimalApi, BlueprintType, DisplayName = "GameplayTagContainer - Flow DataPin Value", meta = (FlowPinType = "GameplayTagContainer", HasNativeMake = "/Script/Flow.FlowDataPinBlueprintLibrary.MakeStructGameplayTagContainer"))
+USTRUCT(BlueprintType, DisplayName = "GameplayTagContainer - Flow DataPin Value", meta = (FlowPinType = "GameplayTagContainer", HasNativeMake = "/Script/Flow.FlowDataPinBlueprintLibrary.MakeStructGameplayTagContainer"))
 struct FFlowDataPinValue_GameplayTagContainer : public FFlowDataPinValue
 {
 	GENERATED_BODY()
@@ -416,7 +416,7 @@ public:
 //======================================================================
 // InstancedStruct
 //======================================================================
-USTRUCT(MinimalApi, BlueprintType, DisplayName = "InstancedStruct - Flow DataPin Value", meta = (FlowPinType = "InstancedStruct", HasNativeMake = "/Script/Flow.FlowDataPinBlueprintLibrary.MakeStructInstancedStruct"))
+USTRUCT(BlueprintType, DisplayName = "InstancedStruct - Flow DataPin Value", meta = (FlowPinType = "InstancedStruct", HasNativeMake = "/Script/Flow.FlowDataPinBlueprintLibrary.MakeStructInstancedStruct"))
 struct FFlowDataPinValue_InstancedStruct : public FFlowDataPinValue
 {
 	GENERATED_BODY()
@@ -438,7 +438,7 @@ public:
 //======================================================================
 // Object
 //======================================================================
-USTRUCT(MinimalApi, BlueprintType, DisplayName = "Object - Flow DataPin Value", meta = (FlowPinType = "Object", HasNativeMake = "/Script/Flow.FlowDataPinBlueprintLibrary.MakeStructObject"))
+USTRUCT(BlueprintType, DisplayName = "Object - Flow DataPin Value", meta = (FlowPinType = "Object", HasNativeMake = "/Script/Flow.FlowDataPinBlueprintLibrary.MakeStructObject"))
 struct FFlowDataPinValue_Object : public FFlowDataPinValue
 {
 	GENERATED_BODY()
@@ -468,7 +468,7 @@ public:
 //======================================================================
 // Class
 //======================================================================
-USTRUCT(MinimalApi, BlueprintType, DisplayName = "Class - Flow DataPin Value", meta = (FlowPinType = "Class", HasNativeMake = "/Script/Flow.FlowDataPinBlueprintLibrary.MakeStructClass"))
+USTRUCT(BlueprintType, DisplayName = "Class - Flow DataPin Value", meta = (FlowPinType = "Class", HasNativeMake = "/Script/Flow.FlowDataPinBlueprintLibrary.MakeStructClass"))
 struct FFlowDataPinValue_Class : public FFlowDataPinValue
 {
 	GENERATED_BODY()

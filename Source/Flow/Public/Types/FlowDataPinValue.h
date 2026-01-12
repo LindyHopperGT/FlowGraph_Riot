@@ -3,7 +3,6 @@
 #pragma once
 
 #include "UObject/NameTypes.h"
-#include "UObject/ObjectPtr.h"
 
 #include "FlowPinEnums.h"
 #include "FlowPinType.h"

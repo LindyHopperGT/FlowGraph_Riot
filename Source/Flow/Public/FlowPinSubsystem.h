@@ -3,13 +3,12 @@
 #pragma once
 
 #include "Subsystems/EngineSubsystem.h"
-#include "Types/FlowPinType.h"
 #include "StructUtils/InstancedStruct.h"
 #include "Templates/UnrealTypeTraits.h"
 
+#include "Types/FlowPinType.h"
+#include "Types/FlowPinTypeName.h"
 #include "FlowPinSubsystem.generated.h"
-
-struct FFlowPinTypeName;
 
 UCLASS(MinimalApi)
 class UFlowPinSubsystem : public UEngineSubsystem

@@ -3,7 +3,6 @@
 #pragma once
 
 #include "UObject/NameTypes.h"
-
 #include "FlowPinTypeName.generated.h"
 
 USTRUCT(BlueprintType)
@@ -16,9 +15,21 @@ public:
 	FName Name = NAME_None;
 
 	FFlowPinTypeName() = default;
-	explicit FFlowPinTypeName(const TCHAR* InPinName) : Name(FName(InPinName)) {}
-	explicit FFlowPinTypeName(const FName& InName) : Name(InName) {}
-	explicit FFlowPinTypeName(const FString& InString) : Name(FName(InString)) {}
+
+	explicit FFlowPinTypeName(const TCHAR* InPinName)
+		: Name(FName(InPinName))
+	{
+	}
+
+	explicit FFlowPinTypeName(const FName& InName)
+		: Name(InName)
+	{
+	}
+
+	explicit FFlowPinTypeName(const FString& InString)
+		: Name(FName(InString))
+	{
+	}
 
 	friend inline uint32 GetTypeHash(const FFlowPinTypeName& PinTypeName)
 	{

@@ -2151,7 +2151,8 @@ FSoftClassPath UFlowDataPinBlueprintLibrary::GetClassValue(const FFlowDataPinVal
 		return ClassDataPinValue.Values[Index];
 	}
 	UE_LOG(LogFlow, Error, TEXT("Insufficient values in Class Data Pin Value."));
-	return nullptr;
+
+	return FSoftClassPath();
 }
 
 TArray<FSoftClassPath> UFlowDataPinBlueprintLibrary::GetClassValues(FFlowDataPinValue_Class& ClassDataPinValue)
