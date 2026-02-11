@@ -400,48 +400,11 @@ public:
 	const TArray<UFlowNode*>& GetRecordedNodes() const { return RecordedNodes; }
 
 //////////////////////////////////////////////////////////////////////////
-// Deferred trigger support
-
-public:
-	// Try to flush (and clear) all Deferred Trigger scopes
-	// (can fail to flush all if a FFlowExecutionGate causes a new halt)
-	bool TryFlushAllDeferredTriggerScopes();
-
-	// Clear (do not trigger) any remaining deferred transitions
-	// (for shutdown cases)
-	void ClearAllDeferredTriggerScopes();
-
-protected:
-	/** Stack of active deferred transition scopes (innermost = top).
-	 *  Stored as TSharedPtr so callers can safely cache a reference to a specific scope
-	 *  without it being invalidated by array reallocations/resizes during nested triggers. */
-	TArray<TSharedPtr<FFlowDeferredTransitionScope>> DeferredTransitionScopes;
-
-	bool ShouldDeferTriggersForDebugger() const;
-
-	// Allow subclasses to disable the standard defer trigger mechanism
-	virtual bool ShouldUseStandardDeferTriggers() const;
-
-	void EnqueueDeferredTrigger(const FGuid& NodeGuid, const FName& PinName, const FConnectedPin& FromPin);
-	bool TryFlushAndRemoveDeferredTransitionScope(const TSharedPtr<FFlowDeferredTransitionScope>& Scope);
-
-	TSharedPtr<FFlowDeferredTransitionScope> PushDeferredTransitionScope();
-	void PopDeferredTransitionScope(const TSharedPtr<FFlowDeferredTransitionScope>& Scope) { TryFlushAndRemoveDeferredTransitionScope(Scope); }
-
-	void CancelAndWarnForUnflushedDeferredTriggers();
-
-	/** Returns a shared pointer to the current top (innermost) deferred transition scope,
-	 *  or nullptr if there is no active scope. Safe to cache and use later. */
-	TSharedPtr<FFlowDeferredTransitionScope> GetTopDeferredTransitionScope() const;
-
-	// Trigger the node directly (no deferral, no new scope)
-	void TriggerInputDirect(const FGuid& NodeGuid, const FName& PinName, const FConnectedPin& FromPin);
-
-//////////////////////////////////////////////////////////////////////////
-// Expected Owner Class support (for use with CallOwnerFunction nodes)
+// Expected Owner Class support
 
 public:
 	UClass* GetExpectedOwnerClass() const { return ExpectedOwnerClass; }
+
 
 protected:
 	// Expects to be owned (at runtime) by an object with this class (or one of its subclasses)
@@ -449,6 +412,9 @@ protected:
 	//        it will consider the component's owner for the AActor
 	UPROPERTY(EditAnywhere, Category = "Flow")
 	TSubclassOf<UObject> ExpectedOwnerClass;
+	
+public:
+	UClass* GetExpectedOwnerClass() const { return ExpectedOwnerClass; }
 
 //////////////////////////////////////////////////////////////////////////
 // SaveGame support
