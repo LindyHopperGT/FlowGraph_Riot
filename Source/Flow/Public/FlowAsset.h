@@ -425,6 +425,9 @@ protected:
 //////////////////////////////////////////////////////////////////////////
 // Expected Owner Class support
 
+public:
+	UClass* GetExpectedOwnerClass() const { return ExpectedOwnerClass; }
+
 protected:
 	/* Expects to be owned (at runtime) by an object with this class (or one of its subclasses).
 	 * If the class is an AActor, and the Flow Asset is owned by a component, it will consider the component's owner for the AActor. */

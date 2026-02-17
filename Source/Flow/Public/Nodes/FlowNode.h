@@ -244,8 +244,8 @@ protected:
 public:
 	using TFlowPinValueSupplierDataArray = FlowArray::TInlineArray<FFlowPinValueSupplierData, 4>;
 
-	/* Map for PinName to Property supplier for non-trivial data pin property lookups.
-	 * Non-trivial means a different pin name from its property source, or a non-zero property owner object index.
+	/* Map for PinName to Property supplier for "non-trivial" data pin property lookups.
+	 * "Non-trivial" means a different pin name from its property source, or a non-zero property owner object index.
 	 * See TryGatherPropertyOwnersAndPopulateResult(). */
 	UPROPERTY()
 	TMap<FName, FFlowPinPropertySource> MapDataPinNameToPropertySource;
@@ -258,12 +258,6 @@ protected:
 	UPROPERTY(VisibleDefaultsOnly, AdvancedDisplay, Category = "FlowNode", meta = (GetByRef))
 	TArray<FFlowPin> AutoOutputDataPins;
 #endif
-
-	// Map for PinName to Property supplier for non-trivial data pin property lookups
-	// (non-trivial means a different pin name from its property source, or a non-zero property owner object index)
-	// see TryGatherPropertyOwnersAndPopulateResult()
-	UPROPERTY()
-	TMap<FName, FFlowPinPropertySource> MapDataPinNameToPropertySource;
 
 #if WITH_EDITOR
 public:

@@ -73,7 +73,7 @@ FText UFlowNode_Branch::K2_GetNodeTitle_Implementation() const
 {
 	FLOW_ASSERT_ENUM_MAX(EFlowPredicateCombinationRule, 2);
 	if (BranchCombinationRule != EFlowPredicateCombinationRule::AND && 
-		UFlowSettings::Get()->bUseAdaptiveNodeTitles)
+		GetDefault<UFlowSettings>()->bUseAdaptiveNodeTitles)
 	{
 		return FText::Format(LOCTEXT("BranchTitle", "{0} ({1})"), { Super::K2_GetNodeTitle_Implementation(), UEnum::GetDisplayValueAsText(BranchCombinationRule) });
 	}
