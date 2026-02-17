@@ -53,7 +53,7 @@ FFlowDataPinResult UFlowNode_Reroute::TrySupplyDataPin(FName PinName) const
 		return FFlowDataPinResult(EFlowDataPinResolveResult::FailedNotConnected);
 	}
 
-	UFlowNode* ConnectedFlowNodeSupplier = GetFlowAsset()->GetNode(FoundGuid);
+	const UFlowNode* ConnectedFlowNodeSupplier = GetFlowAsset()->GetNode(FoundGuid);
 	if (!IsValid(ConnectedFlowNodeSupplier))
 	{
 		checkf(IsValid(ConnectedFlowNodeSupplier), TEXT("This node should be valid if IsInputConnected returned true"));

@@ -1,5 +1,4 @@
 // Copyright https://github.com/MothCocoon/FlowGraph/graphs/contributors
-
 #pragma once
 
 #include "GameplayTagContainer.h"
@@ -8,7 +7,7 @@
 #include "FlowNode_NotifyActor.generated.h"
 
 /**
- * Finds all Flow Components with matching Identity Tag and calls ReceiveNotify event on these components
+ * Finds all Flow Components with matching Identity Tag and calls ReceiveNotify event on these components.
  */
 UCLASS(NotBlueprintable, meta = (DisplayName = "Notify Actor", Keywords = "event"))
 class FLOW_API UFlowNode_NotifyActor : public UFlowNode

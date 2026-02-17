@@ -322,12 +322,11 @@ void UFlowGraphNode::ReconstructNode()
 	bIsReconstructingNode = true;
 	FScopedTransaction Transaction(LOCTEXT("ReconstructNode", "Reconstruct Node"), !GUndo);
 
-	const bool bNodeDataPinsUpdated = TryUpdateAutoDataPins(); // This must be called first, it updates the underlying data for data pins of the Flow Node 
-	const bool bNodeExecPinsUpdated = TryUpdateNodePins(); // Updates all pins of the Flow Node (native pins, meta auto pins, and context pins which include data pins for now)
+	const bool bAnyPinsUpdated = TryUpdateNodePins(); // Updates all pins of the Flow Node (native pins, meta auto pins, and context pins which include data pins for now)
 	const bool bAreGraphPinsMismatched = !CheckGraphPinsMatchNodePins(); // This must be called last since it checks the existing graph node against the cleaned up Flow Node instance
 
-	const bool bGraphNodeRequiresReconstruction = bNeedsFullReconstruction || bNodeDataPinsUpdated || bNodeExecPinsUpdated || bAreGraphPinsMismatched;
-	if (bGraphNodeRequiresReconstruction)
+	// Does Graph Node requires reconstruction?
+	if (bNeedsFullReconstruction || bAnyPinsUpdated || bAreGraphPinsMismatched)
 	{
 		Modify();
 
@@ -348,7 +347,7 @@ void UFlowGraphNode::ReconstructNode()
 			DestroyPin(OldPin);
 		}
 
-		// clear breakpoints for destroyed pins 
+		// Clear breakpoints for destroyed pins 
 		if (UFlowDebuggerSubsystem* DebuggerSubsystem = GEngine->GetEngineSubsystem<UFlowDebuggerSubsystem>())
 		{
 			DebuggerSubsystem->RemoveObsoletePinBreakpoints(this);
@@ -361,7 +360,7 @@ void UFlowGraphNode::ReconstructNode()
 	{
 		FlowNode->UpdateNodeConfigText();
 	}
-	
+
 	// This ensures the graph editor 'Refresh' button still rebuilds all the graph widgets even if the FlowGraphNode has nothing to update
 	// Ideally we could get rid of the 'Refresh' button, but I think it will keep being useful, esp. for users making rough custom widgets
 	(void)OnReconstructNodeCompleted.ExecuteIfBound();
@@ -669,7 +668,7 @@ FText UFlowGraphNode::GetNodeTitle(ENodeTitleType::Type TitleType) const
 {
 	if (NodeInstance)
 	{
-		if (UFlowGraphEditorSettings::Get()->bShowNodeClass)
+		if (GetDefault<UFlowGraphEditorSettings>()->bShowNodeClass)
 		{
 			FString CleanAssetName;
 			if (NodeInstance->GetClass()->ClassGeneratedBy)
@@ -705,7 +704,7 @@ FLinearColor UFlowGraphNode::GetNodeTitleColor() const
 			return DynamicColor;
 		}
 
-		if (const FLinearColor* StyleColor = UFlowGraphSettings::Get()->LookupNodeTitleColorForNode(*NodeInstance))
+		if (const FLinearColor* StyleColor = GetMutableDefault<UFlowGraphSettings>()->LookupNodeTitleColorForNode(*NodeInstance))
 		{
 			return *StyleColor;
 		}
@@ -735,9 +734,24 @@ FText UFlowGraphNode::GetTooltipText() const
 
 FString UFlowGraphNode::GetNodeDescription() const
 {
-	if (NodeInstance && (GEditor->PlayWorld == nullptr || UFlowGraphEditorSettings::Get()->bShowNodeDescriptionWhilePlaying))
+	if (NodeInstance && (GEditor->PlayWorld == nullptr || GetDefault<UFlowGraphEditorSettings>()->bShowNodeDescriptionWhilePlaying))
 	{
-		return NodeInstance->GetNodeDescription();
+		const UFlowGraphEditorSettings* GraphEditorSettings = GetDefault<UFlowGraphEditorSettings>();
+		if (GEditor->PlayWorld == nullptr || GraphEditorSettings->bShowNodeDescriptionWhilePlaying)
+		{
+			FString Result = NodeInstance->GetNodeDescription();
+
+			if (GraphEditorSettings->bShowAddonDescriptions)
+			{
+				FString AddonDescriptions = NodeInstance->GetAddOnDescriptions();
+				if (!AddonDescriptions.IsEmpty())
+				{
+					return Result.Append(LINE_TERMINATOR).Append(AddonDescriptions);
+				}
+			}
+
+			return Result;
+		}
 	}
 
 	return FString();
@@ -789,7 +803,7 @@ FLinearColor UFlowGraphNode::GetStatusBackgroundColor() const
 		}
 	}
 
-	return UFlowGraphSettings::Get()->NodeStatusBackground;
+	return GetDefault<UFlowGraphSettings>()->NodeStatusBackground;
 }
 
 bool UFlowGraphNode::IsContentPreloaded() const
@@ -860,7 +874,8 @@ void UFlowGraphNode::OnNodeDoubleClicked() const
 	UFlowNodeBase* FlowNodeBase = GetFlowNodeBase();
 	if (IsValid(FlowNodeBase))
 	{
-		if (UFlowGraphEditorSettings::Get()->NodeDoubleClickTarget == EFlowNodeDoubleClickTarget::NodeDefinition)
+		const EFlowNodeDoubleClickTarget DoubleClickTarget = GetDefault<UFlowGraphEditorSettings>()->NodeDoubleClickTarget;
+		if (DoubleClickTarget == EFlowNodeDoubleClickTarget::NodeDefinition)
 		{
 			JumpToDefinition();
 		}
@@ -887,7 +902,7 @@ void UFlowGraphNode::OnNodeDoubleClicked() const
 					OnNodeDoubleClickedInPIE();
 				}
 			}
-			else if (UFlowGraphEditorSettings::Get()->NodeDoubleClickTarget == EFlowNodeDoubleClickTarget::PrimaryAssetOrNodeDefinition)
+			else if (DoubleClickTarget == EFlowNodeDoubleClickTarget::PrimaryAssetOrNodeDefinition)
 			{
 				JumpToDefinition();
 			}
@@ -1192,8 +1207,10 @@ void UFlowGraphNode::ForcePinActivation(const FEdGraphPinReference PinReference)
 
 void UFlowGraphNode::SetSignalMode(const EFlowSignalMode Mode)
 {
-	if (UFlowNode* FlowNode = Cast<UFlowNode>(NodeInstance))
+	UFlowNode* FlowNode = Cast<UFlowNode>(NodeInstance);
+	if (FlowNode && FlowNode->SignalMode != Mode)
 	{
+		FlowNode->Modify();
 		FlowNode->SignalMode = Mode;
 		OnSignalModeChanged.ExecuteIfBound();
 	}
@@ -1567,7 +1584,7 @@ void UFlowGraphNode::RemoveSubNode(UFlowGraphNode* SubNode)
 	{
 		SubNode->NodeInstance->OnAddOnRequestedParentReconstruction.Unbind();
 	}
-	
+
 	SubNodes.RemoveSingle(SubNode);
 
 	RebuildRuntimeAddOnsFromEditorSubNodes();
@@ -1584,7 +1601,7 @@ void UFlowGraphNode::RemoveAllSubNodes()
 			SubNode->NodeInstance->OnAddOnRequestedParentReconstruction.Unbind();
 		}
 	}
-	
+
 	SubNodes.Reset();
 
 	RebuildRuntimeAddOnsFromEditorSubNodes();
@@ -1829,20 +1846,25 @@ bool UFlowGraphNode::TryUpdateNodePins() const
 		return true;
 	}
 
-	bool bIsLoad = false;
-	if (const UFlowGraph* FlowGraph = GetFlowGraph())
-	{
-		bIsLoad = FlowGraph->IsLoadingGraph();
-	}
+	// Attempt to update auto-generated pins
+	// This must be called first, it updates the underlying data for data pins of the Flow Node 
+	const bool bAutoDataPinsChanged = FlowNodeInstance->TryUpdateAutoDataPins();
 
-	// Confirm that we should be refreshing context pins
-	const bool bIsAllowedToRefreshPins = !bIsLoad || NodeInstance->CanRefreshContextPinsOnLoad();
-	const bool bShouldConsiderRefreshingContextPins = bIsAllowedToRefreshPins && (SupportsContextPins());
-	const bool bShouldRefreshContextPins = bShouldConsiderRefreshingContextPins || bNeedsFullReconstruction;
-
-	if (!bShouldRefreshContextPins)
+	// these check would be all ignored if a full reconstruction has been requested
+	if (!bNeedsFullReconstruction)
 	{
-		return false;
+		bool bLoadingGraph = false;
+		if (const UFlowGraph* FlowGraph = GetFlowGraph())
+		{
+			bLoadingGraph = FlowGraph->IsLoadingGraph();
+		}
+
+		// Confirm that we should be refreshing context pins
+		const bool bShouldRefreshContextPins = SupportsContextPins() && (!bLoadingGraph || NodeInstance->CanRefreshContextPinsOnLoad() || bAutoDataPinsChanged);
+		if (!bShouldRefreshContextPins)
+		{
+			return false;
+		}
 	}
 
 	// ------------
@@ -1878,8 +1900,7 @@ bool UFlowGraphNode::TryUpdateNodePins() const
 
 	bool bPinsChanged = false;
 
-	if (!FlowNodeInstance->CanUserAddInput() && 
-		!CheckPinsMatch(RequiredNodeInputPins, ExistingNodeInputPins))
+	if (!FlowNodeInstance->CanUserAddInput() && !CheckPinsMatch(RequiredNodeInputPins, ExistingNodeInputPins))
 	{
 		FlowNodeInstance->Modify();
 
@@ -1889,8 +1910,7 @@ bool UFlowGraphNode::TryUpdateNodePins() const
 		bPinsChanged = true;
 	}
 
-	if (!FlowNodeInstance->CanUserAddOutput() && 
-		!CheckPinsMatch(RequiredNodeOutputPins, ExistingNodeOutputPins))
+	if (!FlowNodeInstance->CanUserAddOutput() && !CheckPinsMatch(RequiredNodeOutputPins, ExistingNodeOutputPins))
 	{
 		FlowNodeInstance->Modify();
 
@@ -1901,22 +1921,6 @@ bool UFlowGraphNode::TryUpdateNodePins() const
 	}
 
 	return bPinsChanged;
-}
-
-bool UFlowGraphNode::TryUpdateAutoDataPins() const
-{
-	// Attempt to update the manged / auto-generated pins
-	UFlowAsset* FlowAsset = NodeInstance->GetFlowAsset();
-	UFlowNode* FlowNodeInstance = Cast<UFlowNode>(NodeInstance);
-	if (FlowAsset && FlowNodeInstance)
-	{
-		if (FlowAsset->TryUpdateManagedFlowPinsForNode(*FlowNodeInstance))
-		{
-			return true;
-		}
-	}
-
-	return false;
 }
 
 bool UFlowGraphNode::CheckGraphPinsMatchNodePins() const

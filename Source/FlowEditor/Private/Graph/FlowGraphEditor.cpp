@@ -993,7 +993,7 @@ bool SFlowGraphEditor::CanPasteNodes() const
 		// We need to clean up the nodes we built to test the paste operation
 		for (TSet<UEdGraphNode*>::TConstIterator It(NodesToPaste); It; ++It)
 		{
-			UFlowGraphNode* NodeToPaste = Cast<UFlowGraphNode>(*It);
+			UEdGraphNode* NodeToPaste = *It;
 			if (IsValid(NodeToPaste))
 			{
 				NodeToPaste->ClearFlags(RF_Public);
@@ -1508,6 +1508,8 @@ bool SFlowGraphEditor::HasAnyBreakpoints() const
 
 void SFlowGraphEditor::SetSignalMode(const EFlowSignalMode Mode) const
 {
+	const FScopedTransaction Transaction(LOCTEXT("SetSignalMode", "Set Signal Mode"));
+
 	for (UFlowGraphNode* SelectedNode : GetSelectedFlowNodes())
 	{
 		SelectedNode->SetSignalMode(Mode);

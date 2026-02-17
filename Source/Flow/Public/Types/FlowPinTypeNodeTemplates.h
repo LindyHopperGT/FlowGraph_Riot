@@ -1,5 +1,4 @@
 // Copyright https://github.com/MothCocoon/FlowGraph/graphs/contributors
-
 #pragma once
 
 #include "Types/FlowDataPinResults.h"
@@ -8,7 +7,9 @@
 #include "Types/FlowArray.h"
 #include "Nodes/FlowNode.h"
 
-// Additional FlowPinType templates that require FlowNode.h include
+/**
+ * Additional FlowPinType templates that require FlowNode.h include
+ */
 namespace FlowPinType
 {
 	template <typename TPinType>
@@ -46,7 +47,6 @@ namespace FlowPinType
 		return false;
 	}
 
-	// ResolveAndFormatArray
 	template <typename TPinType>
 	bool ResolveAndFormatArray(
 		const UFlowNodeBase& Node,

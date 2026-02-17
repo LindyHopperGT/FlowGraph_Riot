@@ -1,5 +1,4 @@
 // Copyright https://github.com/MothCocoon/FlowGraph/graphs/contributors
-
 #pragma once
 
 #include "Factories/Factory.h"
@@ -27,7 +26,7 @@ public:
 	// --
 
 private:
-	// Required selection
+	/* Required selection. */
 	TSoftObjectPtr<UFlowAssetParams> SelectedParentParams;
 
 	bool ShowParentPickerDialog();

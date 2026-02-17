@@ -1,11 +1,12 @@
 // Copyright https://github.com/MothCocoon/FlowGraph/graphs/contributors
-
 #pragma once
 
 #include "Nodes/Graph/FlowNode_DefineProperties.h"
 #include "FlowNode_Log.generated.h"
 
-// Variant of ELogVerbosity
+/**
+ * Variant of ELogVerbosity.
+ */
 UENUM(BlueprintType)
 enum class EFlowLogVerbosity : uint8
 {
@@ -27,8 +28,8 @@ class FLOW_API UFlowNode_Log : public UFlowNode_DefineProperties
 	GENERATED_UCLASS_BODY()
 	
 private:
-	// The message to write to the log
-	// (if the Message input pin is not connected to another source)
+	/* The message to write to the log.
+	 * If the Message input pin is not connected to another source. */
 	UPROPERTY(EditAnywhere, Category = "Flow", meta = (DefaultForInputFlowPin, FlowPinType = String))
 	FString Message;
 

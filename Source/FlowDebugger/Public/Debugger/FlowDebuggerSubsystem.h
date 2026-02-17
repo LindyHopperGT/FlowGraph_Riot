@@ -1,5 +1,4 @@
 // Copyright https://github.com/MothCocoon/FlowGraph/graphs/contributors
-
 #pragma once
 
 #include "Subsystems/EngineSubsystem.h"
@@ -86,7 +85,7 @@ public:
 	virtual void RemovePinBreakpoint(const FGuid& NodeGuid, const FName& PinName);
 
 #if WITH_EDITOR
-	/** Removes obsolete pin breakpoints for provided. Pin list can be changed during node reconstruction. */
+	/* Removes obsolete pin breakpoints for provided. Pin list can be changed during node reconstruction. */
 	virtual void RemoveObsoletePinBreakpoints(const UEdGraphNode* Node);
 #endif
 
@@ -115,13 +114,11 @@ protected:
 	virtual void ResumeSession(UFlowAsset& FlowAssetInstance);
 	virtual void StopSession();
 
-	/**
-	 * Clears the "currently hit" breakpoint only (node or pin).
-	 * This avoids races where blanket-clearing all hit flags can erase a newly-hit breakpoint during resume/flush.
-	 */
+	/* Clears the "currently hit" breakpoint only (node or pin).
+	 * This avoids races where blanket-clearing all hit flags can erase a newly-hit breakpoint during resume/flush. */
 	void ClearLastHitBreakpoint();
 
-	/** Clears hit state for all breakpoints. Prefer ClearLastHitBreakpoint() for resume/step logic. */
+	/* Clears hit state for all breakpoints. Prefer ClearLastHitBreakpoint() for resume/step logic. */
 	virtual void ClearHitBreakpoints();
 
 private:
@@ -148,6 +145,6 @@ protected:
 	FGuid LastHitNodeGuid;
 	FName LastHitPinName;
 
-	/** Saves any modifications made to breakpoints */
+	/* Saves any modifications made to breakpoints. */
 	virtual void SaveSettings();
 };

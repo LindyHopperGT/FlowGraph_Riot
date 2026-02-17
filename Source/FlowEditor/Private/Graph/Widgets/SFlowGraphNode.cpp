@@ -42,7 +42,7 @@
 
 SFlowGraphPinExec::SFlowGraphPinExec()
 {
-	PinColorModifier = UFlowGraphSettings::Get()->ExecPinColorModifier;
+	PinColorModifier = GetDefault<UFlowGraphSettings>()->ExecPinColorModifier;
 }
 
 void SFlowGraphPinExec::Construct(const FArguments& InArgs, UEdGraphPin* InPin)
@@ -85,7 +85,7 @@ void SFlowGraphNode::GetNodeInfoPopups(FNodeInfoContext* Context, TArray<FGraphI
 	const FString& Description = FlowGraphNode->GetNodeDescription(); 
 	if (!Description.IsEmpty())
 	{
-		const FGraphInformationPopupInfo DescriptionPopup = FGraphInformationPopupInfo(nullptr, UFlowGraphSettings::Get()->NodeDescriptionBackground, Description);
+		const FGraphInformationPopupInfo DescriptionPopup = FGraphInformationPopupInfo(nullptr, GetDefault<UFlowGraphSettings>()->NodeDescriptionBackground, Description);
 		Popups.Add(DescriptionPopup);
 	}
 
@@ -99,7 +99,7 @@ void SFlowGraphNode::GetNodeInfoPopups(FNodeInfoContext* Context, TArray<FGraphI
 		}
 		else if (FlowGraphNode->IsContentPreloaded())
 		{
-			const FGraphInformationPopupInfo DescriptionPopup = FGraphInformationPopupInfo(nullptr, UFlowGraphSettings::Get()->NodeStatusBackground, TEXT("Preloaded"));
+			const FGraphInformationPopupInfo DescriptionPopup = FGraphInformationPopupInfo(nullptr, GetDefault<UFlowGraphSettings>()->NodeStatusBackground, TEXT("Preloaded"));
 			Popups.Add(DescriptionPopup);
 		}
 	}

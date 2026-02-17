@@ -1,5 +1,4 @@
 // Copyright https://github.com/MothCocoon/FlowGraph/graphs/contributors
-
 #pragma once
 
 #include "GraphEditor.h"
@@ -15,7 +14,7 @@ class UFlowDebuggerSubsystem;
 struct FFlowBreakpoint;
 
 /**
- *
+ * Flow-specific implementation of engine's Graph Editor.
  */
 class FLOWEDITOR_API SFlowGraphEditor : public SGraphEditor
 {

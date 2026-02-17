@@ -1,5 +1,4 @@
 // Copyright https://github.com/MothCocoon/FlowGraph/graphs/contributors
-
 #pragma once
 
 #include "EdGraph/EdGraph.h"
@@ -11,24 +10,26 @@ class SFlowGraphEditor;
 class UFlowGraphNode;
 class UFlowGraphSchema;
 
+/**
+ * Flow-specific implementation of engine's EdGraph.
+ */
 UCLASS()
 class FLOWEDITOR_API UFlowGraph : public UEdGraph
 {
 	GENERATED_UCLASS_BODY()
 
 protected:
-	/** Graph version number */
+	/* Graph version number. */
 	UPROPERTY()
 	int32 GraphVersion;
 
 	static constexpr int32 CurrentGraphVersion = 2;
 
-	/** if set, graph modifications won't cause updates in internal tree structure
-	 *  flag allows freezing update during heavy changes like pasting new nodes 
-	 */
+	/* If set, graph modifications won't cause updates in internal tree structure.
+	 * Flag allows freezing update during heavy changes like pasting new nodes. */
 	uint32 bLockUpdates : 1;
 
-	// is currently loading the Flow Graph (used to suppress some work during load)
+	/* Is currently loading the Flow Graph (used to suppress some work during load)? */
 	uint32 bIsLoadingGraph : 1;
 
 	bool bIsSavingGraph = false;
@@ -90,6 +91,5 @@ public:
 	void UnlockUpdates();
 
 	bool IsLoadingGraph() const { return bIsLoadingGraph; }
-
 	bool IsSavingGraph() const { return bIsSavingGraph; }
 };

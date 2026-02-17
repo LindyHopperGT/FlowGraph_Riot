@@ -1,5 +1,4 @@
 // Copyright https://github.com/MothCocoon/FlowGraph/graphs/contributors
-
 #pragma once
 
 #include "Types/FlowPinEnums.h"
@@ -23,22 +22,22 @@ struct FLOW_API FFlowPin
 {
 	GENERATED_BODY()
 
-	// A logical name, used during execution of pin
+	/* A logical name, used during execution of pin. */
 	UPROPERTY(EditDefaultsOnly, Category = FlowPin)
 	FName PinName;
 
-	// An optional Display Name, you can use it to override PinName without the need to update graph connections
+	/* An optional Display Name, you can use it to override PinName without the need to update graph connections. */
 	UPROPERTY(EditDefaultsOnly, Category = FlowPin)
 	FText PinFriendlyName;
 
 	UPROPERTY(EditDefaultsOnly, Category = FlowPin)
 	FString PinToolTip;
 
-	// Deprecated PinType, use PinTypeName instead (all standard names are defined in FFlowPinTypeNamesStandard)
+	/* Deprecated PinType, use PinTypeName instead (all standard names are defined in FFlowPinTypeNamesStandard). */
 	UPROPERTY(Meta = (DeprecatedProperty, DeprecationMessage = "Use PinTypeName instead"))
 	EFlowPinType PinType = EFlowPinType::Invalid;
 
-	// Only supporting None (Single) or Array for now(tm) for data pins via EFlowMultiType
+	/* Only supporting None (Single) or Array for now(tm) for data pins via EFlowMultiType. */
 	UPROPERTY()
 	EPinContainerType ContainerType = EPinContainerType::None;
 
@@ -46,8 +45,8 @@ protected:
 	UPROPERTY()
 	FFlowPinTypeName PinTypeName = FFlowPinTypeName(FFlowPinTypeNamesStandard::PinTypeNameExec);
 
-	// Sub-category object
-	// (used to identify the struct or class type for some PinCategories)
+	/* Sub-category object
+	 * Used to identify the struct or class type for some PinCategories. */
 	UPROPERTY()
 	TWeakObjectPtr<UObject> PinSubCategoryObject;
 
@@ -206,44 +205,48 @@ public:
 	FORCEINLINE bool IsDataPin() const { return !IsExecPin(); }
 	// --
 
-	// Metadata keys for properties that bind and auto-generate Data Pins:
+	// 
+	
+	/**
+	 * Metadata keys for properties that bind and auto-generate Data Pins.
+     */
 
-	// SourceForOutputFlowPin
-	//   May be used on a non-FFlowDataPinProperty within a UFlowNode to bind the
-	//   output data pin to use the property as its source.
-	//
-	//   If a string value is given, it is interpreted as the Data Pin's name,
-	//   otherwise, the property's DisplayName (or lacking that, its authored name)
-	//   will be assumed to also be the Pin's name.
+	/* SourceForOutputFlowPin
+	 * May be used on a non-FFlowDataPinProperty within a UFlowNode to bind the
+	 * output data pin to use the property as its source.
+	 * 
+	 * If a string value is given, it is interpreted as the Data Pin's name,
+	 * otherwise, the property's DisplayName (or lacking that, its authored name)
+	 * will be assumed to also be the Pin's name. */
 	static const FName MetadataKey_SourceForOutputFlowPin;
 
-	// DefaultForInputFlowPin
-	//   May be used on a non-FFlowDataPinProperty within a UFlowNode to bind the
-	//   input data pin to use the property as its default value.
-	//
-	//   If the input pin IS NOT connected to another node, then the bound property
-	//   value will be supplied as a default.
-	// 
-	//   If the input pin IS connected to another node, then the connected node's supplied
-	//   value will be used instead of the default from the bound property.
-	// 
-	//   If a string value is given, it is interpreted as the Data Pin's name,
-	//   otherwise, the property's DisplayName (or lacking that, its authored name)
-	//   will be assumed to also be the Pin's name.
+	/* DefaultForInputFlowPin
+	 * May be used on a non-FFlowDataPinProperty within a UFlowNode to bind the
+	 * Input data pin to use the property as its default value.
+	 * 
+	 * If the input pin IS NOT connected to another node, then the bound property
+	 * value will be supplied as a default.
+	 * 
+	 * If the input pin IS connected to another node, then the connected node's supplied
+	 * value will be used instead of the default from the bound property.
+	 * 
+	 * If a string value is given, it is interpreted as the Data Pin's name,
+	 * otherwise, the property's DisplayName (or lacking that, its authored name)
+	 * will be assumed to also be the Pin's name. */
 	static const FName MetadataKey_DefaultForInputFlowPin;
 
-	// FlowPinType
-	//   May be used on either a property (within a UFlowNode) or a USTRUCT declaration for
-	//   a FFlowDataPinProperty subclass.
-	//   
-	//   If used on a property, then it indicates that a data pin of the given type should be auto-generated,
-	//   and bound to the property.  May be used in conjunction with SourceForOutputFlowPin or DefaultForInputFlowPin
-	//   (but not both) to determine how the property binding is to be applied (as input default or output supply source)
-	//
-	//   If used on a FFlowDataPinProperty struct declaration, then it defines the type of pin
-	//   that should be auto-generated when the struct is used as a property in a UFlowNode.
-	//
-	//   The string value of the metadata should exactly match a value in EFlowPinType
+	/* FlowPinType
+	 * May be used on either a property (within a UFlowNode) or a USTRUCT declaration for
+	 * a FFlowDataPinProperty subclass.
+	 * 
+	 * If used on a property, then it indicates that a data pin of the given type should be auto-generated,
+	 * and bound to the property.  May be used in conjunction with SourceForOutputFlowPin or DefaultForInputFlowPin
+	 * (but not both) to determine how the property binding is to be applied (as input default or output supply source)
+	 * 
+	 * If used on a FFlowDataPinProperty struct declaration, then it defines the type of pin
+	 * that should be auto-generated when the struct is used as a property in a UFlowNode.
+	 * 
+	 * The string value of the metadata should exactly match a value in EFlowPinType. */
 	static const FName MetadataKey_FlowPinType;
 	// --
 
@@ -257,7 +260,7 @@ struct FLOW_API FFlowPinHandle
 {
 	GENERATED_BODY()
 
-	// Update SFlowPinHandleBase code if this property name would be ever changed
+	/* Update SFlowPinHandleBase code if this property name would be ever changed. */
 	UPROPERTY()
 	FName PinName;
 
@@ -287,7 +290,9 @@ struct FLOW_API FFlowOutputPinHandle : public FFlowPinHandle
 	}
 };
 
-// Processing Flow Nodes creates map of connected pins
+/**
+ * Processing Flow Nodes creates map of connected pins.
+ */
 USTRUCT()
 struct FLOW_API FConnectedPin
 {
@@ -335,7 +340,9 @@ enum class EFlowPinActivationType : uint8
 	PassThrough
 };
 
-// Every time pin is activated, we record it and display this data while user hovers mouse over pin
+/**
+ * Every time pin is activated, we record it and display this data while user hovers mouse over pin.
+ */
 #if !UE_BUILD_SHIPPING
 struct FLOW_API FPinRecord
 {

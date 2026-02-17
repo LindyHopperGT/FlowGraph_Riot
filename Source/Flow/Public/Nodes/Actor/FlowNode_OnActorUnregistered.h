@@ -1,12 +1,11 @@
 // Copyright https://github.com/MothCocoon/FlowGraph/graphs/contributors
-
 #pragma once
 
 #include "Nodes/Actor/FlowNode_ComponentObserver.h"
 #include "FlowNode_OnActorUnregistered.generated.h"
 
 /**
- * Triggers output when Flow Component with matching Identity Tag disappears from the world
+ * Triggers output when Flow Component with matching Identity Tag disappears from the world.
  */
 UCLASS(NotBlueprintable, meta = (DisplayName = "On Actor Unregistered", Keywords = "unbind"))
 class FLOW_API UFlowNode_OnActorUnregistered : public UFlowNode_ComponentObserver

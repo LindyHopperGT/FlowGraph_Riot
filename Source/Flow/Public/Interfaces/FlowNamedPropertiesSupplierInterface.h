@@ -1,5 +1,4 @@
 // Copyright https://github.com/MothCocoon/FlowGraph/graphs/contributors
-
 #pragma once
 
 #include "UObject/Interface.h"
@@ -24,7 +23,7 @@ class FLOW_API IFlowNamedPropertiesSupplierInterface
 public:
 
 #if WITH_EDITOR
-	// Returns the array of named properties defined by this node.
+	/* Returns the array of named properties defined by this node. */
 	virtual TArray<FFlowNamedDataPinProperty>& GetMutableNamedProperties() = 0;
 #endif
 };

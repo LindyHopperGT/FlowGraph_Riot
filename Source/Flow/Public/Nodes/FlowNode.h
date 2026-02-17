@@ -1,5 +1,4 @@
 // Copyright https://github.com/MothCocoon/FlowGraph/graphs/contributors
-
 #pragma once
 
 #include "EdGraph/EdGraphNode.h"
@@ -9,14 +8,16 @@
 
 #include "FlowNodeBase.h"
 #include "FlowTypes.h"
-#include "Interfaces/FlowDataPinGeneratorInterface.h"
 #include "Interfaces/FlowDataPinValueSupplierInterface.h"
 #include "Nodes/FlowPin.h"
 #include "Types/FlowArray.h"
-
 #include "FlowNode.generated.h"
 
-// Entry in MapDataPinNameToPropertySource for how to source a non-trivial pin mapping in TryGatherPropertyOwnersAndPopulateResult
+struct FFlowAutoDataPinsWorkingData;
+
+/**
+ * Entry in MapDataPinNameToPropertySource for how to source a non-trivial pin mapping in TryGatherPropertyOwnersAndPopulateResult.
+ */
 USTRUCT()
 struct FFlowPinPropertySource
 {
@@ -37,7 +38,6 @@ struct FFlowPinPropertySource
  */
 UCLASS(Abstract, Blueprintable, HideCategories = Object)
 class FLOW_API UFlowNode : public UFlowNodeBase
-						 , public IFlowDataPinGeneratorInterface
 						 , public IFlowDataPinValueSupplierInterface
 						 , public IVisualLoggerDebugSnapshotInterface
 {
@@ -86,7 +86,7 @@ public:
 	// --
 #endif
 
-	// Inherits Guid after graph node
+	/* Inherits Guid after graph node. */
 	UPROPERTY()
 	FGuid NodeGuid;
 
@@ -97,9 +97,9 @@ public:
 	UFUNCTION(BlueprintPure, Category = "FlowNode")
 	const FGuid& GetGuid() const { return NodeGuid; }
 
-	// Returns a random seed suitable for this flow node,
-	// by default based on the node Guid, 
-	// but may be overridden in subclasses to supply some other value.
+	/* Returns a random seed suitable for this flow node,
+	 * by default based on the node Guid,
+	 * but may be overridden in subclasses to supply some other value. */
 	virtual int32 GetRandomSeed() const override { return GetTypeHash(NodeGuid); }
 
 	virtual const UFlowNode* GetParentNode() const override
@@ -114,8 +114,8 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category = "FlowNode")
 	TArray<EFlowSignalMode> AllowedSignalModes;
 
-	// If enabled, signal will pass through node without calling ExecuteInput()
-	// Designed to handle patching
+	/* If enabled, signal will pass through node without calling ExecuteInput().
+	 * Designed to handle patching already released games. */
 	UPROPERTY()
 	EFlowSignalMode SignalMode;
 
@@ -127,11 +127,11 @@ public:
 	static FFlowPin DefaultOutputPin;
 
 protected:
-	// Class-specific and user-added inputs
+	/* Class-specific and user-added inputs. */
 	UPROPERTY(EditDefaultsOnly, Category = "FlowNode")
 	TArray<FFlowPin> InputPins;
 
-	// Class-specific and user-added outputs
+	/* Class-specific and user-added outputs. */
 	UPROPERTY(EditDefaultsOnly, Category = "FlowNode")
 	TArray<FFlowPin> OutputPins;
 
@@ -139,13 +139,13 @@ protected:
 	void AddOutputPins(const TArray<FFlowPin>& Pins);
 
 #if WITH_EDITOR
-	// Utility function to rebuild a pin array in editor (either InputPins or OutputPins, passed as InOutPins)
-	// returns true if the InOutPins array was rebuilt
+	/* Utility function to rebuild a pin array in editor (either InputPins or OutputPins, passed as InOutPins)
+	 * returns true if the InOutPins array was rebuilt. */
 	bool RebuildPinArray(const TArray<FName>& NewPinNames, TArray<FFlowPin>& InOutPins, const FFlowPin& DefaultPin);
 	bool RebuildPinArray(const TArray<FFlowPin>& NewPins, TArray<FFlowPin>& InOutPins, const FFlowPin& DefaultPin);
 #endif // WITH_EDITOR;
 
-	// always use default range for nodes with user-created outputs i.e. Execution Sequence
+	/* Always use default range for nodes with user-created outputs i.e. Execution Sequence. */
 	void SetNumberedInputPins(const uint8 FirstNumber = 0, const uint8 LastNumber = 1);
 	void SetNumberedOutputPins(const uint8 FirstNumber = 0, const uint8 LastNumber = 1);
 
@@ -190,7 +190,7 @@ protected:
 // Connections to other nodes
 
 protected:
-	// Map input/outputs to the connected node and input pin
+	/* Map input/outputs to the connected node and input pin. */
 	UPROPERTY()
 	TMap<FName, FConnectedPin> Connections;
 
@@ -227,15 +227,15 @@ public:
 	static void RecursiveFindNodesByClass(UFlowNode* Node, const TSubclassOf<UFlowNode> Class, uint8 Depth, TArray<UFlowNode*>& OutNodes);
 
 protected:
-	// Slow and fast lookup functions, based on whether we are proactively caching the connections for quick lookup 
-	// in the Connections array (by PinCategory)
+	/* Slow and fast lookup functions, based on whether we are proactively caching the connections for quick lookup
+	 * in the Connections array (by PinCategory). */
 	bool FindConnectedNodeForPinFast(const FName& FlowPinName, FGuid* FoundGuid = nullptr, FName* OutConnectedPinName = nullptr) const;
 	bool FindConnectedNodeForPinSlow(const FName& FlowPinName, FGuid* FoundGuid = nullptr, FName* OutConnectedPinName = nullptr) const;
 
-	// Return all connections to a Pin this Node knows about.
-	// Connections are only stored on one of the Nodes they connect depending on pin type.
-	// As such, this function may not return anything even if the Node is connected to the Pin.
-	// Use UFlowAsset::GetAllPinsConnectedToPin() to do a guaranteed find of all Connections.
+	/* Return all connections to a Pin this Node knows about.
+	 * Connections are only stored on one of the Nodes they connect depending on pin type.
+	 * As such, this function may not return anything even if the Node is connected to the Pin.
+	 * Use UFlowAsset::GetAllPinsConnectedToPin() to do a guaranteed find of all Connections. */
 	TArray<FConnectedPin> GetKnownConnectionsToPin(const FConnectedPin& Pin) const;
 
 //////////////////////////////////////////////////////////////////////////
@@ -244,13 +244,20 @@ protected:
 public:
 	using TFlowPinValueSupplierDataArray = FlowArray::TInlineArray<FFlowPinValueSupplierData, 4>;
 
+	/* Map for PinName to Property supplier for non-trivial data pin property lookups.
+	 * Non-trivial means a different pin name from its property source, or a non-zero property owner object index.
+	 * See TryGatherPropertyOwnersAndPopulateResult(). */
+	UPROPERTY()
+	TMap<FName, FFlowPinPropertySource> MapDataPinNameToPropertySource;
+
 #if WITH_EDITORONLY_DATA
+protected:	
 	UPROPERTY(VisibleDefaultsOnly, AdvancedDisplay, Category = "FlowNode", meta = (GetByRef))
 	TArray<FFlowPin> AutoInputDataPins;
 
 	UPROPERTY(VisibleDefaultsOnly, AdvancedDisplay, Category = "FlowNode", meta = (GetByRef))
 	TArray<FFlowPin> AutoOutputDataPins;
-#endif // WITH_EDITORONLY_DATA	
+#endif
 
 	// Map for PinName to Property supplier for non-trivial data pin property lookups
 	// (non-trivial means a different pin name from its property source, or a non-zero property owner object index)
@@ -259,22 +266,18 @@ public:
 	TMap<FName, FFlowPinPropertySource> MapDataPinNameToPropertySource;
 
 #if WITH_EDITOR
-	void SetAutoInputDataPins(const TArray<FFlowPin>& AutoInputPins);
-	void SetAutoOutputDataPins(const TArray<FFlowPin>& AutoOutputPins);
-	const TArray<FFlowPin>& GetAutoInputDataPins() const { return AutoInputDataPins; }
-	const TArray<FFlowPin>& GetAutoOutputDataPins() const { return AutoOutputDataPins; }
-
-	TArray<FFlowPin>& GetMutableAutoInputDataPins() { return AutoInputDataPins; }
-	TArray<FFlowPin>& GetMutableAutoOutputDataPins() { return AutoOutputDataPins; }
-#endif // WITH_EDITOR
+public:
+	bool TryUpdateAutoDataPins();
+	virtual void AutoGenerateDataPins(FFlowAutoDataPinsWorkingData& InOutWorkingData) const;
+#endif
 
 	// IFlowDataPinValueSupplierInterface
 public:
 	virtual FFlowDataPinResult TrySupplyDataPin(FName PinName) const override;
 
-	// Advanced helper for TrySupplyDataPin, which can be overridden in subclasses to provide alternate sourcing for properties.
-	// If returns true, either OutFoundProperty or OutFoundInstancedStruct is expected to carry the property value.
-	// (this function is used for cases like DefineProperties, Start, and blackboard lookup nodes)
+	/* Advanced helper for TrySupplyDataPin, which can be overridden in subclasses to provide alternate sourcing for properties.
+	 * If returns true, either OutFoundProperty or OutFoundInstancedStruct is expected to carry the property value.
+	 * This function is used for cases like DefineProperties, Start, and blackboard lookup nodes. */
 	virtual bool TryFindPropertyByPinName(
 		const UObject& PropertyOwnerObject,
 		const FName& PinName,
@@ -282,7 +285,7 @@ public:
 		TInstancedStruct<FFlowDataPinValue>& OutFoundInstancedStruct) const;
 
 protected:
-	// Helper for TryGetFlowDataPinSupplierDatasForPinName()
+	/* Helper for TryGetFlowDataPinSupplierDatasForPinName(). */
 	void TryAddSupplierDataToArray(FFlowPinValueSupplierData& InOutSupplierData, TFlowPinValueSupplierDataArray& InOutPinValueSupplierDatas) const;
 
 	// Static implementation of the default TryFindPropertyByPinName (which subclasses can incorporate into overrides)
@@ -293,9 +296,9 @@ protected:
 		TInstancedStruct<FFlowDataPinValue>& OutFoundInstancedStruct);
 
 public:
-	// Advanced helper for TrySupplyDataPin, which can be overridden in subclasses to provide additional or replacement object(s)
-	// for sourcing the properties for the given pin name. These objects will have PopulateResult called on them.
-	// (this function is used for cases like ExecuteComponent)
+	/* Advanced helper for TrySupplyDataPin, which can be overridden in subclasses to provide additional or replacement object(s)
+	 * for sourcing the properties for the given pin name. These objects will have PopulateResult called on them.
+	 * This function is used for cases like ExecuteComponent. */
 	virtual void GatherPotentialPropertyOwnersForDataPins(TArray<const UObject*>& InOutOwners) const;
 
 	bool TryGatherPropertyOwnersAndPopulateResult(
@@ -305,13 +308,6 @@ public:
 		FFlowDataPinResult& OutSuppliedResult) const;
 
 	bool TryGetFlowDataPinSupplierDatasForPinName(const FName& PinName, TFlowPinValueSupplierDataArray& InOutPinValueSupplierDatas) const;
-
-	// IFlowDataPinGeneratorInterface
-#if WITH_EDITOR
-public:
-	virtual void AutoGenerateDataPins(FFlowAutoDataPinsWorkingData& InOutWorkingData) const override;
-#endif
-	// --
 
 	// #FlowDataPinLegacy
 public:
@@ -364,7 +360,7 @@ public:
 	void TriggerFlush();
 
 protected:
-	// Trigger execution of input pin
+	/* Trigger execution of input pin. */
 	void TriggerInput(const FName& PinName, const EFlowPinActivationType ActivationType = EFlowPinActivationType::Default);
 
 protected:
@@ -412,7 +408,7 @@ public:
 	TArray<FPinRecord> GetPinRecords(const FName& PinName, const EEdGraphPinDirection PinDirection) const;
 #endif
 
-	// Information displayed while node is working - displayed over node as NodeInfoPopup
+	/* Information displayed while node is working - displayed over node as NodeInfoPopup. */
 	FString GetStatusStringForNodeAndAddOns() const;
 
 #if WITH_EDITOR

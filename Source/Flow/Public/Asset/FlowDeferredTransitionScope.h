@@ -1,5 +1,4 @@
 // Copyright https://github.com/MothCocoon/FlowGraph/graphs/contributors
-
 #pragma once
 
 #include "Misc/Guid.h"
@@ -27,10 +26,9 @@ public:
 	const TArray<FFlowDeferredTriggerInput>& GetDeferredTriggers() const { return DeferredTriggers; }
 
 protected:
-
-	// Deferred triggers for this scope
+	/* Deferred triggers for this scope. */
 	TArray<FFlowDeferredTriggerInput> DeferredTriggers;
 
-	// Is currently accepting new deferred triggers
+	/* Is currently accepting new deferred triggers. */
 	bool bIsOpen = true;
 };

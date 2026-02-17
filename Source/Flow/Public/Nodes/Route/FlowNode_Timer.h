@@ -1,5 +1,4 @@
 // Copyright https://github.com/MothCocoon/FlowGraph/graphs/contributors
-
 #pragma once
 
 #include "Engine/EngineTypes.h"
@@ -7,7 +6,7 @@
 #include "FlowNode_Timer.generated.h"
 
 /**
- * Triggers outputs after time elapsed
+ * Triggers outputs after time elapsed.
  */
 UCLASS(NotBlueprintable, meta = (DisplayName = "Timer", Keywords = "delay, step, tick"))
 class FLOW_API UFlowNode_Timer : public UFlowNode
@@ -15,11 +14,11 @@ class FLOW_API UFlowNode_Timer : public UFlowNode
 	GENERATED_UCLASS_BODY()
 
 protected:
-	// If the value is closer to 0, Timer will complete in next tick
+	/* If the value is closer to 0, Timer will complete in next tick. */
 	UPROPERTY(EditAnywhere, Category = "Timer", meta = (ClampMin = 0.0f, DefaultForInputFlowPin, FlowPinType = Float))
 	float CompletionTime;
 
-	// this allows to trigger other nodes multiple times before completing the Timer
+	/* This allows to trigger other nodes multiple times before completing the Timer. */
 	UPROPERTY(EditAnywhere, Category = "Timer", meta = (ClampMin = 0.0f))
 	float StepTime;
 

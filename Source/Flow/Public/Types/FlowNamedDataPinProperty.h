@@ -1,5 +1,4 @@
 // Copyright https://github.com/MothCocoon/FlowGraph/graphs/contributors
-
 #pragma once
 
 #include "StructUtils/InstancedStruct.h"
@@ -12,42 +11,44 @@
 struct FFlowDataPinProperty;
 struct FFlowDataPinValue;
 
-// Wrapper for FFlowDataPinProperty that is used for flow nodes that add 
-// dynamic properties, with associated data pins, on the flow node instance
-// (as opposed to C++ or blueprint compile-time).
+/**
+ * Wrapper for FFlowDataPinProperty that is used for flow nodes that add dynamic properties,
+ * with associated data pins, on the flow node instance.
+ * (as opposed to C++ or blueprint compile-time).
+ */
 USTRUCT(BlueprintType, DisplayName = "Flow Named DataPin Property")
 struct FFlowNamedDataPinProperty
 {
 	GENERATED_BODY()
 
 public:
-	// Name of this instanced property
+	/* Name of this instanced property. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = DataPins, meta = (EditCondition = "bMayChangeNameAndType", HideEditConditionToggle))
 	FName Name = NAME_None;
 
 private:
-	// DataPinProperty payload
+	/* DataPinProperty payload. */
 	UPROPERTY(VisibleAnywhere, Category = DataPins, meta = (DeprecatedProperty))
 	TInstancedStruct<FFlowDataPinProperty> DataPinProperty;
 
 public:
-	// DataPinProperty payload
+	/* DataPinProperty payload. */
 	UPROPERTY(EditAnywhere, Category = DataPins, meta = (ExcludeBaseStruct, NoClear))
 	TInstancedStruct<FFlowDataPinValue> DataPinValue;
 
 #if WITH_EDITORONLY_DATA
-	// Unique identifier for property tracking
+	/* Unique identifier for property tracking. */
 	UPROPERTY()
 	FGuid Guid = FGuid::NewGuid();
 
-	// Tracks if this property overrides its super (auto-clears if matches super)
+	/* Tracks if this property overrides its super (auto-clears if matches super). */
 	UPROPERTY()
 	bool bIsOverride = false;
 
-	// TODO (gtaylor) Does not currently police the type, 
-	// because that prevents the instanced struct contents being edited as well, 
-	// which is not what we want from this feature.  
-	// Will try to fix next pass on the details customization.
+	/* TODO (gtaylor) Does not currently police the type,
+	 * because that prevents the instanced struct contents being edited as well,
+	 * which is not what we want from this feature.
+	 * Will try to fix next pass on the details customization. */
 	UPROPERTY()
 	bool bMayChangeNameAndType = true;
 #endif
@@ -66,7 +67,7 @@ public:
 
 	FLOW_API FText BuildHeaderText() const;
 
-	void ConfigureForFlowAssetParams() 
+	void ConfigureForFlowAssetParams()
 	{
 		bIsOverride = false;
 		bMayChangeNameAndType = false;
@@ -85,6 +86,7 @@ public:
 			Property.ConfigureForFlowAssetParams();
 		}
 	}
+
 	static void ConfigurePropertiesForFlowAssetStartNode(TArray<FFlowNamedDataPinProperty>& MutableProperties)
 	{
 		for (FFlowNamedDataPinProperty& Property : MutableProperties)
@@ -95,4 +97,3 @@ public:
 
 #endif
 };
-

@@ -243,8 +243,7 @@ void UFlowGraph::UpgradeAllFlowNodePins()
 			if (IsValid(FlowNode))
 			{
 				FlowNode->FixupDataPinTypes();
-
-				FlowAsset->TryUpdateManagedFlowPinsForNode(*FlowNode);
+				FlowNode->TryUpdateAutoDataPins();
 			}
 		}
 	}
@@ -290,15 +289,15 @@ void UFlowGraph::UpdateAsset(const int32 UpdateFlags)
 		return;
 	}
 
-	// UpdateAsset is called to do any reconciliation from the editor-version of the 
-	//  graph to the runtime version of the graph data.
-	// In our case, it will copy the AddOns from their editor-side UFlowGraphNode containers to
-	//  their runtime UFlowNode and/or UFlowNodeAddOn ::AddOn array entry (via OnUpdateAsset)
+	/* UpdateAsset is called to do any reconciliation from the editor-version of the 
+	 * graph to the runtime version of the graph data.
+	 * In our case, it will copy the AddOns from their editor-side UFlowGraphNode containers to
+	 * their runtime UFlowNode and/or UFlowNodeAddOn ::AddOn array entry. */
 	for (UEdGraphNode* Node : Nodes)
 	{
 		if (UFlowGraphNode* FlowGraphNode = Cast<UFlowGraphNode>(Node))
 		{
-			FlowGraphNode->OnUpdateAsset(UpdateFlags);
+			FlowGraphNode->RebuildRuntimeAddOnsFromEditorSubNodes();
 		}
 	}
 }

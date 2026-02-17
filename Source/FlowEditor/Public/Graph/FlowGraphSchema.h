@@ -1,9 +1,5 @@
 // Copyright https://github.com/MothCocoon/FlowGraph/graphs/contributors
-
 #pragma once
-
-#include "Asset/FlowPinTypeMatchPolicy.h"
-#include "Types/FlowPinTypeNamesStandard.h"
 
 #include "EdGraph/EdGraphSchema.h"
 #include "Runtime/Launch/Resources/Version.h"
@@ -21,6 +17,9 @@ struct FFlowPinType;
 
 DECLARE_MULTICAST_DELEGATE(FFlowGraphSchemaRefresh);
 
+/**
+ * Flow-specific implementation of engine's Graph Schema.
+ */
 UCLASS()
 class FLOWEDITOR_API UFlowGraphSchema : public UEdGraphSchema
 {
@@ -71,8 +70,6 @@ public:
 	virtual bool IsTitleBarPin(const UEdGraphPin& Pin) const override;
 	virtual bool CanShowDataTooltipForPin(const UEdGraphPin& Pin) const override;
 	// --
-
-	// FlowGraphSchema
 
 	static const FFlowPinType* LookupDataPinTypeForPinCategory(const FName& PinCategory);
 
@@ -128,12 +125,12 @@ public:
 
 protected:
 
-	// These are the policies for matching data pin types
+	/* These are the policies for matching data pin types. */
 	UPROPERTY(Transient)
 	TMap<FName, FFlowPinTypeMatchPolicy> PinTypeMatchPolicies;
 
-	// TODO (gtaylor) The mechanism for customizing PinTypeMatchPolicies will need some revision.
-	// I am going with a simple virtual method on schema For Now(tm) but expect a revision in how this is done, in the future.
+	/* TODO (gtaylor) The mechanism for customizing PinTypeMatchPolicies will need some revision.
+	 * I am going with a simple virtual method on schema For Now(tm) but expect a revision in how this is done, in the future. */
 	virtual void InitializedPinTypes();
 
 	static UFlowGraphNode* CreateDefaultNode(UEdGraph& Graph, const TSubclassOf<UFlowNode>& NodeClass, const FVector2D& Offset, bool bPlacedAsGhostNode);
@@ -168,6 +165,6 @@ public:
 	static const UFlowAsset* GetEditedAssetOrClassDefault(const UEdGraph* Graph);
 
 private:
-	// ID for checking dirty status of node titles against
+	/* ID for checking dirty status of node titles against. */
 	static int32 CurrentCacheRefreshID;
 };

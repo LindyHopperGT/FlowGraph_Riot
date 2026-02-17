@@ -1,8 +1,7 @@
 // Copyright https://github.com/MothCocoon/FlowGraph/graphs/contributors
-
 #pragma once
 
-#include "CoreMinimal.h"
+#include "UObject/Interface.h"
 
 class UFlowAsset;
 
@@ -15,7 +14,7 @@ class FLOW_API IFlowExecutionGate
 public:
 	virtual ~IFlowExecutionGate() = default;
 
-	/** Return true when Flow execution should be halted globally. */
+	/* Return true when Flow execution should be halted globally. */
 	virtual bool IsFlowExecutionHalted() const = 0;
 };
 
@@ -28,7 +27,7 @@ public:
 	static void SetGate(IFlowExecutionGate* InGate);
 	static IFlowExecutionGate* GetGate();
 
-	/** True if a gate exists and it currently wants Flow execution halted. */
+	/* True if a gate exists and it currently wants Flow execution halted. */
 	static bool IsHalted();
 
 private:

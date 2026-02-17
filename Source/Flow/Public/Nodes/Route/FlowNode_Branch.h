@@ -1,5 +1,4 @@
 // Copyright https://github.com/MothCocoon/FlowGraph/graphs/contributors
-
 #pragma once
 
 #include "Nodes/FlowNode.h"
@@ -7,7 +6,9 @@
 
 #include "FlowNode_Branch.generated.h"
 
-// FEvaluates its AddOns that implement the IFlowPredicateInterface to determine the output pin to trigger
+/**
+ * FEvaluates its AddOns that implement the IFlowPredicateInterface to determine the output pin to trigger.
+ */
 UCLASS(MinimalApi, NotBlueprintable, meta = (DisplayName = "Branch"))
 class UFlowNode_Branch : public UFlowNode
 {
@@ -26,7 +27,6 @@ public:
 	virtual FText K2_GetNodeTitle_Implementation() const override;
 	// --
 
-	// Event reacting on triggering Input pin
 	virtual void ExecuteInput(const FName& PinName) override;
 
 	static const FName INPIN_Evaluate;
