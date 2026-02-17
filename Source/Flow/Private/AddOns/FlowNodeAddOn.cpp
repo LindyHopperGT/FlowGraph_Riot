@@ -159,6 +159,6 @@ TArray<FFlowPin> UFlowNodeAddOn::GetContextOutputs() const
 
 void UFlowNodeAddOn::RequestReconstructionOnOwningFlowNode() const
 {
-	(void)OnAddOnRequestedParentReconstruction.ExecuteIfBound();
+	(void) OnAddOnRequestedParentReconstruction.ExecuteIfBound();
 }
 #endif // WITH_EDITOR
