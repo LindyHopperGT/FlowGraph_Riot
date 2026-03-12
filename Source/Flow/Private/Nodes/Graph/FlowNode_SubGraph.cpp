@@ -16,9 +16,8 @@ FFlowPin UFlowNode_SubGraph::StartPin(TEXT("Start"));
 FFlowPin UFlowNode_SubGraph::FinishPin(TEXT("Finish"));
 const FName UFlowNode_SubGraph::AssetParams_MemberName = GET_MEMBER_NAME_CHECKED(ThisClass, AssetParams);
 
-UFlowNode_SubGraph::UFlowNode_SubGraph(const FObjectInitializer& ObjectInitializer)
-	: Super(ObjectInitializer)
-	, bCanInstanceIdenticalAsset(false)
+UFlowNode_SubGraph::UFlowNode_SubGraph()
+	: bCanInstanceIdenticalAsset(false)
 {
 #if WITH_EDITOR
 	Category = TEXT("Graph");

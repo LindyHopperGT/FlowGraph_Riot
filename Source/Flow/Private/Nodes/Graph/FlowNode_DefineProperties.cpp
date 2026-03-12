@@ -1,14 +1,12 @@
 // Copyright https://github.com/MothCocoon/FlowGraph/graphs/contributors
 
 #include "Nodes/Graph/FlowNode_DefineProperties.h"
-#include "Types/FlowAutoDataPinsWorkingData.h"
 #include "Types/FlowPinTypesStandard.h"
 #include "Types/FlowDataPinValuesStandard.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(FlowNode_DefineProperties)
 
-UFlowNode_DefineProperties::UFlowNode_DefineProperties(const FObjectInitializer& ObjectInitializer)
-	: Super(ObjectInitializer)
+UFlowNode_DefineProperties::UFlowNode_DefineProperties()
 {
 #if WITH_EDITOR
 	NodeDisplayStyle = FlowNodeStyle::Terminal;

@@ -9,8 +9,7 @@
 
 const FName UFlowNode_FormatText::OUTPIN_TextOutput("Formatted Text");
 
-UFlowNode_FormatText::UFlowNode_FormatText(const FObjectInitializer& ObjectInitializer)
-	: Super(ObjectInitializer)
+UFlowNode_FormatText::UFlowNode_FormatText()
 {
 #if WITH_EDITOR
 	Category = TEXT("Graph");

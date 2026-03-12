@@ -1,10 +1,10 @@
 // Copyright https://github.com/MothCocoon/FlowGraph/graphs/contributors
 #pragma once
 
+#include "GameplayEffectTypes.h"
+
 #include "AddOns/FlowNodeAddOn.h"
 #include "Interfaces/FlowPredicateInterface.h"
-
-#include "GameplayEffectTypes.h"
 
 #include "FlowNodeAddOn_PredicateRequireGameplayTags.generated.h"
 
@@ -41,11 +41,11 @@ public:
 
 public:
 
-	// DataPin input for the Gameplay Tag or Tag Container to test with the Requirements
+	/* DataPin input for the Gameplay Tag or Tag Container to test with the Requirements. */
 	UPROPERTY(EditAnywhere, Category = Configuration, meta = (DefaultForInputFlowPin, FlowPinType = "GameplayTagContainer"))
 	FGameplayTagContainer Tags;
 
-	// Requirements to evaluate the Test Tags with
+	/* Requirements to evaluate the Test Tags with. */
 	UPROPERTY(EditAnywhere, Category = Configuration)
 	FGameplayTagRequirements Requirements;
 };

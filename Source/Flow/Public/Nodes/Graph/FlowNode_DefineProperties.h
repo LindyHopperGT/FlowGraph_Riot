@@ -15,7 +15,10 @@ class FLOW_API UFlowNode_DefineProperties
 	: public UFlowNode
 	, public IFlowNamedPropertiesSupplierInterface
 {
-	GENERATED_UCLASS_BODY()
+	GENERATED_BODY()
+	
+public:
+	UFlowNode_DefineProperties();
 
 protected:
 	/* Instance-defined properties.

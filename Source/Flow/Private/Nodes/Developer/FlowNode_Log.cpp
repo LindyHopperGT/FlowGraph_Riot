@@ -9,9 +9,8 @@
 
 #define LOCTEXT_NAMESPACE "FlowNode_Log"
 
-UFlowNode_Log::UFlowNode_Log(const FObjectInitializer& ObjectInitializer)
-	: Super(ObjectInitializer)
-	, Message()
+UFlowNode_Log::UFlowNode_Log()
+	: Message()
 	, Verbosity(EFlowLogVerbosity::Warning)
 	, bPrintToScreen(true)
 	, Duration(5.0f)

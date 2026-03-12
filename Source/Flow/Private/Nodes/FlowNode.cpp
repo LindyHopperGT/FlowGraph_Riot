@@ -30,9 +30,8 @@ FString UFlowNode::MissingNotifyTag = TEXT("Missing Notify Tag");
 FString UFlowNode::MissingClass = TEXT("Missing class");
 FString UFlowNode::NoActorsFound = TEXT("No actors found");
 
-UFlowNode::UFlowNode(const FObjectInitializer& ObjectInitializer)
-	: Super(ObjectInitializer)
-	, AllowedSignalModes({EFlowSignalMode::Enabled, EFlowSignalMode::Disabled, EFlowSignalMode::PassThrough})
+UFlowNode::UFlowNode()
+	: AllowedSignalModes({EFlowSignalMode::Enabled, EFlowSignalMode::Disabled, EFlowSignalMode::PassThrough})
 	, SignalMode(EFlowSignalMode::Enabled)
 	, bPreloaded(false)
 	, ActivationState(EFlowNodeState::NeverActivated)

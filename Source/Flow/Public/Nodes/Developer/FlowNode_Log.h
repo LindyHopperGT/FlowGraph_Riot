@@ -25,8 +25,11 @@ enum class EFlowLogVerbosity : uint8
 UCLASS(NotBlueprintable, meta = (DisplayName = "Log", Keywords = "print"))
 class FLOW_API UFlowNode_Log : public UFlowNode_DefineProperties
 {
-	GENERATED_UCLASS_BODY()
-	
+	GENERATED_BODY()
+
+public:
+	UFlowNode_Log();
+
 private:
 	/* The message to write to the log.
 	 * If the Message input pin is not connected to another source. */

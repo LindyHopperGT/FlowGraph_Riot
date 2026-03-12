@@ -15,7 +15,7 @@ enum class EFlowPredicateCombinationRule : uint8
 };
 FLOW_ENUM_RANGE_VALUES(EFlowPredicateCombinationRule);
 
-// Operator for compare operation
+/* Operator for compare operation. */
 UENUM(BlueprintType)
 enum class EFlowPredicateCompareOperatorType : uint8
 {

@@ -24,7 +24,10 @@ class FLOW_API UFlowNode : public UFlowNodeBase
 						 , public IFlowDataPinValueSupplierInterface
 						 , public IVisualLoggerDebugSnapshotInterface
 {
-	GENERATED_UCLASS_BODY()
+	GENERATED_BODY()
+
+public:
+	UFlowNode();
 
 	friend class SFlowGraphNode;
 	friend class UFlowAsset;

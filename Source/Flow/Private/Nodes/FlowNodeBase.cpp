@@ -34,10 +34,9 @@
 
 using namespace EFlowForEachAddOnFunctionReturnValue_Classifiers;
 
-UFlowNodeBase::UFlowNodeBase(const FObjectInitializer& ObjectInitializer)
-	: Super(ObjectInitializer)
+UFlowNodeBase::UFlowNodeBase()
 #if WITH_EDITORONLY_DATA
-	, GraphNode(nullptr)
+	: GraphNode(nullptr)
 	, bDisplayNodeTitleWithoutPrefix(true)
 	, bCanDelete(true)
 	, bCanDuplicate(true)

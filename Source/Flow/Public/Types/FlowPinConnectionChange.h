@@ -1,5 +1,4 @@
 // Copyright https://github.com/MothCocoon/FlowGraph/graphs/contributors
-
 #pragma once
 
 #include "UObject/Object.h"
@@ -36,13 +35,13 @@ public:
 	FName PinName = NAME_None;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Flow")
-	UFlowNode* OldConnectedNode = nullptr;
+	TObjectPtr<UFlowNode> OldConnectedNode = nullptr;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Flow")
 	FName OldConnectedPinName = NAME_None;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Flow")
-	UFlowNode* NewConnectedNode = nullptr;
+	TObjectPtr<UFlowNode> NewConnectedNode = nullptr;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Flow")
 	FName NewConnectedPinName = NAME_None;

@@ -4,6 +4,8 @@
       url: /Overview/Concept
     - title: Getting Started
       url: /Overview/GettingStarted
+    - title: How To Contribute
+      url: /Overview/HowToContribute 
     - title: FAQ
       url: /Overview/FAQ
 
@@ -26,6 +28,13 @@
       url: /Guides/AddingNodeSpawnShortcut
     - title: Comparison to GAS
       url: /Guides/ComparisonToGAS  
+
+- title: Flow-based
+  docs:
+    - title: Games
+      url: /FlowBased/Games
+    - title: Plugins
+      url: /FlowBased/Plugins
 
 - title: Releases
   docs:
@@ -51,3 +60,8 @@
       url: /Releases/Version11
     - title: Version 1.0
       url: /Releases/Version10
+
+- title: Forks
+  docs:
+    - title: Notable Pull Requests
+      url: /Forks/NotablePullRequests

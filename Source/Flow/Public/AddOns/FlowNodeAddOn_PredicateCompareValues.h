@@ -1,5 +1,4 @@
 // Copyright https://github.com/MothCocoon/FlowGraph/graphs/contributors
-
 #pragma once
 
 #include "AddOns/FlowNodeAddOn.h"
@@ -62,7 +61,7 @@ protected:
 	bool IsEqualityOp() const;
 	bool IsArithmeticOp() const;
 
-	// Compatibility check by standard pin type names.
+	/* Compatibility check by standard pin type names. */
 	static bool AreComparableStandardPinTypes(const FName& LeftPinTypeName, const FName& RightPinTypeName);
 
 	// Domain classifiers
@@ -97,10 +96,10 @@ protected:
 	const FName& GetLeftValuePropertyName() const;
 	const FName& GetRightValuePropertyName() const;
 
-	// This is the value as-authored by the node author in their graph
+	/* This is the value as-authored by the node author in their graph. */
 	FORCEINLINE const FName& GetAuthoredValueName(const FFlowNamedDataPinProperty& NamedDataPinProperty) const { return NamedDataPinProperty.Name; }
 
-	// This is the authored value after being disambiguated (for duplicates),
-	// (ie, how it is presented and indexed on the owning flow node)
+	/* This is the authored value after being disambiguated (for duplicates).
+	 * Example: how it is presented and indexed on the owning Flow Node. */
 	FORCEINLINE const FName& GetDisambiguatedValueName(const FFlowNamedDataPinProperty& NamedDataPinProperty) const { return NamedDataPinProperty.DataPinValue.Get().PropertyPinName; }
 };

@@ -12,9 +12,11 @@ class UFlowAssetParams;
 UCLASS(NotBlueprintable, meta = (DisplayName = "Sub Graph"))
 class FLOW_API UFlowNode_SubGraph : public UFlowNode
 {
-	GENERATED_UCLASS_BODY()
+	GENERATED_BODY()
 
 public:
+	UFlowNode_SubGraph();	
+
 	friend class UFlowAsset;
 	friend class FFlowNode_SubGraphDetails;
 	friend class UFlowSubsystem;

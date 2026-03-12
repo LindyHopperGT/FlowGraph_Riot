@@ -82,7 +82,10 @@ class FLOW_API UFlowNodeBase
 	, public IFlowContextPinSupplierInterface
 	, public IFlowDataPinValueOwnerInterface
 {
-	GENERATED_UCLASS_BODY()
+	GENERATED_BODY()
+
+public:
+	UFlowNodeBase();
 
 	friend class SFlowGraphNode;
 	friend class UFlowAsset;

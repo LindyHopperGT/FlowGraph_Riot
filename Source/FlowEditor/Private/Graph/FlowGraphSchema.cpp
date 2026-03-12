@@ -1157,18 +1157,18 @@ void UFlowGraphSchema::ApplyNodeOrAddOnFilter(const UFlowAsset* EditedFlowAsset,
 	using namespace EFlowGraphPolicyResult_Classifiers;
 
 	UFlowNodeBase* FlowNodeBaseCDO = FlowNodeClass->GetDefaultObject<UFlowNodeBase>();
-	UClass* CurFlowAssetClass = EditedFlowAsset->GetClass();
+	UClass* FlowAssetClass = EditedFlowAsset->GetClass();
 
 	// Crawl up the superclass parentage until we find a strict result, otherwise accept the best tentative result
-	EFlowGraphPolicyResult BestResult = EFlowGraphPolicyResult::Invalid;
-	while (IsValid(CurFlowAssetClass) && CurFlowAssetClass->IsChildOf<UFlowAsset>())
+	EFlowGraphPolicyResult BestResult = EFlowGraphPolicyResult::TentativeAllowed;
+	while (IsValid(FlowAssetClass) && FlowAssetClass->IsChildOf<UFlowAsset>())
 	{
-		if (const FFlowGraphNodesPolicy* FlowAssetPolicy = GraphSettings->PerAssetSubclassFlowNodePolicies.Find(FSoftClassPath(CurFlowAssetClass)))
+		if (const FFlowGraphNodesPolicy* FlowAssetPolicy = GraphSettings->PerAssetSubclassFlowNodePolicies.Find(FSoftClassPath(FlowAssetClass)))
 		{
-			const EFlowGraphPolicyResult CurPolicyResult = FlowAssetPolicy->IsNodeAllowedByPolicy(FlowNodeBaseCDO);
+			const EFlowGraphPolicyResult PolicyResult = FlowAssetPolicy->IsNodeAllowedByPolicy(FlowNodeBaseCDO);
 
 			// Choose the most applicable result for this class
-			BestResult = MergePolicyResult(BestResult, CurPolicyResult);
+			BestResult = MergePolicyResult(BestResult, PolicyResult);
 
 			if (IsStrictPolicyResult(BestResult))
 			{
@@ -1177,7 +1177,7 @@ void UFlowGraphSchema::ApplyNodeOrAddOnFilter(const UFlowAsset* EditedFlowAsset,
 			}
 		}
 
-		CurFlowAssetClass = CurFlowAssetClass->GetSuperClass();
+		FlowAssetClass = FlowAssetClass->GetSuperClass();
 	}
 
 	if (IsAnyAllowedPolicyResult(BestResult))
