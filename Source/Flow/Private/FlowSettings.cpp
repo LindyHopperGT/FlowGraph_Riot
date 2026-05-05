@@ -2,11 +2,13 @@
 
 #include "FlowSettings.h"
 #include "FlowComponent.h"
+#include "Policies/FlowStandardPinConnectionPolicies.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(FlowSettings)
 
 UFlowSettings::UFlowSettings(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
+	, PinConnectionPolicy(FFlowPinConnectionPolicy_VeryRelaxed::StaticStruct())
 	, bDeferTriggeredOutputsWhileTriggering(true)
 	, bLogOnSignalDisabled(true)
 	, bLogOnSignalPassthrough(true)
@@ -15,6 +17,11 @@ UFlowSettings::UFlowSettings(const FObjectInitializer& ObjectInitializer)
 	, DefaultExpectedOwnerClass(UFlowComponent::StaticClass())
 	, bWarnAboutMissingIdentityTags(true)
 {
+}
+
+const FFlowPinConnectionPolicy* UFlowSettings::GetPinConnectionPolicy() const
+{
+	return PinConnectionPolicy.GetPtr<FFlowPinConnectionPolicy>();
 }
 
 #if WITH_EDITOR

@@ -13,8 +13,12 @@
 
 void SLevelEditorFlow::Construct(const FArguments& InArgs)
 {
-	CreateFlowWidget();
-	FEditorDelegates::OnMapOpened.AddRaw(this, &SLevelEditorFlow::OnMapOpened);
+	OnMapOpenedHandle = FEditorDelegates::OnMapOpened.AddRaw(this, &SLevelEditorFlow::OnMapOpened);
+}
+
+SLevelEditorFlow::~SLevelEditorFlow()
+{
+	FEditorDelegates::OnMapOpened.Remove(OnMapOpenedHandle);
 }
 
 void SLevelEditorFlow::OnMapOpened(const FString& Filename, bool bAsTemplate)
@@ -37,14 +41,14 @@ void SLevelEditorFlow::CreateFlowWidget()
 	[
 		SNew(SHorizontalBox)
 		+ SHorizontalBox::Slot()
-			.AutoWidth()
-			[
-				SNew(SObjectPropertyEntryBox)
-					.AllowedClass(GetDefault<UFlowGraphSettings>()->WorldAssetClass)
-					.DisplayThumbnail(false)
-					.OnObjectChanged(this, &SLevelEditorFlow::OnFlowChanged)
-					.ObjectPath(this, &SLevelEditorFlow::GetFlowAssetPath) // needs function to automatically refresh view upon data change
-			]
+		.AutoWidth()
+		[
+			SNew(SObjectPropertyEntryBox)
+			.AllowedClass(GetDefault<UFlowGraphSettings>()->WorldAssetClass.LoadSynchronous())
+			.DisplayThumbnail(false)
+			.OnObjectChanged(this, &SLevelEditorFlow::OnFlowChanged)
+			.ObjectPath(this, &SLevelEditorFlow::GetFlowAssetPath) // needs function to automatically refresh view upon data change
+		]
 	];
 }
 
@@ -75,13 +79,16 @@ void SLevelEditorFlow::OnFlowChanged(const FAssetData& NewAsset)
 
 UFlowComponent* SLevelEditorFlow::FindFlowComponent()
 {
-	if (const UWorld* World = GEditor->GetEditorWorldContext().World())
+	if (GEditor)
 	{
-		if (const AWorldSettings* WorldSettings = World->GetWorldSettings())
+		if (const UWorld* World = GEditor->GetEditorWorldContext().World())
 		{
-			if (UActorComponent* FoundComponent = WorldSettings->GetComponentByClass(UFlowComponent::StaticClass()))
+			if (const AWorldSettings* WorldSettings = World->GetWorldSettings())
 			{
-				return Cast<UFlowComponent>(FoundComponent);
+				if (UActorComponent* FoundComponent = WorldSettings->GetComponentByClass(UFlowComponent::StaticClass()))
+				{
+					return Cast<UFlowComponent>(FoundComponent);
+				}
 			}
 		}
 	}

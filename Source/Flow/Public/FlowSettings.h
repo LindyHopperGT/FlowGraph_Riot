@@ -2,9 +2,11 @@
 #pragma once
 
 #include "Engine/DeveloperSettings.h"
-#include "Templates/SubclassOf.h"
+#include "StructUtils/InstancedStruct.h"
 #include "UObject/SoftObjectPath.h"
 #include "FlowSettings.generated.h"
+
+struct FFlowPinConnectionPolicy;
 
 /**
  * Mostly runtime settings of the Flow Graph.
@@ -14,9 +16,16 @@ class FLOW_API UFlowSettings : public UDeveloperSettings
 {
 	GENERATED_UCLASS_BODY()
 
+	// Returns a typed pointer to the current pin connection policy, or nullptr if unset/invalid.
+	const FFlowPinConnectionPolicy* GetPinConnectionPolicy() const;
+	
 #if WITH_EDITOR
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 #endif
+
+	/* The policy for connecting pins in the Flow Graph Editor */
+	UPROPERTY(EditAnywhere, config, Category = "Default Policies", DisplayName = "Pin Connection Policy", NoClear, meta = (ExcludeBaseStruct, BaseStruct = "/Script/Flow.FlowPinConnectionPolicy"))
+	FInstancedStruct PinConnectionPolicy;
 
 	/* If True, defer the Triggered Outputs for a FlowAsset while it is currently processing a TriggeredInput.
      * If False, use legacy behavior for backward compatability. */
