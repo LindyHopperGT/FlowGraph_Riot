@@ -1,6 +1,7 @@
 // Copyright https://github.com/MothCocoon/FlowGraph/graphs/contributors
 #pragma once
 
+#include "Delegates/DelegateCombinations.h"
 #include "Engine/DeveloperSettings.h"
 #include "Find/FindInFlowEnums.h"
 
@@ -45,6 +46,10 @@ public:
 	UPROPERTY(EditAnywhere, config, Category = "Nodes")
 	bool bShowAddonDescriptions;
 
+	/* Shows the editable AddOn hierarchy in the owning Flow Node's (or AddOn's) Details panel. */
+	UPROPERTY(EditAnywhere, config, Category = "Nodes", meta = (DisplayName = "Merge AddOn Details"))
+	bool bMergeAddOnDetails;
+
 	/* Pin names will be displayed in a format that is easier to read, even if PinFriendlyName wasn't set. */
 	UPROPERTY(EditAnywhere, config, Category = "Nodes")
 	bool bEnforceFriendlyPinNames;
@@ -69,6 +74,12 @@ public:
 	UPROPERTY(VisibleAnywhere, config, Category = "Search", meta = (Bitmask, BitmaskEnum = "/Script/Flow.EFlowSearchFlags"))
 	uint32 DefaultSearchFlags = uint32(EFlowSearchFlags::DefaultSearchFlags);
 
+	UPROPERTY(VisibleAnywhere, config, Category = "Search")
+	uint8 DefaultSearchPinDirection = 0;
+
+	UPROPERTY(VisibleAnywhere, config, Category = "Search")
+	uint8 DefaultSearchPinConnection = 0;
+
 	/* Max search depth for inline objects in the Flow Editor. */
 	UPROPERTY(EditAnywhere, config, Category = "Search", meta = (ClampMin = 1))
 	int32 DefaultMaxSearchDepth = 1;
@@ -76,4 +87,10 @@ public:
 public:
 	virtual FName GetCategoryName() const override { return FName("Flow Graph"); }
 	virtual FText GetSectionText() const override { return INVTEXT("User Settings"); }
+
+	DECLARE_MULTICAST_DELEGATE(FOnSettingsChanged);
+	static FOnSettingsChanged& OnSettingsChanged();
+
+private:
+	static FOnSettingsChanged SettingsChanged;
 };

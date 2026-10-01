@@ -1,6 +1,8 @@
 ﻿# Integrating FlowGraphCourier with an MCP Server
 
-The `FlowGraphCourier` module provides the core export/import/glossary functionality for Flow Assets. This document describes how to wire those APIs into any MCP server implementation.
+The `FlowGraphCourier` module provides the core export/import/catalog-query functionality for Flow Assets. This document describes how to wire those APIs into any MCP server implementation.
+
+> **Renamed from `UFlowGraphGlossaryExporter`:** if you are tracking an older revision of this plugin, the markdown-glossary exporter (`ExportGlossaryToString`/`ExportGlossaryToFile`, an unparameterized ~500 KB dump) was replaced by `UFlowCatalogQuery` - a filterable, paginated JSON query core (`QueryCatalog`) plus a file-only bulk export (`ExportFlowCatalogToFile`) for KB-gardening use cases. There is no drop-in string-returning replacement by design; callers filter first.
 
 > **Future:** When Epic ships a native MCP service in Unreal Editor, a first-party `FlowGraphCourier` adapter will be written for it. Until then, integration is left to early adopters using the pattern described here.
 
@@ -15,7 +17,7 @@ Four static utility classes, all **editor-only** (require `WITH_EDITOR` / `Unrea
 | `UFlowGraphExporter` | `ExportFlowGraphToString(UFlowAsset*)` | Serializes a FlowAsset to the text format |
 | `UFlowGraphImporter` | `ImportFlowGraphFromString(text, path, error)` | Deserializes text into a new or existing UFlowAsset |
 | `UFlowGraphRegrapher` | `ImportAndRegraphFromText(text, path)` | Import + rebuild editor graph in one call |
-| `UFlowGraphGlossaryExporter` | `ExportGlossaryToString()` | Markdown glossary of all node types in the project |
+| `UFlowCatalogQuery` | `QueryCatalog(params, result)` | Filterable/paginated query over every node/addon/asset-type class in the project |
 
 The text format these classes use is documented in [`FlowGraphTextFormat.md`](FlowGraphTextFormat.md).
 
@@ -58,19 +60,33 @@ if (!Asset) { return Error("Import failed"); }
 return SuccessJson({ "asset_path", AssetPath, "node_count", Asset->GetNodes().Num() });
 ```
 
-### 3. Glossary Resource — `flow-graph-glossary`
+### 3. Catalog Discovery Tools — `list_flow_asset_types` / `find_flow_node_types`
 
-Returns a markdown document listing all available `UFlowNode` and `UFlowNodeAddOn` types, their properties, and their pins. Intended to be served as a **resource** (read-once context) rather than a tool (called per-request).
+Two tools, not one - a full node/addon catalog is too large to serve as a single read-once resource
+(this plugin alone ships hundreds of classes). `list_flow_asset_types` is the cold-start entry point
+(counts only, one row per `FlowAsset` subclass); `find_flow_node_types` is a filter-then-project
+query over node/addon classes, called per-request like any other tool.
 
 ```
-Input:  (none)
-Output: markdown string
+Input (list_flow_asset_types):  (none)
+Output: assetTypes[] (className, classPath, description, keywords, allowedNodeCount, allowedAddonCount), foundCount
+
+Input (find_flow_node_types):  assetClassName?, classNames[]?, kind? ("node"|"addon"|"any"),
+  query?, keywords[]?, categories[]?, pinTypes[]?, detail? ("names"|"summary"|"full"),
+  bIncludeFacets?, limit?, offset?
+Output: nodes[], addons[] (split, projected per `detail`), nodeCount, addonCount,
+  totalNodeCount, totalAddonCount, truncated, detail, keywordFacets[], categoryFacets[],
+  unresolvedClassNames[]
 ```
 
 ```cpp
 // Pseudocode
-FString Glossary = UFlowGraphGlossaryExporter::ExportGlossaryToString();
-return Glossary;
+FFlowCatalogQueryParams Params;
+Params.AssetClassName = AssetClassName;   // or ClassNames for an exact-name lookup
+Params.Detail = EFlowCatalogDetail::Summary;   // never Full on an unbounded query - it hard-caps at 25 matches
+FFlowCatalogQueryResult Result;
+UFlowCatalogQuery::QueryCatalog(Params, Result);
+return SuccessJson(Result);
 ```
 
 ---
@@ -108,13 +124,11 @@ Your MCP server needs to:
 
 ## Reference Implementation
 
-The `RGIUnrealMCPFlowGraph` plugin (at `CoreSDK/Plugins/Runtime/RGIUnrealMCPFlowGraph`) is a concrete example that wires `FlowGraphCourier` into Riot's internal `UMCPToolLibrary` framework:
+`FlowGraphCourier` ships its own concrete example: `UFlowMCPToolset` (`Public/FlowMCPToolset.h`), a typed toolset registered with the engine's `ToolsetRegistry` plugin.
 
-- **`URGIUnrealMCPFlowGraphToolLibrary`** subclasses `UMCPToolLibrary` and exposes three `UFUNCTION`s — `ExportFlowAsset`, `ImportAndRegraphFlowAsset`, `GetFlowGraphGlossary`
-- Each function calls the corresponding `FlowGraphCourier` static method and wraps the result in a JSON response via `CreateSuccessJson` / `CreateErrorJson`
-- The glossary function is tagged with `MCPResource = "true"` metadata so the framework serves it as a resource rather than a tool
-
-The `UMCPToolLibrary` base class and discovery mechanism (`FMCPToolDiscovery`) are Riot-internal and not part of this plugin. The pattern of subclassing a base tool library and using `UFUNCTION` metadata for tool registration is one viable approach; your MCP framework may use a different mechanism (e.g., explicit registration calls, a JSON schema file, or a reflection-based scanner).
+- `UFlowMCPToolset` exposes one `UFUNCTION(meta = (AICallable))` per op — `ExportFlowAsset`, `ImportAndRegraphFlowAsset`, `ApplyFlowPatch`, `ListFlowAssetTypes`, `FindFlowNodeTypes`, and the rest of the surface documented in `CourierTextFormat.md` — each taking a typed `USTRUCT` request and returning a typed `USTRUCT` result (no hand-rolled JSON marshaling).
+- `ToolsetRegistry::RegisterToolsetClass` (called from `FFlowGraphCourierModule::StartupModule`, deferred to `FCoreDelegates::OnPostEngineInit`) makes the toolset discoverable to any MCP server built on that registry, with the request/result schemas reflected automatically from the UPROPERTY layout.
+- This is one viable approach; your MCP framework may use a different mechanism (e.g., explicit per-tool registration calls, a hand-authored JSON schema file, or a reflection-based scanner over a different base class). The important shape to preserve is a thin per-op wrapper that does nothing but marshal parameters into the `FlowGraphCourier` static method call and marshal the result back out.
 
 ---
 
@@ -124,5 +138,5 @@ The `UMCPToolLibrary` base class and discovery mechanism (`FMCPToolDiscovery`) a
 - **GEditor must be valid.** All operations require the Unreal Editor to be running.
 - **Not PIE-safe.** Do not call import/regraph during Play-in-Editor; the asset registry and package system are in an inconsistent state.
 - **Asset saving.** `ImportAndRegraphFromText` marks the package dirty but does not save it. If you need the asset persisted to disk, call `UEditorLoadingAndSavingUtils::SavePackages()` or equivalent after a successful import.
-- **Glossary is project-specific.** `ExportGlossaryToString()` reflects the node types and Blueprint assets loaded in the current project. It also contains a project-specific section (Actor Types, Event Types) in `FlowGraphGlossaryText.inl` — replace or remove that section for your project.
+- **The catalog is project-specific.** `QueryCatalog`/`ListAssetTypes` reflect whatever node/addon/FlowAsset classes (native + Blueprint) are loaded in the current project - there is no separate project-specific text section to maintain (the old `FlowGraphGlossaryText.inl` format guide was removed; `CourierTextFormat.md` is the single grammar source now).
 - **Thread safety.** All `FlowGraphCourier` methods are designed to be called from the game thread. If your MCP server dispatches on a background thread, marshal calls back to the game thread via `AsyncTask(ENamedThreads::GameThread, ...)`.

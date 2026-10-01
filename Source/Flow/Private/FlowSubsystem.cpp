@@ -7,7 +7,6 @@
 #include "FlowLogChannels.h"
 #include "FlowSave.h"
 #include "FlowSettings.h"
-#include "Interfaces/FlowExecutionGate.h"
 #include "Nodes/Graph/FlowNode_SubGraph.h"
 
 #include "Engine/GameInstance.h"
@@ -85,7 +84,11 @@ void UFlowSubsystem::StartRootFlow(UObject* Owner, UFlowAsset* FlowAsset, const 
 	{
 		if (UFlowAsset* NewFlow = CreateRootFlow(Owner, FlowAsset, bAllowMultipleInstances))
 		{
-			NewFlow->StartFlow(DataPinValueSupplier.GetInterface());
+			// TODO (gtaylor) Not implementing output parameters "yet", 
+			// see Subgraph node for the pioneer implementation.
+			constexpr IFlowGraphOutputDataReceiverInterface* OutputDataReceiverInterface = nullptr;
+
+			NewFlow->StartFlow(DataPinValueSupplier.GetInterface(), OutputDataReceiverInterface);
 		}
 	}
 #if WITH_EDITOR
@@ -123,7 +126,7 @@ UFlowAsset* UFlowSubsystem::CreateRootFlow(UObject* Owner, UFlowAsset* FlowAsset
 	return NewFlow;
 }
 
-void UFlowSubsystem::FinishRootFlow(UObject* Owner, UFlowAsset* TemplateAsset, const EFlowFinishPolicy FinishPolicy)
+void UFlowSubsystem::FinishAndDeinitializeRootFlow(UObject* Owner, UFlowAsset* TemplateAsset, const EFlowFinishPolicy FinishPolicy)
 {
 	UFlowAsset* InstanceToFinish = nullptr;
 
@@ -139,11 +142,11 @@ void UFlowSubsystem::FinishRootFlow(UObject* Owner, UFlowAsset* TemplateAsset, c
 	if (InstanceToFinish)
 	{
 		RootInstances.Remove(InstanceToFinish);
-		InstanceToFinish->FinishFlow(FinishPolicy);
+		InstanceToFinish->FinishFlowAndDeinitializeInstance(FinishPolicy);
 	}
 }
 
-void UFlowSubsystem::FinishAllRootFlows(UObject* Owner, const EFlowFinishPolicy FinishPolicy)
+void UFlowSubsystem::FinishAndDeinitializeAllRootFlows(UObject* Owner, const EFlowFinishPolicy FinishPolicy)
 {
 	TArray<UFlowAsset*> InstancesToFinish;
 
@@ -158,41 +161,63 @@ void UFlowSubsystem::FinishAllRootFlows(UObject* Owner, const EFlowFinishPolicy 
 	for (UFlowAsset* InstanceToFinish : InstancesToFinish)
 	{
 		RootInstances.Remove(InstanceToFinish);
-		InstanceToFinish->FinishFlow(FinishPolicy);
+		InstanceToFinish->FinishFlowAndDeinitializeInstance(FinishPolicy);
 	}
 }
 
 UFlowAsset* UFlowSubsystem::CreateSubFlow(UFlowNode_SubGraph* SubGraphNode, const FString& SavedInstanceName, const bool bPreloading /* = false */)
 {
-	UFlowAsset* AssetInstance = nullptr;
+	UFlowAsset* NewInstance = nullptr;
 
 	if (!InstancedSubFlows.Contains(SubGraphNode))
 	{
 		const TWeakObjectPtr<UObject> Owner = SubGraphNode->GetFlowAsset() ? SubGraphNode->GetFlowAsset()->GetOwner() : nullptr;
-		AssetInstance = CreateFlowInstance(Owner, SubGraphNode->Asset.LoadSynchronous(), SavedInstanceName);
+		NewInstance = CreateFlowInstance(Owner, SubGraphNode->Asset.LoadSynchronous(), SavedInstanceName);
 
-		if (AssetInstance)
+		if (NewInstance)
 		{
-			InstancedSubFlows.Add(SubGraphNode, AssetInstance);
+			InstancedSubFlows.Add(SubGraphNode, NewInstance);
 		}
 	}
 
 	if (InstancedSubFlows.Contains(SubGraphNode) && !bPreloading)
 	{
 		// get instanced asset from map - in case it was already instanced by calling CreateSubFlow() with bPreloading == true
-		AssetInstance = InstancedSubFlows[SubGraphNode];
+		UFlowAsset* AssetInstance = InstancedSubFlows[SubGraphNode];
 
-		AssetInstance->NodeOwningThisAssetInstance = SubGraphNode;
+		if (!AssetInstance->NodeOwningThisAssetInstance.IsValid())
+		{
+			AssetInstance->NodeOwningThisAssetInstance = SubGraphNode;			
+		}
+		check(AssetInstance->NodeOwningThisAssetInstance == SubGraphNode);
+		
 		SubGraphNode->GetFlowAsset()->ActiveSubGraphs.Add(SubGraphNode, AssetInstance);
 
 		// don't activate Start Node if we're loading Sub Graph from SaveGame
 		if (SavedInstanceName.IsEmpty())
 		{
-			AssetInstance->StartFlow(SubGraphNode);
+			AssetInstance->StartFlow(SubGraphNode, SubGraphNode);
 		}
 	}
 
-	return AssetInstance;
+	return NewInstance;
+}
+
+void UFlowSubsystem::FinishSubFlow(UFlowNode_SubGraph* SubGraphNode, const EFlowFinishPolicy FinishPolicy)
+{
+	if (InstancedSubFlows.Contains(SubGraphNode))
+	{
+		// The flow asset running on the subgraph node. 
+		UFlowAsset* SubgraphFlowAsset = InstancedSubFlows[SubGraphNode];
+		
+		// This is the flow asset that has the subgraph node. Do not confuse with the flow asset that the node is running.
+		// Remove the subgraph flow from the owning flow active subgraph list. 
+		UFlowAsset* SubgraphNodeParentFlow = SubGraphNode->GetFlowAsset();		
+		SubgraphNodeParentFlow->ActiveSubGraphs.Remove(SubGraphNode);
+		
+		// Finish the flow but do not remove the instance. 
+		SubgraphFlowAsset->FinishFlow(FinishPolicy);
+	}
 }
 
 void UFlowSubsystem::RemoveSubFlow(UFlowNode_SubGraph* SubGraphNode, const EFlowFinishPolicy FinishPolicy)
@@ -204,7 +229,12 @@ void UFlowSubsystem::RemoveSubFlow(UFlowNode_SubGraph* SubGraphNode, const EFlow
 		SubGraphNode->GetFlowAsset()->ActiveSubGraphs.Remove(SubGraphNode);
 		InstancedSubFlows.Remove(SubGraphNode);
 
-		AssetInstance->FinishFlow(FinishPolicy);
+		if (AssetInstance->IsActive())
+		{
+			AssetInstance->FinishFlow(FinishPolicy);
+		}
+		
+		AssetInstance->DeinitializeInstance();		
 
 		// Make sure to set the NodeOwningThisAssetInstance after the FinishFlow call, as it may be needed in the FinishFlow method
 		AssetInstance->NodeOwningThisAssetInstance = nullptr;
@@ -263,63 +293,6 @@ void UFlowSubsystem::RemoveInstancedTemplate(UFlowAsset* Template)
 #endif
 
 	InstancedTemplates.Remove(Template);
-}
-
-bool UFlowSubsystem::TryFlushAllDeferredTriggerScopes() const
-{
-	// Flush deferred triggers on all active runtime instances.
-	// Flush order follows InstancedTemplates iteration + per-template ActiveInstances.
-	// This provides reasonable per-asset FIFO but is not a strict global FIFO across assets.
-	// A more precise global queue could be implemented later if cross-asset ordering becomes critical.
-	const TArray<UFlowAsset*> CapturedInstancedTemplates = InstancedTemplates;
-	for (const UFlowAsset* Template : CapturedInstancedTemplates)
-	{
-		if (!IsValid(Template))
-		{
-			continue;
-		}
-
-		for (UFlowAsset* Instance : Template->GetActiveInstances())
-		{
-			if (FFlowExecutionGate::IsHalted())
-			{
-				break;
-			}
-
-			if (IsValid(Instance))
-			{
-				const bool bFlushed = Instance->TryFlushAllDeferredTriggerScopes();
-
-				// The only case where we allow a flush to stop before completing
-				// is if we hit an execution gate halt
-				check(bFlushed || FFlowExecutionGate::IsHalted());
-			}
-		}
-	}
-
-	// The only case where we allow a flush to stop before completing
-	// is if we hit an execution gate halt
-	const bool bCompletedFlushAll = !FFlowExecutionGate::IsHalted();
-	return bCompletedFlushAll;
-}
-
-void UFlowSubsystem::ClearAllDeferredTriggerScopes()
-{
-	for (const UFlowAsset* Template : InstancedTemplates)
-	{
-		if (!IsValid(Template))
-		{
-			continue;
-		}
-
-		for (UFlowAsset* Instance : Template->GetActiveInstances())
-		{
-			if (IsValid(Instance))
-			{
-				Instance->ClearAllDeferredTriggerScopes();
-			}
-		}
-	}
 }
 
 TMap<UObject*, UFlowAsset*> UFlowSubsystem::GetRootInstances() const

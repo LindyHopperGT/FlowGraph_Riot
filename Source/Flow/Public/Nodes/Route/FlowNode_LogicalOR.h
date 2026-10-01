@@ -43,5 +43,6 @@ protected:
 #if WITH_EDITOR
 public:
 	virtual FString GetStatusString() const override;
+	virtual const FFlowAgentDoc& GetAgentDoc() const override;
 #endif
 };

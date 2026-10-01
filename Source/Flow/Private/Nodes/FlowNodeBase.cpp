@@ -253,7 +253,14 @@ UFlowAsset* UFlowNodeBase::GetFlowAsset() const
 {
 	// In the case of an AddOn, we want our containing FlowNode's Outer, not our own
 	const UFlowNode* FlowNode = GetFlowNodeSelfOrOwner();
-	return FlowNode && FlowNode->GetOuter() ? Cast<UFlowAsset>(FlowNode->GetOuter()) : Cast<UFlowAsset>(GetOuter());
+	if (IsValid(FlowNode))
+	{
+		UObject* Outer = FlowNode->GetOuter();
+		
+		return Cast<UFlowAsset>(Outer);
+	}
+	
+	return Cast<UFlowAsset>(GetOuter());
 }
 
 const UFlowNode* UFlowNodeBase::GetFlowNodeSelfOrOwner() const
@@ -330,6 +337,35 @@ EFlowAddOnAcceptResult UFlowNodeBase::AcceptFlowNodeAddOnChild_Implementation(
 {
 	// Subclasses may override this function to allow AddOn children classes
 	return EFlowAddOnAcceptResult::Undetermined;
+}
+
+bool UFlowNodeBase::HasOtherDirectAddOnChildMatching(
+	const UClass& ClassOrInterface,
+	const UFlowNodeAddOn* IgnoredAddOn,
+	const TArray<UFlowNodeAddOn*>& AdditionalAddOnsToAssumeAreChildren) const
+{
+	const auto IsOtherMatchingAddOn = [&ClassOrInterface, IgnoredAddOn](const UFlowNodeAddOn* AddOn)
+	{
+		return IsValid(AddOn) && AddOn != IgnoredAddOn && AddOn->IsClassOrImplementsInterface(ClassOrInterface);
+	};
+
+	for (const UFlowNodeAddOn* AddOn : GetFlowNodeAddOnChildren())
+	{
+		if (IsOtherMatchingAddOn(AddOn))
+		{
+			return true;
+		}
+	}
+
+	for (const UFlowNodeAddOn* AddOn : AdditionalAddOnsToAssumeAreChildren)
+	{
+		if (IsOtherMatchingAddOn(AddOn))
+		{
+			return true;
+		}
+	}
+
+	return false;
 }
 
 #if WITH_EDITOR
@@ -594,6 +630,12 @@ FString UFlowNodeBase::GetStatusString() const
 #if WITH_EDITOR
 FString UFlowNodeBase::GetNodeCategory() const
 {
+	const FString& MetadataCategory = GetClass()->GetMetaData(TEXT("BlueprintCategoryName"));
+	if (!MetadataCategory.IsEmpty())
+	{
+		return MetadataCategory;
+	}
+
 	if (GetClass()->ClassGeneratedBy)
 	{
 		const FString& BlueprintCategory = Cast<UBlueprint>(GetClass()->ClassGeneratedBy)->BlueprintCategory;
@@ -603,7 +645,7 @@ FString UFlowNodeBase::GetNodeCategory() const
 		}
 	}
 
-	return Category;
+	return K2_GetNodeCategory();
 }
 
 bool UFlowNodeBase::GetDynamicTitleColor(FLinearColor& OutColor) const
@@ -616,6 +658,32 @@ bool UFlowNodeBase::GetDynamicTitleColor(FLinearColor& OutColor) const
 	}
 
 	return false;
+}
+
+FText UFlowNodeBase::GetNodeTitle() const
+{
+	if (HasAnyFlags(RF_ClassDefaultObject | RF_ArchetypeObject))
+	{
+		// For the archetype of the node (e.g. in the node selection UI), only use the default value
+		return UFlowNodeBase::K2_GetNodeTitle_Implementation();
+	}
+	else
+	{
+		return K2_GetNodeTitle();
+	}
+}
+
+FText UFlowNodeBase::GetNodeToolTip() const
+{
+	if (HasAnyFlags(RF_ClassDefaultObject | RF_ArchetypeObject))
+	{
+		// For the archetype of the node (e.g. in the node selection UI), only use the default value
+		return UFlowNodeBase::K2_GetNodeToolTip_Implementation();
+	}
+	else
+	{
+		return K2_GetNodeToolTip();
+	}
 }
 
 FText UFlowNodeBase::GetGeneratedDisplayName() const
@@ -799,6 +867,15 @@ FText UFlowNodeBase::K2_GetNodeToolTip_Implementation() const
 	return GetClass()->GetToolTipText();
 #else
 	return FText::GetEmpty();
+#endif
+}
+
+FString UFlowNodeBase::K2_GetNodeCategory_Implementation() const
+{
+#if WITH_EDITORONLY_DATA
+	return Category;
+#else
+	return "";
 #endif
 }
 

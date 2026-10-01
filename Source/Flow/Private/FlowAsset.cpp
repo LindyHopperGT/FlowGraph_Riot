@@ -8,7 +8,8 @@
 #include "AddOns/FlowNodeAddOn.h"
 #include "Asset/FlowAssetParams.h"
 #include "Asset/FlowAssetParamsUtils.h"
-#include "Interfaces/FlowExecutionGate.h"
+#include "Interfaces/FlowGraphOutputDataReceiverInterface.h"
+#include "Types/FlowNamedDataPinProperty.h"
 #include "Nodes/FlowNodeBase.h"
 #include "Nodes/Graph/FlowNode_CustomInput.h"
 #include "Nodes/Graph/FlowNode_CustomOutput.h"
@@ -16,6 +17,7 @@
 #include "Nodes/Graph/FlowNode_SubGraph.h"
 #include "Policies/FlowPinConnectionPolicy.h"
 #include "Policies/FlowPreloadPolicy.h"
+#include "Types/FlowAutoDataPinsWorkingData.h"
 #include "Types/FlowDataPinValue.h"
 #include "Types/FlowStructUtils.h"
 
@@ -25,6 +27,7 @@
 #include "Algo/AnyOf.h"
 
 #if WITH_EDITOR
+#include "Nodes/Graph/FlowNode_SetGraphOutput.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetToolsModule.h"
 #include "ContentBrowserModule.h"
@@ -77,10 +80,25 @@ void UFlowAsset::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEv
 {
 	Super::PostEditChangeProperty(PropertyChangedEvent);
 
-	if (PropertyChangedEvent.Property && (PropertyChangedEvent.GetPropertyName() == GET_MEMBER_NAME_CHECKED(UFlowAsset, CustomInputs)
-		|| PropertyChangedEvent.GetPropertyName() == GET_MEMBER_NAME_CHECKED(UFlowAsset, CustomOutputs)))
+	const FName ChangedPropertyName = PropertyChangedEvent.GetPropertyName();
+	const FName ChangedMemberPropertyName = PropertyChangedEvent.GetMemberPropertyName();
+	if (PropertyChangedEvent.Property && (ChangedPropertyName == GET_MEMBER_NAME_CHECKED(UFlowAsset, CustomInputs)
+		|| ChangedPropertyName == GET_MEMBER_NAME_CHECKED(UFlowAsset, CustomOutputs)
+		|| ChangedMemberPropertyName == GET_MEMBER_NAME_CHECKED(UFlowAsset, OutputDataPinDeclarations)))
 	{
 		OnSubGraphReconstructionRequested.ExecuteIfBound();
+	}
+
+	if (PropertyChangedEvent.Property && ChangedMemberPropertyName == GET_MEMBER_NAME_CHECKED(UFlowAsset, OutputDataPinDeclarations))
+	{
+		for (const TPair<FGuid, UFlowNode*>& NodePair : GetNodes())
+		{
+			UFlowNode_SetGraphOutput* SetOutputNode = Cast<UFlowNode_SetGraphOutput>(NodePair.Value);
+			if (IsValid(SetOutputNode) && SetOutputNode->TryUpdateAutoDataPins())
+			{
+				SetOutputNode->OnReconstructionRequested.ExecuteIfBound();
+			}
+		}
 	}
 }
 
@@ -128,6 +146,58 @@ void UFlowAsset::PostLoad()
 void UFlowAsset::PreSaveRoot(FObjectPreSaveRootContext ObjectSaveContext)
 {
 	ReconcileBaseAssetParams(FDateTime::Now());
+
+	RepairDuplicateAddOnGuids();
+}
+
+int32 UFlowAsset::RepairDuplicateAddOnGuids()
+{
+	TSet<FGuid> SeenAddOnGuids;
+	int32 NumRepaired = 0;
+
+	TFunction<void(UFlowNodeAddOn&)> RepairAddOnTree = [this, &SeenAddOnGuids, &NumRepaired, &RepairAddOnTree](UFlowNodeAddOn& AddOn)
+	{
+		bool bAlreadyInSet = false;
+		SeenAddOnGuids.Add(AddOn.GetGuid(), &bAlreadyInSet);
+
+		if (bAlreadyInSet)
+		{
+			const FGuid OldGuid = AddOn.GetGuid();
+			const FGuid NewGuid = FGuid::NewGuid();
+			AddOn.SetGuid(NewGuid);
+			SeenAddOnGuids.Add(NewGuid);
+			++NumRepaired;
+
+			UE_LOG(LogFlow, Log, TEXT("RepairDuplicateAddOnGuids: %s AddOn %s had duplicate Guid %s, re-minted to %s"),
+				*GetPathName(), *AddOn.GetName(), *OldGuid.ToString(), *NewGuid.ToString());
+		}
+
+		for (UFlowNodeAddOn* Child : AddOn.GetFlowNodeAddOnChildren())
+		{
+			if (IsValid(Child))
+			{
+				RepairAddOnTree(*Child);
+			}
+		}
+	};
+
+	for (const TPair<FGuid, UFlowNode*>& Node : ObjectPtrDecay(Nodes))
+	{
+		if (!IsValid(Node.Value))
+		{
+			continue;
+		}
+
+		for (UFlowNodeAddOn* AddOn : Node.Value->GetFlowNodeAddOnChildren())
+		{
+			if (IsValid(AddOn))
+			{
+				RepairAddOnTree(*AddOn);
+			}
+		}
+	}
+
+	return NumRepaired;
 }
 
 EDataValidationResult UFlowAsset::ValidateAsset(FFlowMessageLog& MessageLog)
@@ -152,19 +222,7 @@ EDataValidationResult UFlowAsset::ValidateAsset(FFlowMessageLog& MessageLog)
 			Node.Value->ValidateNode();
 			MessageLog.Messages.Append(Node.Value->ValidationLog.Messages);
 
-			// Validate AddOns
-			for (UFlowNodeAddOn* AddOn : Node.Value->GetFlowNodeAddOnChildren())
-			{
-				if (IsValid(AddOn))
-				{
-					ValidateAddOnTree(*AddOn, MessageLog);
-				}
-				else
-				{
-					const FString ErrorMsg = FString::Format(*ValidationError_NullAddOnNodeInstance, {*Node.Key.ToString()});
-					MessageLog.Error(*ErrorMsg, this);
-				}
-			}
+			ValidateAddOnChildren(*Node.Value, MessageLog);
 		}
 		else
 		{
@@ -355,12 +413,41 @@ void UFlowAsset::ValidateAddOnTree(UFlowNodeAddOn& AddOn, FFlowMessageLog& Messa
 	AddOn.ValidateNode();
 	MessageLog.Messages.Append(AddOn.ValidationLog.Messages);
 
-	// Validate Children
-	for (UFlowNodeAddOn* Child : AddOn.GetFlowNodeAddOnChildren())
+	ValidateAddOnChildren(AddOn, MessageLog);
+}
+
+void UFlowAsset::ValidateAddOnChildren(UFlowNodeBase& OwnerNode, FFlowMessageLog& MessageLog)
+{
+	const TArray<UFlowNodeAddOn*>& Children = OwnerNode.GetFlowNodeAddOnChildren();
+	for (UFlowNodeAddOn* Child : Children)
 	{
 		if (IsValid(Child))
 		{
+			TArray<UFlowNodeAddOn*> OtherChildren;
+			OtherChildren.Reserve(Children.Num() - 1);
+			for (UFlowNodeAddOn* OtherChild : Children)
+			{
+				if (IsValid(OtherChild) && OtherChild != Child)
+				{
+					OtherChildren.Add(OtherChild);
+				}
+			}
+
+			if (OwnerNode.CheckAcceptFlowNodeAddOnChild(Child, OtherChildren) == EFlowAddOnAcceptResult::Reject)
+			{
+				const FString ErrorMsg = FString::Printf(
+					TEXT("AddOn '%s' is not a valid child of '%s' with its current sibling set."),
+					*Child->GetClass()->GetName(),
+					*OwnerNode.GetClass()->GetName());
+				MessageLog.Error(*ErrorMsg, &OwnerNode);
+			}
+
 			ValidateAddOnTree(*Child, MessageLog);
+		}
+		else
+		{
+			const FString ErrorMsg = FString::Format(*ValidationError_NullAddOnNodeInstance, {*OwnerNode.GetGuid().ToString()});
+			MessageLog.Error(*ErrorMsg, this);
 		}
 	}
 }
@@ -379,7 +466,7 @@ void UFlowAsset::RegisterNode(const FGuid& NewGuid, UFlowNode* NewNode)
 	NewNode->SetGuid(NewGuid);
 	Nodes.Emplace(NewGuid, NewNode);
 
-	HarvestNodeConnections();
+	HarvestNodeConnections(NewNode);
 
 	if (NewNode->TryUpdateAutoDataPins())
 	{
@@ -430,7 +517,18 @@ void UFlowAsset::HarvestNodeConnections(UFlowNode* TargetNode)
 		bool bNodeDirty = false;
 
 		TMap<FName, FConnectedPin> FoundConnections;
-		const TArray<UEdGraphPin*>& GraphNodePins = FlowNode->GetGraphNode()->Pins;
+		const UEdGraphNode* EdGraphNode = FlowNode->GetGraphNode();
+
+		if (!IsValid(EdGraphNode))
+		{
+			// A node may exist in Nodes[] without a GraphNode if the importer has populated
+			// the asset before RegraphFlowAsset has finished linking runtime nodes to their
+			// editor counterparts. Such nodes have no pins to harvest yet; skip them.
+
+			continue;
+		}
+
+		const TArray<UEdGraphPin*>& GraphNodePins = EdGraphNode->Pins;
 
 		for (const UEdGraphPin* ThisPin : GraphNodePins)
 		{
@@ -695,6 +793,30 @@ void UFlowAsset::RemoveCustomOutput(const FName& EventName)
 		CustomOutputs.Remove(EventName);
 	}
 }
+
+void UFlowAsset::RebuildCustomInterfaceLists()
+{
+	CustomInputs.Reset();
+	CustomOutputs.Reset();
+
+	for (const TPair<FGuid, UFlowNode*>& Pair : ObjectPtrDecay(Nodes))
+	{
+		if (const UFlowNode_CustomInput* InputNode = Cast<UFlowNode_CustomInput>(Pair.Value))
+		{
+			if (!InputNode->GetEventName().IsNone())
+			{
+				CustomInputs.AddUnique(InputNode->GetEventName());
+			}
+		}
+		else if (const UFlowNode_CustomOutput* OutputNode = Cast<UFlowNode_CustomOutput>(Pair.Value))
+		{
+			if (!OutputNode->GetEventName().IsNone())
+			{
+				CustomOutputs.AddUnique(OutputNode->GetEventName());
+			}
+		}
+	}
+}
 #endif // WITH_EDITOR
 
 #if WITH_EDITOR
@@ -896,7 +1018,7 @@ void UFlowAsset::ClearInstances()
 	{
 		if (ActiveInstances.IsValidIndex(i) && ActiveInstances[i])
 		{
-			ActiveInstances[i]->FinishFlow(EFlowFinishPolicy::Keep);
+			ActiveInstances[i]->FinishFlowAndDeinitializeInstance(EFlowFinishPolicy::Keep);
 		}
 	}
 
@@ -1023,6 +1145,12 @@ AActor* UFlowAsset::TryFindActorOwner() const
 	return nullptr;
 }
 
+void UFlowAsset::FinishFlowAndDeinitializeInstance(const EFlowFinishPolicy InFinishPolicy)
+{
+	FinishFlow(InFinishPolicy);
+	DeinitializeInstance();
+}
+
 void UFlowAsset::PreStartFlow()
 {
 	ResetNodes();
@@ -1043,8 +1171,10 @@ void UFlowAsset::PreStartFlow()
 #endif
 }
 
-void UFlowAsset::StartFlow(IFlowDataPinValueSupplierInterface* DataPinValueSupplier)
+void UFlowAsset::StartFlow(IFlowDataPinValueSupplierInterface* DataPinValueSupplier, IFlowGraphOutputDataReceiverInterface* InOutputDataReceiver)
 {
+	InitializeOutputDataReceiverAndValues(InOutputDataReceiver);
+
 	PreStartFlow();
 
 	if (UFlowNode* ConnectedEntryNode = GetDefaultEntryNode())
@@ -1074,6 +1204,11 @@ void UFlowAsset::FinishNode(UFlowNode* Node)
 		// if graph reached Finish and this asset instance was created by SubGraph node
 		if (Node->CanFinishGraph())
 		{
+			if (IFlowGraphOutputDataReceiverInterface* Receiver = Cast<IFlowGraphOutputDataReceiverInterface>(OutputDataReceiver.Get()))
+			{
+				Receiver->ReceiveOutputDataSnapshot(OutputDataPinValues);
+			}
+
 			if (NodeOwningThisAssetInstance.IsValid())
 			{
 				NodeOwningThisAssetInstance.Get()->TriggerFirstOutput(true);
@@ -1081,13 +1216,14 @@ void UFlowAsset::FinishNode(UFlowNode* Node)
 				return;
 			}
 
-			// if this instance is a Root Flow, we need to deregister it from the subsystem first
+			// if this instance is a Root Flow, we need to deregister it from the subsystem first. This will 
+			// finalize and deinitialize the root flow.
 			if (Owner.IsValid())
 			{
 				const TSet<UFlowAsset*>& RootFlowInstances = GetFlowSubsystem()->GetRootInstancesByOwner(Owner.Get());
 				if (RootFlowInstances.Contains(this))
 				{
-					GetFlowSubsystem()->FinishRootFlow(Owner.Get(), TemplateAsset, EFlowFinishPolicy::Keep);
+					GetFlowSubsystem()->FinishAndDeinitializeRootFlow(Owner.Get(), TemplateAsset, EFlowFinishPolicy::Keep);
 
 					return;
 				}
@@ -1108,7 +1244,7 @@ void UFlowAsset::ResetNodes()
 	RecordedNodes.Empty();
 }
 
-void UFlowAsset::FinishFlow(const EFlowFinishPolicy InFinishPolicy, const bool bRemoveInstance /*= true*/)
+void UFlowAsset::FinishFlow(const EFlowFinishPolicy InFinishPolicy)
 {
 	FinishPolicy = InFinishPolicy;
 
@@ -1119,13 +1255,8 @@ void UFlowAsset::FinishFlow(const EFlowFinishPolicy InFinishPolicy, const bool b
 	{
 		Node->Deactivate();
 	}
-	ActiveNodes.Empty();
 
-	// provides option to finish game-specific logic prior to removing asset instance 
-	if (bRemoveInstance)
-	{
-		DeinitializeInstance();
-	}
+	ActiveNodes.Empty();
 }
 
 UFlowSubsystem* UFlowAsset::GetFlowSubsystem() const
@@ -1146,6 +1277,19 @@ UFlowAsset* UFlowAsset::GetParentInstance() const
 TWeakObjectPtr<UFlowAsset> UFlowAsset::GetFlowInstance(UFlowNode_SubGraph* SubGraphNode) const
 {
 	return ActiveSubGraphs.FindRef(SubGraphNode);
+}
+
+FName UFlowAsset::GetDisplayName() const
+{
+	return GetFName();
+}
+
+void UFlowAsset::EnsurePreloadPolicyInitialized()
+{
+	if (!PreloadPolicy.IsValid())
+	{
+		InitializePreloadPolicy();
+	}
 }
 
 void UFlowAsset::InitializePreloadPolicy()
@@ -1172,6 +1316,50 @@ const FFlowPreloadPolicy& UFlowAsset::GetPreloadPolicy() const
 {
 	checkf(PreloadPolicy.IsValid(), TEXT("PreloadPolicy must be initialized prior to calling GetPreloadPolicy()"));
 	return PreloadPolicy.Get();
+}
+
+void UFlowAsset::InitializeOutputDataReceiverAndValues(IFlowGraphOutputDataReceiverInterface* InOutputDataReceiver)
+{
+	OutputDataReceiver = Cast<UObject>(InOutputDataReceiver);
+
+	// Initialize the live output store from the template asset's declarations
+	OutputDataPinValues.Values.Reset();
+
+	if (const UFlowAsset* Template = TemplateAsset.Get())
+	{
+		for (const FFlowNamedDataPinProperty& Declaration : Template->OutputDataPinDeclarations)
+		{
+			if (Declaration.IsValid())
+			{
+				OutputDataPinValues.Values.Add(Declaration.Name, Declaration.DataPinValue);
+			}
+			else
+			{
+				UE_LOG(LogFlow, Warning, TEXT("Invalid OutputDataPin %s"), *Declaration.Name.ToString());
+			}
+		}
+	}
+}
+
+void UFlowAsset::WriteOutputDataPinValue(const FName& PinName, const TInstancedStruct<FFlowDataPinValue>& Value)
+{
+	if (OutputDataPinValues.Values.Contains(PinName))
+	{
+		OutputDataPinValues.Values[PinName] = Value;
+	}
+	else
+	{
+		UE_LOG(LogFlow, Warning, TEXT("Could not find pin named %s in WriteOutputDataPinValue"), *PinName.ToString());
+	}
+}
+
+void UFlowAsset::FlushOutputDataPinValuesToReceiver()
+{
+	if (IFlowGraphOutputDataReceiverInterface* Receiver = Cast<IFlowGraphOutputDataReceiverInterface>(OutputDataReceiver.Get()))
+	{
+		// Do an immediate push to the receiver
+		Receiver->ReceiveOutputDataSnapshot(OutputDataPinValues);
+	}
 }
 
 void UFlowAsset::TriggerCustomInput(const FName& EventName, IFlowDataPinValueSupplierInterface* DataPinValueSupplier)
@@ -1228,12 +1416,7 @@ void UFlowAsset::TriggerCustomOutput(const FName& EventName)
 
 void UFlowAsset::TriggerInput(const FGuid& NodeGuid, const FName& PinName, const FConnectedPin& FromPin)
 {
-	if (FFlowExecutionGate::IsHalted())
-	{
-		// Halt always takes precedence for debugger correctness
-		EnqueueDeferredTrigger(NodeGuid, PinName, FromPin);
-	}
-	else if (ShouldDeferTriggers())
+	if (ShouldDeferTriggers())
 	{
 		// Defer only if we have an open the top scope
 		if (!DeferredTransitionScopes.IsEmpty() && DeferredTransitionScopes.Top()->IsOpen())
@@ -1274,12 +1457,8 @@ bool UFlowAsset::ShouldDeferTriggers() const
 
 void UFlowAsset::EnqueueDeferredTrigger(const FGuid& NodeGuid, const FName& PinName, const FConnectedPin& FromPin)
 {
-	if (DeferredTransitionScopes.IsEmpty() || !DeferredTransitionScopes.Top()->IsOpen())
-	{
-		// This should only occur when halted at an execution gate
-		check(FFlowExecutionGate::IsHalted());
-		PushDeferredTransitionScope();
-	}
+	// TriggerInput() is the only caller, and only enqueues while it holds an open top scope
+	check(!DeferredTransitionScopes.IsEmpty() && DeferredTransitionScopes.Top()->IsOpen());
 
 	// Always enqueue to the current innermost (top) scope
 	DeferredTransitionScopes.Top()->EnqueueDeferredTrigger(FFlowDeferredTriggerInput{NodeGuid, PinName, FromPin});
@@ -1305,18 +1484,14 @@ void UFlowAsset::PopDeferredTransitionScope(const TSharedPtr<FFlowDeferredTransi
 
 bool UFlowAsset::TryFlushAndRemoveDeferredTransitionScope(const TSharedPtr<FFlowDeferredTransitionScope>& ScopeToFlush)
 {
-	if (ScopeToFlush->TryFlushDeferredTriggers(*this))
+	if (!ScopeToFlush->TryFlushDeferredTriggers(*this))
 	{
-		// Remove the exact instance we were holding (handles nested push/pop cases)
-		DeferredTransitionScopes.RemoveSingle(ScopeToFlush);
-		return true;
-	}
-	else
-	{
-		// Flush was interrupted — should only happen due to execution gate halt
-		check(FFlowExecutionGate::IsHalted());
 		return false;
 	}
+
+	// Remove the exact instance we were holding (handles nested push/pop cases)
+	DeferredTransitionScopes.RemoveSingle(ScopeToFlush);
+	return true;
 }
 
 bool UFlowAsset::TryFlushAllDeferredTriggerScopes()
@@ -1328,10 +1503,10 @@ bool UFlowAsset::TryFlushAllDeferredTriggerScopes()
 			break;
 		}
 
-		// Keep flushing until stack is empty, or we hit an ExecutionGate halt
+		// Keep flushing until the stack is empty
 	}
 
-	check(DeferredTransitionScopes.IsEmpty() || FFlowExecutionGate::IsHalted());
+	check(DeferredTransitionScopes.IsEmpty());
 
 	return DeferredTransitionScopes.IsEmpty();
 }
@@ -1345,7 +1520,6 @@ void UFlowAsset::CancelAndWarnForUnflushedDeferredTriggers()
 {
 	// Aggressively drop any pending deferred triggers — graph is done
 	// In normal execution these should have been flushed via PopDeferredTransitionScope() in TriggerInputDirect
-	// In the debugger they should have been flushed by ResumePIE
 	// Remaining scopes here usually mean:
 	//   - early/abnormal termination (e.g. FinishFlow called from unexpected place)
 	//   - exception/early return before Pop

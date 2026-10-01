@@ -4,6 +4,7 @@
 #include "AddOns/FlowNodeAddOn.h"
 #include "FlowAsset.h"
 #include "FlowSettings.h"
+#include "Interfaces/FlowExecutionGate.h"
 #include "Interfaces/FlowPreloadableInterface.h"
 #include "Interfaces/FlowNodeWithExternalDataPinSupplierInterface.h"
 #include "Policies/FlowPreloadHelper.h"
@@ -22,6 +23,7 @@
 
 #if WITH_EDITOR
 #include "Editor.h"
+#include "Misc/DataValidation.h"
 #endif
 
 FFlowPin UFlowNode::DefaultInputPin(TEXT("In"));
@@ -61,6 +63,34 @@ void UFlowNode::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEve
 		// Potentially need to rebuild the pins from this node
 		OnReconstructionRequested.ExecuteIfBound();
 	}
+}
+
+EDataValidationResult UFlowNode::IsDataValid(FDataValidationContext& Context) const
+{
+	EDataValidationResult Result = Super::IsDataValid(Context);
+
+	if (const UFlowAsset* OwningFlowAsset = GetFlowAsset())
+	{
+		const TMap<FGuid, UFlowNode*>& OwningFlowAssetNodes = OwningFlowAsset->GetNodes();
+
+		for (const TPair<FName, FConnectedPin>& Connection : Connections)
+		{
+			if (!OwningFlowAssetNodes.Contains(Connection.Value.NodeGuid))
+			{
+				Context.AddError(FText::FromString(FString::Printf(
+					TEXT("Pin '%s' on Node '%s' is connected to node Guid %s, which does not exist in the owning Flow Asset '%s'. ")
+					TEXT("This connection is stale and will silently fail to trigger at runtime. Open the flow asset in editor and resave."),
+					*Connection.Key.ToString(),
+					*GetName(),
+					*Connection.Value.NodeGuid.ToString(),
+					*OwningFlowAsset->GetPathName())));
+
+				Result = CombineDataValidationResults(Result, EDataValidationResult::Invalid);
+			}
+		}
+	}
+
+	return Result;
 }
 
 EDataValidationResult UFlowNode::ValidateNode()
@@ -369,6 +399,12 @@ TArray<FFlowPin> UFlowNode::GetContextOutputs() const
 	return ContextOutputs;
 }
 
+void UFlowNode::GetCatalogPins(TArray<FFlowPin>& OutInputPins, TArray<FFlowPin>& OutOutputPins) const
+{
+	OutInputPins = InputPins;
+	OutOutputPins = OutputPins;
+}
+
 bool UFlowNode::CanUserAddInput() const
 {
 	return K2_CanUserAddInput();
@@ -590,7 +626,7 @@ bool UFlowNode::TryGatherPropertyOwnersAndPopulateResult(
 		return false;
 	}
 
-	const FFlowDataPinValueOwner* ValueOwner;
+	const FFlowDataPinValueOwner* ValueOwner = nullptr;
 	FName PropertyNameToLookup;
 	const TArray<FFlowDataPinValueOwner>& ValueOwners = ValueOwnerCollection.GetValueOwners();
 
@@ -1312,12 +1348,17 @@ bool UFlowNode::TryInitializePreloadHelper()
 		return false;
 	}
 
-	const UFlowAsset* FlowAsset = GetFlowAsset();
+	UFlowAsset* FlowAsset = GetFlowAsset();
 	if (!IsValid(FlowAsset))
 	{
 		LogError(TEXT("IFlowPreloadableInterface node has no valid FlowAsset during InitializeInstance — PreloadHelper will not be created."));
 		return false;
 	}
+
+	// Preload helper can be initialized prior to the preload policy being initialized, in cases like 
+	// (for instance) the flow asset version being updated when loading an asset.  
+	// So we need to be sure the Preload policy is initialize prior to accessing it here.
+	FlowAsset->EnsurePreloadPolicyInitialized();
 
 	const FFlowPreloadPolicy& PreloadPolicy = FlowAsset->GetPreloadPolicy();
 
@@ -1374,9 +1415,12 @@ void UFlowNode::TriggerInput(const FName& PinName, const EFlowPinActivationType 
 		TArray<FPinRecord>& Records = InputRecords.FindOrAdd(PinName);
 		Records.Add(FPinRecord(FApp::GetCurrentTime(), ActivationType));
 
-		if (const UFlowAsset* FlowAssetTemplate = GetFlowAsset()->GetTemplateAsset())
+		// Halt here if a breakpoint covers this pin.
+		// In the case of an Abort while breaking we'll early-out of this function.
+		// We may eventually want to surface an Abort out of this function and early-out of callers as well.
+		if (FFlowExecutionGate::BreakIfRequested({this, PinName, EFlowBreakSite::InputTriggered}) == EFlowBreakAction::Abort)
 		{
-			(void)FlowAssetTemplate->OnPinTriggered.ExecuteIfBound(this, PinName);
+			return;
 		}
 #endif
 	}
@@ -1440,9 +1484,13 @@ void UFlowNode::TriggerOutput(const FName PinName, const bool bFinish /*= false*
 		TArray<FPinRecord>& Records = OutputRecords.FindOrAdd(PinName);
 		Records.Add(FPinRecord(FApp::GetCurrentTime(), ActivationType));
 
-		if (const UFlowAsset* FlowAssetTemplate = GetFlowAsset()->GetTemplateAsset())
+		// Halt here if a breakpoint covers this pin.
+		// In the case of an Abort while breaking we'll early-out of this function.
+		// We may eventually want to surface an Abort out of this function and early-out of callers as well.
+		// Note that Finish() has already run for a bFinish trigger, so the node is no longer active.
+		if (FFlowExecutionGate::BreakIfRequested({this, PinName, EFlowBreakSite::OutputTriggered}) == EFlowBreakAction::Abort)
 		{
-			FlowAssetTemplate->OnPinTriggered.ExecuteIfBound(this, PinName);
+			return;
 		}
 	}
 	else
@@ -1472,8 +1520,11 @@ void UFlowNode::Deactivate()
 		// there is nothing to deactivate, node was never active
 		return;
 	}
+	
+	const UFlowAsset* FlowAsset = GetFlowAsset();
+	ensureMsgf(FlowAsset, TEXT("Flow Node is orphaned and could not retrieve its Flow Asset"));
 
-	if (GetFlowAsset()->FinishPolicy == EFlowFinishPolicy::Abort)
+	if (IsValid(FlowAsset) && FlowAsset->FinishPolicy == EFlowFinishPolicy::Abort)
 	{
 		ActivationState = EFlowNodeState::Aborted;
 	}

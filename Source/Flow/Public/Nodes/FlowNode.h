@@ -81,17 +81,6 @@ public:
 	// --
 #endif
 
-	/* Inherits Guid after graph node. */
-	UPROPERTY()
-	FGuid NodeGuid;
-
-public:
-	UFUNCTION(BlueprintCallable, Category = "FlowNode")
-	void SetGuid(const FGuid& NewGuid) { NodeGuid = NewGuid; }
-
-	UFUNCTION(BlueprintPure, Category = "FlowNode")
-	const FGuid& GetGuid() const { return NodeGuid; }
-
 	/* Returns a random seed suitable for this flow node,
 	 * by default based on the node Guid,
 	 * but may be overridden in subclasses to supply some other value. */
@@ -163,6 +152,10 @@ public:
 	virtual TArray<FFlowPin> GetContextInputs() const override;
 	virtual TArray<FFlowPin> GetContextOutputs() const override;
 	// --
+
+	//~Begin UFlowNodeBase Interface
+	virtual void GetCatalogPins(TArray<FFlowPin>& OutInputPins, TArray<FFlowPin>& OutOutputPins) const override;
+	//~End UFlowNodeBase Interface
 
 	virtual bool CanUserAddInput() const;
 	virtual bool CanUserAddOutput() const;
@@ -329,6 +322,10 @@ protected:
 	static FString NoActorsFound;
 
 #if WITH_EDITOR
+public:
+	// UObject
+	virtual EDataValidationResult IsDataValid(FDataValidationContext& Context) const override;
+	// --
 
 protected:
 	virtual EDataValidationResult ValidateNode() override;

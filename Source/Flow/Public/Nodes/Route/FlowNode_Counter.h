@@ -32,5 +32,6 @@ public:
 #if WITH_EDITOR
 	virtual FString GetNodeDescription() const override;
 	virtual FString GetStatusString() const override;
+	virtual const FFlowAgentDoc& GetAgentDoc() const override;
 #endif
 };

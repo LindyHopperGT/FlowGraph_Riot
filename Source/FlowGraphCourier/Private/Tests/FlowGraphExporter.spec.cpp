@@ -5,6 +5,7 @@
 #include "Nodes/FlowNode.h"
 #include "Nodes/Route/FlowNode_Reroute.h"
 #include "Graph/FlowGraph.h"
+#include "Graph/FlowGraphSchema.h"
 #include "Graph/Nodes/FlowGraphNode.h"
 #include "Misc/AutomationTest.h"
 #include "EdGraph/EdGraphPin.h"
@@ -22,7 +23,10 @@ void FFlowGraphExporterSpec::Define()
 		BeforeEach([this]()
 		{
 			TestFlowAsset = NewObject<UFlowAsset>(GetTransientPackage(), UFlowAsset::StaticClass());
-			UFlowGraph::CreateGraph(TestFlowAsset);
+			// bCreateDefaultNodes=false: the 1-arg overload seeds a default Start node, which makes
+			// every test's baseline graph non-empty and defeats "should handle empty flow asset"
+			// below. Every other test here builds its own nodes explicitly, so nothing relies on it.
+			UFlowGraph::CreateGraph(TestFlowAsset, UFlowGraphSchema::StaticClass(), /*bCreateDefaultNodes=*/ false);
 		});
 
 		AfterEach([this]()
@@ -67,10 +71,9 @@ void FFlowGraphExporterSpec::Define()
 			FString ExportedText = UFlowGraphExporter::ExportFlowGraphToString(TestFlowAsset);
 			
 			TestTrue("Export should not be empty", !ExportedText.IsEmpty());
-			TestTrue("Export should contain header", ExportedText.Contains(TEXT("FlowGraphExport v1.0")));
-			TestTrue("Export should contain NODES section", ExportedText.Contains(TEXT("[NODES]")));
-			TestTrue("Export should contain CONNECTIONS section", ExportedText.Contains(TEXT("[CONNECTIONS]")));
-			TestTrue("Export should contain connection arrow", ExportedText.Contains(TEXT("->")));
+			TestTrue("Export should declare Courier v2's formatVersion", ExportedText.Contains(TEXT("\"formatVersion\": 2")));
+			TestTrue("Export should contain UpsertNode ops", ExportedText.Contains(TEXT("\"kind\": \"UpsertNode\"")));
+			TestTrue("Export should contain an AddConnection op", ExportedText.Contains(TEXT("\"kind\": \"AddConnection\"")));
 		});
 
 		It("should export asset metadata correctly", [this]()
@@ -80,8 +83,8 @@ void FFlowGraphExporterSpec::Define()
 			
 			FString ExportedText = UFlowGraphExporter::ExportFlowGraphToString(TestFlowAsset);
 			
-			TestTrue("Export should contain WorldBound", ExportedText.Contains(TEXT("WorldBound: true")));
-			TestTrue("Export should contain ExpectedOwnerClass", ExportedText.Contains(TEXT("ExpectedOwnerClass:")));
+			TestTrue("Export should contain bWorldBound", ExportedText.Contains(TEXT("\"bWorldBound\": true")));
+			TestTrue("Export should contain expectedOwnerClass", ExportedText.Contains(TEXT("\"expectedOwnerClass\"")));
 		});
 
 		It("should export node properties", [this]()
@@ -99,11 +102,11 @@ void FFlowGraphExporterSpec::Define()
 			
 			FString ExportedText = UFlowGraphExporter::ExportFlowGraphToString(TestFlowAsset);
 			
-			TestTrue("Export should contain Node section", ExportedText.Contains(TEXT("Node: ")));
-			TestTrue("Export should contain Type field", ExportedText.Contains(TEXT("Type:")));
-			TestTrue("Export should contain Properties section", ExportedText.Contains(TEXT("Properties:")));
-			TestTrue("Export should contain InputPins section", ExportedText.Contains(TEXT("InputPins:")));
-			TestTrue("Export should contain OutputPins section", ExportedText.Contains(TEXT("OutputPins:")));
+			TestTrue("Export should contain an UpsertNode op", ExportedText.Contains(TEXT("\"kind\": \"UpsertNode\"")));
+			TestTrue("Export should contain a type field", ExportedText.Contains(TEXT("\"type\":")));
+			TestTrue("Export should contain a properties field", ExportedText.Contains(TEXT("\"properties\":")));
+			TestTrue("Export should contain an inputPins field", ExportedText.Contains(TEXT("\"inputPins\":")));
+			TestTrue("Export should contain an outputPins field", ExportedText.Contains(TEXT("\"outputPins\":")));
 		});
 
 		It("should handle empty flow asset", [this]()
@@ -111,9 +114,8 @@ void FFlowGraphExporterSpec::Define()
 			FString ExportedText = UFlowGraphExporter::ExportFlowGraphToString(TestFlowAsset);
 			
 			TestTrue("Export should not be empty", !ExportedText.IsEmpty());
-			TestTrue("Export should contain header", ExportedText.Contains(TEXT("FlowGraphExport v1.0")));
-			TestTrue("Export should contain NODES section", ExportedText.Contains(TEXT("[NODES]")));
-			TestTrue("Export should contain CONNECTIONS section", ExportedText.Contains(TEXT("[CONNECTIONS]")));
+			TestTrue("Export should declare Courier v2's formatVersion", ExportedText.Contains(TEXT("\"formatVersion\": 2")));
+			TestTrue("Export should contain an empty ops array", ExportedText.Contains(TEXT("\"ops\": []")));
 		});
 
 		It("should handle null flow asset gracefully", [this]()
@@ -166,10 +168,11 @@ void FFlowGraphExporterSpec::Define()
 			
 			int32 ConnectionCount = 0;
 			int32 SearchPos = 0;
-			while ((SearchPos = ExportedText.Find(TEXT("->"), ESearchCase::CaseSensitive, ESearchDir::FromStart, SearchPos)) != INDEX_NONE)
+			const FString AddConnectionMarker = TEXT("\"kind\": \"AddConnection\"");
+			while ((SearchPos = ExportedText.Find(AddConnectionMarker, ESearchCase::CaseSensitive, ESearchDir::FromStart, SearchPos)) != INDEX_NONE)
 			{
 				ConnectionCount++;
-				SearchPos++;
+				SearchPos += AddConnectionMarker.Len();
 			}
 			
 			TestEqual("Export should contain two connections", ConnectionCount, 2);

@@ -6,6 +6,9 @@
 #include "Nodes/FlowNode.h"
 #include "AddOns/FlowNodeAddOn.h"
 #include "Nodes/FlowNodeBase.h"
+#include "Nodes/FlowNodeBlueprint.h"
+#include "Nodes/FlowNodeAddOnBlueprint.h"
+#include "Engine/Blueprint.h"
 #include "Types/FlowNamedDataPinProperty.h"
 #include "Types/FlowDataPinValue.h"
 #include "UObject/Package.h"
@@ -16,46 +19,21 @@
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Graph/FlowGraph.h"
 
-UFlowAsset* UFlowGraphImporter::ImportFlowGraphFromText(const FString& TargetAssetPath, const FString& ImportText, FString& OutErrorMessage)
+UFlowAsset* UFlowGraphImporter::ImportFlowGraphFromDocument(
+	const FString& TargetAssetPath,
+	const FString& AssetClassPath,
+	bool bWorldBound,
+	const TArray<FFlowGraphParsedNode>& ParsedNodes,
+	const TArray<FFlowGraphParsedConnection>& ParsedConnections,
+	FString& OutErrorMessage)
 {
-	// TODO (gtaylor) Downgrade these logs to Verbose after the import/export mechanism has stabilized.
-	UE_LOG(LogFlow, Log, TEXT("ImportFlowGraphFromText:\n%s"), *ImportText);
-
 	OutErrorMessage.Empty();
 
-	if (ImportText.IsEmpty())
-	{
-		OutErrorMessage = TEXT("Import text is empty");
-		return nullptr;
-	}
-
-	// Parse header
-	bool bWorldBound = true;
-	FString ExpectedOwnerClass;
-	FString UnusedAssetPath;
-	FGuid UnusedAssetGuid;
-	if (!ParseHeader(ImportText, UnusedAssetPath, UnusedAssetGuid, bWorldBound, ExpectedOwnerClass, OutErrorMessage))
-	{
-		return nullptr;
-	}
-
-	// Parse nodes
-	TArray<FFlowGraphParsedNode> ParsedNodes;
-	if (!ParseNodes(ImportText, ParsedNodes, OutErrorMessage))
-	{
-		return nullptr;
-	}
-
-	// Parse connections
-	TArray<FFlowGraphParsedConnection> ParsedConnections;
-	if (!ParseConnections(ImportText, ParsedConnections, OutErrorMessage))
-	{
-		return nullptr;
-	}
-
-	// Create the package and asset
 	FString PackageName = FPackageName::ObjectPathToPackageName(TargetAssetPath);
-	FString AssetName = FPackageName::ObjectPathToObjectName(TargetAssetPath);
+	// GetShortName only splits on '/', so it must run on the already-dot-stripped PackageName -
+	// running it directly on TargetAssetPath leaves a literal ".ObjectName" suffix on the FName
+	// when a caller passes a fully-qualified dotted object path (e.g. FTopLevelAssetPath::ToString()).
+	FString AssetName = FPackageName::GetShortName(PackageName);
 
 	UPackage* Package = CreatePackage(*PackageName);
 	if (!Package)
@@ -64,47 +42,80 @@ UFlowAsset* UFlowGraphImporter::ImportFlowGraphFromText(const FString& TargetAss
 		return nullptr;
 	}
 
-	// Create the FlowAsset
-	UFlowAsset* FlowAsset = NewObject<UFlowAsset>(Package, *AssetName, RF_Public | RF_Standalone | RF_Transactional);
+	// Prefer the concrete class recorded in the document's AssetClass so creating e.g. a
+	// project-specific FlowAsset subclass does not silently downgrade it to a plain UFlowAsset.
+	// Falls back to UFlowAsset when AssetClass is absent or unresolved.
+	UClass* ResolvedAssetClass = UFlowAsset::StaticClass();
+	if (!AssetClassPath.IsEmpty() && !AssetClassPath.Equals(TEXT("None"), ESearchCase::IgnoreCase))
+	{
+		UClass* LoadedAssetClass = LoadObject<UClass>(nullptr, *AssetClassPath);
+		if (LoadedAssetClass && LoadedAssetClass->IsChildOf(UFlowAsset::StaticClass()))
+		{
+			ResolvedAssetClass = LoadedAssetClass;
+		}
+		else
+		{
+			UE_LOG(LogFlow, Warning, TEXT("ImportFlowGraphFromDocument: Could not resolve AssetClass '%s', falling back to UFlowAsset"), *AssetClassPath);
+		}
+	}
+
+	UFlowAsset* FlowAsset = NewObject<UFlowAsset>(Package, ResolvedAssetClass, *AssetName, RF_Public | RF_Standalone | RF_Transactional);
 	if (!FlowAsset)
 	{
 		OutErrorMessage = FString::Printf(TEXT("Failed to create FlowAsset: %s"), *AssetName);
 		return nullptr;
 	}
 
-	// Set basic properties
 	FlowAsset->AssetGuid = FGuid::NewGuid();
 	FlowAsset->bWorldBound = bWorldBound;
 
-	// Create nodes
+	FAssetRegistryModule::AssetCreated(FlowAsset);
+
 	TMap<FGuid, UFlowNode*> NodeMap;
 	if (!CreateFlowNodes(FlowAsset, ParsedNodes, NodeMap, OutErrorMessage))
 	{
 		return nullptr;
 	}
 
-	// Setup connections
-	if (!SetupConnections(FlowAsset, NodeMap, ParsedConnections, ParsedNodes, OutErrorMessage))
-	{
-		return nullptr;
-	}
-
-	// Create and attach AddOns
 	if (!CreateNodeAddOns(NodeMap, ParsedNodes, OutErrorMessage))
 	{
 		return nullptr;
 	}
 
-	// Mark package dirty
+#if WITH_EDITOR
+	// Auto data pins depend on a node's addons, so CreateFlowNodes' set above is stale for a node
+	// that just got one. Regenerate before SetupConnections wires against them below.
+	for (const TPair<FGuid, UFlowNode*>& NodeEntry : NodeMap)
+	{
+		if (UFlowNode* Node = NodeEntry.Value)
+		{
+			Node->TryUpdateAutoDataPins();
+		}
+	}
+#endif
+
+	if (!SetupConnections(FlowAsset, NodeMap, ParsedConnections, ParsedNodes, OutErrorMessage))
+	{
+		return nullptr;
+	}
+
+#if WITH_EDITOR
+	// Rebuild CustomInputs/CustomOutputs editor arrays so FlowNode_SubGraph context pins regenerate.
+	FlowAsset->RebuildCustomInterfaceLists();
+#endif
+
 	Package->MarkPackageDirty();
 
 	return FlowAsset;
 }
 
-bool UFlowGraphImporter::PopulateFlowAssetFromText(UFlowAsset* TargetAsset, const FString& ImportText, FString& OutErrorMessage)
+bool UFlowGraphImporter::PopulateFlowAssetFromDocument(
+	UFlowAsset* TargetAsset,
+	bool bWorldBound,
+	const TArray<FFlowGraphParsedNode>& ParsedNodes,
+	const TArray<FFlowGraphParsedConnection>& ParsedConnections,
+	FString& OutErrorMessage)
 {
-	UE_LOG(LogFlow, Log, TEXT("PopulateFlowAssetFromText: populating existing %s"), *TargetAsset->GetClass()->GetName());
-
 	OutErrorMessage.Empty();
 
 	if (!TargetAsset)
@@ -113,44 +124,11 @@ bool UFlowGraphImporter::PopulateFlowAssetFromText(UFlowAsset* TargetAsset, cons
 		return false;
 	}
 
-	if (ImportText.IsEmpty())
-	{
-		OutErrorMessage = TEXT("Import text is empty");
-		return false;
-	}
-
-	// Parse header
-	bool bWorldBound = true;
-	FString ExpectedOwnerClass;
-	FString UnusedAssetPath;
-	FGuid UnusedAssetGuid;
-	if (!ParseHeader(ImportText, UnusedAssetPath, UnusedAssetGuid, bWorldBound, ExpectedOwnerClass, OutErrorMessage))
-	{
-		return false;
-	}
-
-	// Parse nodes
-	TArray<FFlowGraphParsedNode> ParsedNodes;
-	if (!ParseNodes(ImportText, ParsedNodes, OutErrorMessage))
-	{
-		return false;
-	}
-
-	// Parse connections
-	TArray<FFlowGraphParsedConnection> ParsedConnections;
-	if (!ParseConnections(ImportText, ParsedConnections, OutErrorMessage))
-	{
-		return false;
-	}
-
-	// Clear existing editor graph nodes before rebuilding runtime nodes - this must happen first
-	// so the graph does not hold stale references to the runtime nodes we are about to release.
 	if (UFlowGraph* FlowGraph = Cast<UFlowGraph>(TargetAsset->GetGraph()))
 	{
 		FlowGraph->Nodes.Empty();
 	}
 
-	// Clear existing runtime nodes from the Nodes TMap via reflection (same approach used in CreateFlowNodes)
 	FMapProperty* NodesProperty = FindFProperty<FMapProperty>(UFlowAsset::StaticClass(), TEXT("Nodes"));
 	if (!NodesProperty)
 	{
@@ -162,205 +140,40 @@ bool UFlowGraphImporter::PopulateFlowAssetFromText(UFlowAsset* TargetAsset, cons
 	FScriptMapHelper NodesMapHelper(NodesProperty, NodesPtr);
 	NodesMapHelper.EmptyValues();
 
-	// Apply header properties
 	TargetAsset->bWorldBound = bWorldBound;
 
-	// Create new runtime nodes
 	TMap<FGuid, UFlowNode*> NodeMap;
 	if (!CreateFlowNodes(TargetAsset, ParsedNodes, NodeMap, OutErrorMessage))
 	{
 		return false;
 	}
 
-	// Setup connections
-	if (!SetupConnections(TargetAsset, NodeMap, ParsedConnections, ParsedNodes, OutErrorMessage))
-	{
-		return false;
-	}
-
-	// Create add-ons
 	if (!CreateNodeAddOns(NodeMap, ParsedNodes, OutErrorMessage))
 	{
 		return false;
 	}
 
-	// Mark package dirty
-	TargetAsset->GetPackage()->MarkPackageDirty();
-
-	return true;
-}
-
-bool UFlowGraphImporter::ParseHeader(const FString& ImportText, FString& OutAssetPath, FGuid& OutAssetGuid, bool& OutWorldBound, FString& OutExpectedOwnerClass, FString& OutErrorMessage)
-{
-	TArray<FString> Lines;
-	ImportText.ParseIntoArrayLines(Lines);
-
-	for (int32 i = 0; i < Lines.Num(); ++i)
+#if WITH_EDITOR
+	// See the matching comment in ImportFlowGraphFromDocument.
+	for (const TPair<FGuid, UFlowNode*>& NodeEntry : NodeMap)
 	{
-		const FString& Line = Lines[i].TrimStartAndEnd();
-		
-		if (Line == TEXT("---"))
+		if (UFlowNode* Node = NodeEntry.Value)
 		{
-			break;
-		}
-
-		if (Line.StartsWith(TEXT("WorldBound:")))
-		{
-			FString Value = Line.Mid(11).TrimStartAndEnd();
-			OutWorldBound = Value.Equals(TEXT("true"), ESearchCase::IgnoreCase);
-		}
-		else if (Line.StartsWith(TEXT("ExpectedOwnerClass:")))
-		{
-			OutExpectedOwnerClass = Line.Mid(19).TrimStartAndEnd();
+			Node->TryUpdateAutoDataPins();
 		}
 	}
+#endif
 
-	return true;
-}
-
-bool UFlowGraphImporter::ParseNodes(const FString& ImportText, TArray<FFlowGraphParsedNode>& OutNodes, FString& OutErrorMessage)
-{
-	FString NodesSection = ExtractSection(ImportText, TEXT("[NODES]"));
-	if (NodesSection.IsEmpty())
+	if (!SetupConnections(TargetAsset, NodeMap, ParsedConnections, ParsedNodes, OutErrorMessage))
 	{
-		OutErrorMessage = TEXT("Could not find [NODES] section");
 		return false;
 	}
 
-	TArray<FString> Lines;
-	NodesSection.ParseIntoArrayLines(Lines);
+#if WITH_EDITOR
+	TargetAsset->RebuildCustomInterfaceLists();
+#endif
 
-	FFlowGraphParsedNode* CurrentNode = nullptr;
-	FString CurrentSection;
-
-	for (const FString& Line : Lines)
-	{
-		FString TrimmedLine = Line.TrimStartAndEnd();
-		
-		if (TrimmedLine.IsEmpty() || TrimmedLine.StartsWith(TEXT(";")))
-		{
-			continue;
-		}
-
-		if (TrimmedLine.StartsWith(TEXT("Node:")))
-		{
-			// Start a new node
-			CurrentNode = &OutNodes.AddDefaulted_GetRef();
-			FString GuidString = TrimmedLine.Mid(5).TrimStartAndEnd();
-			if (!ParseGuid(GuidString, CurrentNode->NodeGuid))
-			{
-				OutErrorMessage = FString::Printf(TEXT("Failed to parse node GUID: %s"), *GuidString);
-				return false;
-			}
-			CurrentSection.Empty();
-		}
-		else if (TrimmedLine.StartsWith(TEXT("Type:")))
-		{
-			if (CurrentNode)
-			{
-				CurrentNode->NodeType = TrimmedLine.Mid(5).TrimStartAndEnd();
-			}
-		}
-		else if (TrimmedLine == TEXT("Properties:"))
-		{
-			CurrentSection = TEXT("Properties");
-		}
-		else if (TrimmedLine == TEXT("InputPins:"))
-		{
-			CurrentSection = TEXT("InputPins");
-		}
-		else if (TrimmedLine == TEXT("OutputPins:"))
-		{
-			CurrentSection = TEXT("OutputPins");
-		}
-		else if (TrimmedLine == TEXT("AddOns:"))
-		{
-			CurrentSection = TEXT("AddOns");
-		}
-		else if (TrimmedLine.StartsWith(TEXT("AddOn:")) && CurrentNode)
-		{
-			// Start a new inline addon block: "AddOn: /Game/Path/To/FNA_Foo.FNA_Foo_C"
-			FFlowGraphParsedNodeAddOn& NewAddOn = CurrentNode->AddOns.AddDefaulted_GetRef();
-			NewAddOn.AddOnType = TrimmedLine.Mid(6).TrimStartAndEnd();
-			CurrentSection = TEXT("AddOnProperties");
-		}
-		else if (CurrentNode && !CurrentSection.IsEmpty())
-		{
-			if (CurrentSection == TEXT("Properties"))
-			{
-				// Parse property line: "PropertyName: PropertyValue"
-				int32 ColonIndex;
-				if (TrimmedLine.FindChar(':', ColonIndex))
-				{
-					FString PropertyName = TrimmedLine.Left(ColonIndex).TrimStartAndEnd();
-					FString PropertyValue = TrimmedLine.Mid(ColonIndex + 1).TrimStartAndEnd();
-					CurrentNode->Properties.Add(PropertyName, PropertyValue);
-				}
-			}
-			else if (CurrentSection == TEXT("InputPins") || CurrentSection == TEXT("OutputPins"))
-			{
-				// Parse pin line: "- PinName [PinType]"
-				if (TrimmedLine.StartsWith(TEXT("-")))
-				{
-					FString PinInfo = TrimmedLine.Mid(1).TrimStartAndEnd();
-					if (CurrentSection == TEXT("InputPins"))
-					{
-						CurrentNode->InputPins.Add(PinInfo);
-					}
-					else
-					{
-						CurrentNode->OutputPins.Add(PinInfo);
-					}
-				}
-			}
-			else if (CurrentSection == TEXT("AddOnProperties"))
-			{
-				// Parse addon property: "  Key: Value"
-				// A new "AddOn:" or "Node:" line ends this section (handled above)
-				int32 ColonIndex;
-				if (CurrentNode->AddOns.Num() > 0 && TrimmedLine.FindChar(':', ColonIndex))
-				{
-					FString PropName = TrimmedLine.Left(ColonIndex).TrimStartAndEnd();
-					FString PropValue = TrimmedLine.Mid(ColonIndex + 1).TrimStartAndEnd();
-					CurrentNode->AddOns.Last().Properties.Add(PropName, PropValue);
-				}
-			}
-		}
-	}
-
-	return true;
-}
-
-bool UFlowGraphImporter::ParseConnections(const FString& ImportText, TArray<FFlowGraphParsedConnection>& OutConnections, FString& OutErrorMessage)
-{
-	FString ConnectionsSection = ExtractSection(ImportText, TEXT("[CONNECTIONS]"));
-	if (ConnectionsSection.IsEmpty())
-	{
-		return true;
-	}
-
-	TArray<FString> Lines;
-	ConnectionsSection.ParseIntoArrayLines(Lines);
-
-	for (const FString& Line : Lines)
-	{
-		FString TrimmedLine = Line.TrimStartAndEnd();
-		
-		if (TrimmedLine.IsEmpty() || TrimmedLine.StartsWith(TEXT(";")))
-		{
-			continue;
-		}
-
-		FFlowGraphParsedConnection Connection;
-		if (ParseConnectionLine(TrimmedLine, Connection, OutErrorMessage))
-		{
-			OutConnections.Add(Connection);
-		}
-		else if (!OutErrorMessage.IsEmpty())
-		{
-			return false;
-		}
-	}
+	TargetAsset->GetPackage()->MarkPackageDirty();
 
 	return true;
 }
@@ -387,7 +200,6 @@ bool UFlowGraphImporter::CreateFlowNodes(UFlowAsset* FlowAsset, const TArray<FFl
 			return false;
 		}
 
-		// Create the node
 		UFlowNode* NewNode = NewObject<UFlowNode>(FlowAsset, NodeClass, NAME_None, RF_Transactional);
 		if (!NewNode)
 		{
@@ -395,28 +207,22 @@ bool UFlowGraphImporter::CreateFlowNodes(UFlowAsset* FlowAsset, const TArray<FFl
 			return false;
 		}
 
-		// Set the GUID
 		NewNode->SetGuid(ParsedNode.NodeGuid);
 
-		// Add to the FlowAsset's node map using reflection
-		int32 Index = NodesMapHelper.AddDefaultValue_Invalid_NeedsRehash();
-		uint8* PairPtr = NodesMapHelper.GetPairPtr(Index);
-		
-		// Set the key (GUID)
-		FStructProperty* KeyProperty = CastField<FStructProperty>(NodesProperty->KeyProp);
-		if (KeyProperty)
+		const int32 NewIndex = NodesMapHelper.AddDefaultValue_Invalid_NeedsRehash();
+		uint8* PairPtr = NodesMapHelper.GetPairPtr(NewIndex);
+
+		if (FStructProperty* KeyProperty = CastField<FStructProperty>(NodesProperty->KeyProp))
 		{
 			void* KeyPtr = KeyProperty->ContainerPtrToValuePtr<void>(PairPtr);
 			KeyProperty->Struct->CopyScriptStruct(KeyPtr, &ParsedNode.NodeGuid);
 		}
-		
-		// Set the value (UFlowNode*)
-		FObjectProperty* ValueProperty = CastField<FObjectProperty>(NodesProperty->ValueProp);
-		if (ValueProperty)
+
+		if (FObjectProperty* ValueProperty = CastField<FObjectProperty>(NodesProperty->ValueProp))
 		{
 			ValueProperty->SetObjectPropertyValue_InContainer(PairPtr, NewNode);
 		}
-		
+
 		NodesMapHelper.Rehash();
 
 		OutNodeMap.Add(ParsedNode.NodeGuid, NewNode);
@@ -426,6 +232,18 @@ bool UFlowGraphImporter::CreateFlowNodes(UFlowAsset* FlowAsset, const TArray<FFl
 		{
 			return false;
 		}
+
+#if WITH_EDITOR
+		// Rebuild the pins a node generates from its own descriptor properties. The document never
+		// carries that state - the exporter writes editable properties only, on the contract that the
+		// node regenerates the rest. UFlowAsset::RegisterNode does this for a node created through the
+		// editor, but this importer writes into the private Nodes map directly and so never reaches it.
+		// Runs after SetNodeProperties because the descriptors are its input, and before
+		// ApplyDeclaredPins, which is idempotent and only fills in what is still missing.
+		NewNode->TryUpdateAutoDataPins();
+#endif
+
+		ApplyDeclaredPins(NewNode, ParsedNode);
 	}
 
 	return true;
@@ -435,30 +253,44 @@ bool UFlowGraphImporter::SetNodeProperties(UFlowNode* FlowNode, const TMap<FStri
 {
 	for (const TPair<FString, FString>& PropertyPair : Properties)
 	{
-		// Try FindPropertyByName first (works for C++ properties)
 		FProperty* Property = FlowNode->GetClass()->FindPropertyByName(*PropertyPair.Key);
-		
-		// If not found, try FindFProperty which works better with Blueprint properties
 		if (!Property)
 		{
 			Property = FindFProperty<FProperty>(FlowNode->GetClass(), *PropertyPair.Key);
 		}
-		
-		if (!Property)
-		{
-			UE_LOG(LogFlow, Warning, TEXT("Could not find property %s on node %s"), *PropertyPair.Key, *FlowNode->GetClass()->GetName());
-			continue;
-		}
 
-		void* ValuePtr = Property->ContainerPtrToValuePtr<void>(FlowNode);
-		if (!SetPropertyFromString(Property, ValuePtr, PropertyPair.Value, OutErrorMessage))
+		void* ValuePtr = nullptr;
+		if (Property)
 		{
-			UE_LOG(LogFlow, Error, TEXT("Failed to set property %s on node %s: %s"), *PropertyPair.Key, *FlowNode->GetClass()->GetName(), *OutErrorMessage);
-			OutErrorMessage.Empty();
+			ValuePtr = Property->ContainerPtrToValuePtr<void>(FlowNode);
+		}
+		else if (PropertyPair.Key.Contains(TEXT(".")))
+		{
+			FString PathError;
+			if (!ResolvePropertyPath(FlowNode->GetClass(), FlowNode, PropertyPair.Key, Property, ValuePtr, PathError))
+			{
+				OutErrorMessage = FString::Printf(TEXT("Failed to resolve dotted property path '%s' on node %s: %s"),
+					*PropertyPair.Key, *FlowNode->GetClass()->GetName(), *PathError);
+				UE_LOG(LogFlow, Error, TEXT("%s"), *OutErrorMessage);
+
+				return false;
+			}
 		}
 		else
 		{
-			UE_LOG(LogFlow, Log, TEXT("Successfully set property %s on node %s to: %s"), *PropertyPair.Key, *FlowNode->GetClass()->GetName(), *PropertyPair.Value);
+			OutErrorMessage = FString::Printf(TEXT("Could not find property %s on node %s"), *PropertyPair.Key, *FlowNode->GetClass()->GetName());
+			UE_LOG(LogFlow, Error, TEXT("%s"), *OutErrorMessage);
+
+			return false;
+		}
+
+		FString InnerError;
+		if (!SetPropertyFromString(Property, ValuePtr, PropertyPair.Value, InnerError, FlowNode))
+		{
+			OutErrorMessage = FString::Printf(TEXT("Failed to set property '%s' on node %s (GUID %s): %s"),
+				*PropertyPair.Key, *FlowNode->GetClass()->GetName(), *FlowNode->GetGuid().ToString(), *InnerError);
+			UE_LOG(LogFlow, Error, TEXT("%s"), *OutErrorMessage);
+			return false;
 		}
 	}
 
@@ -467,8 +299,6 @@ bool UFlowGraphImporter::SetNodeProperties(UFlowNode* FlowNode, const TMap<FStri
 
 bool UFlowGraphImporter::SetupConnections(UFlowAsset* FlowAsset, const TMap<FGuid, UFlowNode*>& NodeMap, const TArray<FFlowGraphParsedConnection>& Connections, const TArray<FFlowGraphParsedNode>& ParsedNodes, FString& OutErrorMessage)
 {
-	UE_LOG(LogFlow, Log, TEXT("FlowGraphImporter: Setting up %d connections"), Connections.Num());
-
 	const FFlowGraphDeclaredOutputPinTypes DeclaredOutputPinTypes = BuildDeclaredOutputPinTypes(ParsedNodes);
 
 	FMapProperty* ConnectionsProperty = FindFProperty<FMapProperty>(UFlowNode::StaticClass(), TEXT("Connections"));
@@ -481,10 +311,6 @@ bool UFlowGraphImporter::SetupConnections(UFlowAsset* FlowAsset, const TMap<FGui
 
 	for (const FFlowGraphParsedConnection& Connection : Connections)
 	{
-		UE_LOG(LogFlow, Log, TEXT("FlowGraphImporter: Processing connection %s.%s -> %s.%s"),
-			*Connection.SourceNodeGuid.ToString(), *Connection.SourcePinName.ToString(),
-			*Connection.TargetNodeGuid.ToString(), *Connection.TargetPinName.ToString());
-
 		UFlowNode* SourceNode = NodeMap.FindRef(Connection.SourceNodeGuid);
 		UFlowNode* TargetNode = NodeMap.FindRef(Connection.TargetNodeGuid);
 
@@ -528,7 +354,6 @@ bool UFlowGraphImporter::SetupConnections(UFlowAsset* FlowAsset, const TMap<FGui
 		}
 	}
 
-	UE_LOG(LogFlow, Log, TEXT("FlowGraphImporter: Finished setting up all connections"));
 	return true;
 }
 
@@ -537,15 +362,18 @@ FFlowGraphDeclaredOutputPinTypes UFlowGraphImporter::BuildDeclaredOutputPinTypes
 	FFlowGraphDeclaredOutputPinTypes Result;
 	for (const FFlowGraphParsedNode& ParsedNode : ParsedNodes)
 	{
-		TMap<FName, bool>& PinTypeMap = Result.FindOrAdd(ParsedNode.NodeGuid);
+		TMap<FName, FDeclaredPinInfo>& PinTypeMap = Result.FindOrAdd(ParsedNode.NodeGuid);
 		for (const FString& PinDecl : ParsedNode.OutputPins)
 		{
-			FString PinName;
-			FString PinType;
-			if (PinDecl.Split(TEXT(" ["), &PinName, &PinType))
+			FName ParsedPinName;
+			FString ParsedPinType;
+			FString ParsedSubCatPath;
+			if (ParsePinDecl(PinDecl, ParsedPinName, ParsedPinType, ParsedSubCatPath))
 			{
-				PinType.RemoveFromEnd(TEXT("]"));
-				PinTypeMap.Add(FName(*PinName.TrimStartAndEnd()), PinType.TrimStartAndEnd().Equals(TEXT("Exec"), ESearchCase::IgnoreCase));
+				FDeclaredPinInfo& Info = PinTypeMap.FindOrAdd(ParsedPinName);
+				// OutputPins is always an exec-pin array on UFlowNode, so an omitted type means Exec.
+				Info.TypeStr          = ParsedPinType.IsEmpty() ? FString(TEXT("Exec")) : ParsedPinType;
+				Info.SubCategoryPath  = ParsedSubCatPath;
 			}
 		}
 	}
@@ -554,45 +382,49 @@ FFlowGraphDeclaredOutputPinTypes UFlowGraphImporter::BuildDeclaredOutputPinTypes
 
 bool UFlowGraphImporter::ResolveSourcePin(UFlowNode* SourceNode, FName SourcePinName, const FFlowGraphDeclaredOutputPinTypes& DeclaredOutputPinTypes, bool& bOutIsExecPin)
 {
-	// 1. Check live CDO pins first
 	for (const FFlowPin& Pin : SourceNode->GetOutputPins())
 	{
 		if (Pin.PinName == SourcePinName)
 		{
 			bOutIsExecPin = Pin.IsExecPin();
-			UE_LOG(LogFlow, Log, TEXT("FlowGraphImporter: Found source pin %s on CDO, IsExec=%d"), *SourcePinName.ToString(), bOutIsExecPin);
 			return true;
 		}
 	}
 
-	// 2. Fall back to declared pins from the import text (handles dynamic pins absent from CDO)
+	// Fall back to declared pins from the import text (handles dynamic pins absent from CDO).
+	// ApplyDeclaredPins should have already created the pin during CreateFlowNodes; this path is
+	// reached only when a connection references a pin that wasn't in the declared list either
+	// (fully dynamic, not exported - rare). Use the declared type if available.
 	FArrayProperty* OutputPinsProperty = FindFProperty<FArrayProperty>(UFlowNode::StaticClass(), TEXT("OutputPins"));
 
-	const TMap<FName, bool>* DeclaredPins = DeclaredOutputPinTypes.Find(SourceNode->GetGuid());
+	const TMap<FName, FDeclaredPinInfo>* DeclaredPins = DeclaredOutputPinTypes.Find(SourceNode->GetGuid());
 	if (DeclaredPins)
 	{
-		const bool* bDeclaredExec = DeclaredPins->Find(SourcePinName);
-		if (bDeclaredExec)
+		const FDeclaredPinInfo* Info = DeclaredPins->Find(SourcePinName);
+		if (Info)
 		{
-			bOutIsExecPin = *bDeclaredExec;
-			UE_LOG(LogFlow, Log, TEXT("FlowGraphImporter: Resolved dynamic source pin %s on %s as %s from declared pins"),
-				*SourcePinName.ToString(), *SourceNode->GetClass()->GetName(), bOutIsExecPin ? TEXT("Exec") : TEXT("Data"));
-
-			// Inject into the live OutputPins array so downstream code (CreateMissingDataPins etc.) can find it
+			bOutIsExecPin = Info->TypeStr.Equals(TEXT("Exec"), ESearchCase::IgnoreCase);
 			if (OutputPinsProperty)
 			{
 				FScriptArrayHelper Helper(OutputPinsProperty, OutputPinsProperty->ContainerPtrToValuePtr<void>(SourceNode));
 				FFlowPin* NewPin = reinterpret_cast<FFlowPin*>(Helper.GetRawPtr(Helper.AddValue()));
 				NewPin->PinName    = SourcePinName;
 				NewPin->PinToolTip = SourcePinName.ToString();
-				NewPin->SetPinTypeName(FFlowPinTypeName(bOutIsExecPin ? TEXT("Exec") : TEXT("wildcard")));
+				NewPin->SetPinTypeName(FFlowPinTypeName(*Info->TypeStr));
+				if (!Info->SubCategoryPath.IsEmpty())
+				{
+					if (UObject* SubCatObject = LoadObject<UObject>(nullptr, *Info->SubCategoryPath))
+					{
+						NewPin->SetPinSubCategoryObject(SubCatObject);
+					}
+				}
 			}
 			return true;
 		}
 	}
 
-	// 3. Last resort: inject as wildcard data output
-	UE_LOG(LogFlow, Warning, TEXT("FlowGraphImporter: Source pin %s not found on %s — adding as wildcard data output"),
+	// Last resort: inject as wildcard data output.
+	UE_LOG(LogFlow, Warning, TEXT("FlowGraphImporter: Source pin %s not found on %s - adding as wildcard data output"),
 		*SourcePinName.ToString(), *SourceNode->GetClass()->GetName());
 
 	if (OutputPinsProperty)
@@ -606,7 +438,7 @@ bool UFlowGraphImporter::ResolveSourcePin(UFlowNode* SourceNode, FName SourcePin
 		return true;
 	}
 
-	UE_LOG(LogFlow, Error, TEXT("FlowGraphImporter: Could not find OutputPins property on UFlowNode"));
+	UE_LOG(LogFlow, Error, TEXT("FlowGraphImporter: OutputPins property not found on UFlowNode"));
 	return false;
 }
 
@@ -620,13 +452,17 @@ bool UFlowGraphImporter::EnsureTargetDataPinExists(UFlowNode* TargetNode, FName 
 		}
 	}
 
-	UE_LOG(LogFlow, Warning, TEXT("FlowGraphImporter: Target pin %s not found on %s — adding as wildcard data input"),
+	// The pin should already exist if ApplyDeclaredPins ran (called from CreateFlowNodes). This
+	// fallback only fires for a connection referencing an input pin not listed in InputPins: at
+	// all (fully-dynamic pin not present in the export). Inject as wildcard - it is the best we
+	// can do without type information.
+	UE_LOG(LogFlow, Warning, TEXT("FlowGraphImporter: Target pin %s not found on %s - adding as wildcard data input"),
 		*TargetPinName.ToString(), *TargetNode->GetClass()->GetName());
 
 	FArrayProperty* InputPinsProperty = FindFProperty<FArrayProperty>(UFlowNode::StaticClass(), TEXT("InputPins"));
 	if (!InputPinsProperty)
 	{
-		UE_LOG(LogFlow, Error, TEXT("FlowGraphImporter: Could not find InputPins property on UFlowNode"));
+		UE_LOG(LogFlow, Error, TEXT("FlowGraphImporter: InputPins property not found on UFlowNode"));
 		return false;
 	}
 
@@ -635,9 +471,6 @@ bool UFlowGraphImporter::EnsureTargetDataPinExists(UFlowNode* TargetNode, FName 
 	NewPin->PinName    = TargetPinName;
 	NewPin->PinToolTip = TargetPinName.ToString();
 	NewPin->SetPinTypeName(FFlowPinTypeName(TEXT("wildcard")));
-
-	UE_LOG(LogFlow, Log, TEXT("FlowGraphImporter: Added wildcard data input pin %s to %s"),
-		*TargetPinName.ToString(), *TargetNode->GetClass()->GetName());
 	return true;
 }
 
@@ -646,37 +479,62 @@ bool UFlowGraphImporter::WriteConnectionToNode(UFlowNode* NodeToModify, FName Ke
 	void* ConnectionsPtr = ConnectionsProperty->ContainerPtrToValuePtr<void>(NodeToModify);
 	FScriptMapHelper MapHelper(ConnectionsProperty, ConnectionsPtr);
 
-	int32 Index = MapHelper.AddDefaultValue_Invalid_NeedsRehash();
-	uint8* PairPtr = MapHelper.GetPairPtr(Index);
-
-	if (FNameProperty* KeyProp = CastField<FNameProperty>(ConnectionsProperty->KeyProp))
+	// KeyName may already have a value - e.g. re-wiring an exec output pin that was already
+	// connected to something else (single-target). TMap requires unique keys, so blindly appending
+	// a new pair here (rather than updating the existing one) would leave two pairs sharing the
+	// same key, corrupting the map (later Find/FindRef calls can then return either pair, or
+	// garbage, depending on hash bucket layout).
+	uint8* PairPtr = nullptr;
+	if (FNameProperty* KeyPropForFind = CastField<FNameProperty>(ConnectionsProperty->KeyProp))
 	{
-		KeyProp->SetPropertyValue_InContainer(PairPtr, KeyName);
+		for (int32 Index = 0; Index < MapHelper.GetMaxIndex(); ++Index)
+		{
+			if (!MapHelper.IsValidIndex(Index))
+			{
+				continue;
+			}
+
+			uint8* CandidatePairPtr = MapHelper.GetPairPtr(Index);
+			if (KeyPropForFind->GetPropertyValue_InContainer(CandidatePairPtr) == KeyName)
+			{
+				PairPtr = CandidatePairPtr;
+				break;
+			}
+		}
 	}
+
+	if (!PairPtr)
+	{
+		const int32 NewIndex = MapHelper.AddDefaultValue_Invalid_NeedsRehash();
+		PairPtr = MapHelper.GetPairPtr(NewIndex);
+
+		if (FNameProperty* KeyProp = CastField<FNameProperty>(ConnectionsProperty->KeyProp))
+		{
+			KeyProp->SetPropertyValue_InContainer(PairPtr, KeyName);
+		}
+
+		MapHelper.Rehash();
+	}
+
 	if (FStructProperty* ValueProp = CastField<FStructProperty>(ConnectionsProperty->ValueProp))
 	{
 		*static_cast<FConnectedPin*>(ValueProp->ContainerPtrToValuePtr<void>(PairPtr)) = ConnectedPin;
 	}
 
-	MapHelper.Rehash();
-
-	UE_LOG(LogFlow, Log, TEXT("FlowGraphImporter: Wrote connection on %s key=%s -> %s.%s"),
-		*NodeToModify->GetClass()->GetName(), *KeyName.ToString(),
-		*ConnectedPin.NodeGuid.ToString(), *ConnectedPin.PinName.ToString());
 	return true;
 }
 
-UClass* UFlowGraphImporter::ResolveNodeClass(const FString& NodeType)
+UClass* UFlowGraphImporter::ResolveNodeClassForQuery(const FString& NodeType)
 {
 	UClass* NodeClass = nullptr;
 
-	// Full path (contains /Script/ or a dot) — try direct load
+	// Full path (contains /Script/ or a dot) - try direct load
 	if (NodeType.Contains(TEXT("/Script/")) || NodeType.Contains(TEXT(".")))
 	{
 		NodeClass = LoadObject<UClass>(nullptr, *NodeType);
 	}
 
-	// Short name — try /Script/Flow prefix
+	// Short name - try /Script/Flow prefix
 	if (!NodeClass)
 	{
 		NodeClass = FindObject<UClass>(nullptr, *FString::Printf(TEXT("/Script/Flow.%s"), *NodeType));
@@ -690,6 +548,60 @@ UClass* UFlowGraphImporter::ResolveNodeClass(const FString& NodeType)
 	if (!NodeClass)
 	{
 		NodeClass = FindObject<UClass>(nullptr, *NodeType);
+	}
+
+	return NodeClass;
+}
+
+bool UFlowGraphImporter::IsClassFromNonFlowBlueprint(const UClass* InClass, FString& OutReason)
+{
+	OutReason.Reset();
+
+	if (!InClass)
+	{
+		return false;
+	}
+
+#if WITH_EDITORONLY_DATA
+	// Native and AngelScript classes carry no generating Blueprint, so there is nothing to police.
+	// Fail open for them rather than guessing, so a missing ClassGeneratedBy can never block a
+	// legitimate compiled-in node type.
+	const UBlueprint* GeneratingBlueprint = Cast<UBlueprint>(InClass->ClassGeneratedBy);
+	if (!GeneratingBlueprint)
+	{
+		return false;
+	}
+
+	// UFlowNodeBlueprint and UFlowNodeAddOnBlueprint are siblings under UBlueprint, not a shared
+	// base, so both must be named explicitly - testing only the node form would reject every addon.
+	if (GeneratingBlueprint->IsA<UFlowNodeBlueprint>() || GeneratingBlueprint->IsA<UFlowNodeAddOnBlueprint>())
+	{
+		return false;
+	}
+
+	OutReason = FString::Printf(
+		TEXT("'%s' is generated by '%s', a plain %s rather than a FlowNodeBlueprint or ")
+		TEXT("FlowNodeAddOnBlueprint. It compiles, but the Flow palette and the Courier catalog both ")
+		TEXT("gather by asset class, so neither can see it. Recreate it with the ")
+		TEXT("CreateFlowNodeBlueprint op."),
+		*InClass->GetPathName(),
+		*GeneratingBlueprint->GetPathName(),
+		*GeneratingBlueprint->GetClass()->GetName());
+	return true;
+#else
+	return false;
+#endif // WITH_EDITORONLY_DATA
+}
+
+UClass* UFlowGraphImporter::ResolveNodeClass(const FString& NodeType)
+{
+	UClass* NodeClass = ResolveNodeClassForQuery(NodeType);
+
+	FString RejectionReason;
+	if (IsClassFromNonFlowBlueprint(NodeClass, RejectionReason))
+	{
+		UE_LOG(LogFlow, Warning, TEXT("ResolveNodeClass rejected '%s': %s"), *NodeType, *RejectionReason);
+		return nullptr;
 	}
 
 	return NodeClass;
@@ -711,57 +623,95 @@ bool UFlowGraphImporter::CreateNodeAddOns(const TMap<FGuid, UFlowNode*>& NodeMap
 			return false;
 		}
 
-		FArrayProperty* AddOnsProperty = FindFProperty<FArrayProperty>(UFlowNodeBase::StaticClass(), TEXT("AddOns"));
-		if (!AddOnsProperty)
+		if (!CreateAddOnsRecursive(OwnerNode, ParsedNode.AddOns, OutErrorMessage))
 		{
-			OutErrorMessage = TEXT("CreateNodeAddOns: Could not find AddOns property on UFlowNodeBase");
+			return false;
+		}
+	}
+
+	return true;
+}
+
+bool UFlowGraphImporter::CreateAddOnsRecursive(UFlowNodeBase* Owner, const TArray<FFlowGraphParsedNodeAddOn>& ParsedAddOns, FString& OutErrorMessage)
+{
+	if (ParsedAddOns.IsEmpty())
+	{
+		return true;
+	}
+
+	FArrayProperty* AddOnsProperty = FindFProperty<FArrayProperty>(UFlowNodeBase::StaticClass(), TEXT("AddOns"));
+	if (!AddOnsProperty)
+	{
+		OutErrorMessage = TEXT("CreateAddOnsRecursive: Could not find AddOns property on UFlowNodeBase");
+		return false;
+	}
+
+	FObjectProperty* ElemProp = CastField<FObjectProperty>(AddOnsProperty->Inner);
+	if (!ElemProp)
+	{
+		OutErrorMessage = TEXT("CreateAddOnsRecursive: AddOns array element property is not an object property");
+		return false;
+	}
+
+	for (const FFlowGraphParsedNodeAddOn& ParsedAddOn : ParsedAddOns)
+	{
+		if (ParsedAddOn.bIsDeleteMarker)
+		{
+			// Meaningless for a brand new owner - nothing to delete yet. Only relevant for
+			// FFlowGraphReconciler::ReconcileNodeAddOns on an already-existing owner.
+			continue;
+		}
+
+		UClass* AddOnClass = nullptr;
+
+		if (ParsedAddOn.AddOnType.Contains(TEXT("/Script/")) || ParsedAddOn.AddOnType.Contains(TEXT(".")))
+		{
+			AddOnClass = LoadObject<UClass>(nullptr, *ParsedAddOn.AddOnType);
+		}
+
+		if (!AddOnClass)
+		{
+			AddOnClass = FindObject<UClass>(nullptr, *FString::Printf(TEXT("/Script/Flow.%s"), *ParsedAddOn.AddOnType));
+		}
+
+		if (!AddOnClass || !AddOnClass->IsChildOf(UFlowNodeAddOn::StaticClass()))
+		{
+			OutErrorMessage = FString::Printf(TEXT("CreateAddOnsRecursive: Could not find AddOn class: %s"), *ParsedAddOn.AddOnType);
 			return false;
 		}
 
-		for (const FFlowGraphParsedNodeAddOn& ParsedAddOn : ParsedNode.AddOns)
+		// NewObject on an abstract class trips an engine-level
+		// ensure() rather than returning null, which crashes the editor session mid-import.
+		if (AddOnClass->HasAnyClassFlags(CLASS_Abstract))
 		{
-			UClass* AddOnClass = nullptr;
+			OutErrorMessage = FString::Printf(TEXT("CreateAddOnsRecursive: AddOn class is abstract and cannot be instantiated: %s"), *ParsedAddOn.AddOnType);
+			return false;
+		}
 
-			if (ParsedAddOn.AddOnType.Contains(TEXT("/Script/")) || ParsedAddOn.AddOnType.Contains(TEXT(".")))
-			{
-				AddOnClass = LoadObject<UClass>(nullptr, *ParsedAddOn.AddOnType);
-			}
+		UFlowNodeAddOn* NewAddOn = NewObject<UFlowNodeAddOn>(Owner, AddOnClass, NAME_None, RF_Transactional);
+		if (!NewAddOn)
+		{
+			OutErrorMessage = FString::Printf(TEXT("CreateAddOnsRecursive: Failed to create AddOn of type: %s"), *ParsedAddOn.AddOnType);
+			return false;
+		}
 
-			if (!AddOnClass)
-			{
-				AddOnClass = FindObject<UClass>(nullptr, *FString::Printf(TEXT("/Script/Flow.%s"), *ParsedAddOn.AddOnType));
-			}
+		NewAddOn->SetGuid(ParsedAddOn.AddOnGuid.IsValid() ? ParsedAddOn.AddOnGuid : FGuid::NewGuid());
 
-			if (!AddOnClass || !AddOnClass->IsChildOf(UFlowNodeAddOn::StaticClass()))
-			{
-				OutErrorMessage = FString::Printf(TEXT("CreateNodeAddOns: Could not find AddOn class: %s"), *ParsedAddOn.AddOnType);
-				return false;
-			}
+		if (!SetAddOnProperties(NewAddOn, ParsedAddOn.Properties, OutErrorMessage))
+		{
+			return false;
+		}
 
-			UFlowNodeAddOn* NewAddOn = NewObject<UFlowNodeAddOn>(OwnerNode, AddOnClass, NAME_None, RF_Transactional);
-			if (!NewAddOn)
-			{
-				OutErrorMessage = FString::Printf(TEXT("CreateNodeAddOns: Failed to create AddOn of type: %s"), *ParsedAddOn.AddOnType);
-				return false;
-			}
+		// Append to Owner's AddOns array via reflection (AddOns is protected). Re-acquire the
+		// helper each iteration - a sibling append below could have reallocated the array.
+		void* AddOnsPtr = AddOnsProperty->ContainerPtrToValuePtr<void>(Owner);
+		FScriptArrayHelper AddOnsHelper(AddOnsProperty, AddOnsPtr);
+		const int32 NewIndex = AddOnsHelper.AddValue();
+		ElemProp->SetObjectPropertyValue(AddOnsHelper.GetRawPtr(NewIndex), NewAddOn);
 
-			if (!SetAddOnProperties(NewAddOn, ParsedAddOn.Properties, OutErrorMessage))
-			{
-				return false;
-			}
-
-			// Append to the AddOns array via reflection (AddOns is protected)
-			void* AddOnsPtr = AddOnsProperty->ContainerPtrToValuePtr<void>(OwnerNode);
-			FScriptArrayHelper AddOnsHelper(AddOnsProperty, AddOnsPtr);
-			int32 NewIndex = AddOnsHelper.AddValue();
-			FObjectProperty* ElemProp = CastField<FObjectProperty>(AddOnsProperty->Inner);
-			if (ElemProp)
-			{
-				ElemProp->SetObjectPropertyValue(AddOnsHelper.GetRawPtr(NewIndex), NewAddOn);
-			}
-
-			UE_LOG(LogFlow, Log, TEXT("CreateNodeAddOns: Attached %s to node %s"),
-				*AddOnClass->GetName(), *OwnerNode->GetClass()->GetName());
+		if (!CreateAddOnsRecursive(NewAddOn, ParsedAddOn.AddOns, OutErrorMessage))
+		{
+			return false;
 		}
 	}
 
@@ -821,17 +771,38 @@ bool UFlowGraphImporter::SetAddOnProperties(UFlowNodeAddOn* AddOn, const TMap<FS
 			Property = FindFProperty<FProperty>(AddOn->GetClass(), *Pair.Key);
 		}
 
-		if (!Property)
+		void* ValuePtr = nullptr;
+		if (Property)
 		{
-			UE_LOG(LogFlow, Warning, TEXT("SetAddOnProperties: Could not find property %s on %s"), *Pair.Key, *AddOn->GetClass()->GetName());
-			continue;
+			ValuePtr = Property->ContainerPtrToValuePtr<void>(AddOn);
+		}
+		else if (Pair.Key.Contains(TEXT(".")))
+		{
+			FString PathError;
+			if (!ResolvePropertyPath(AddOn->GetClass(), AddOn, Pair.Key, Property, ValuePtr, PathError))
+			{
+				OutErrorMessage = FString::Printf(TEXT("Failed to resolve dotted property path '%s' on addon %s: %s"),
+					*Pair.Key, *AddOn->GetClass()->GetName(), *PathError);
+				UE_LOG(LogFlow, Error, TEXT("%s"), *OutErrorMessage);
+
+				return false;
+			}
+		}
+		else
+		{
+			OutErrorMessage = FString::Printf(TEXT("SetAddOnProperties: Could not find property %s on %s"), *Pair.Key, *AddOn->GetClass()->GetName());
+			UE_LOG(LogFlow, Error, TEXT("%s"), *OutErrorMessage);
+
+			return false;
 		}
 
-		void* ValuePtr = Property->ContainerPtrToValuePtr<void>(AddOn);
-		if (!SetPropertyFromString(Property, ValuePtr, Pair.Value, OutErrorMessage))
+		FString InnerError;
+		if (!SetPropertyFromString(Property, ValuePtr, Pair.Value, InnerError, AddOn))
 		{
-			UE_LOG(LogFlow, Warning, TEXT("SetAddOnProperties: Failed to set %s on %s: %s"), *Pair.Key, *AddOn->GetClass()->GetName(), *OutErrorMessage);
-			OutErrorMessage.Empty();
+			OutErrorMessage = FString::Printf(TEXT("Failed to set property '%s' on addon %s (GUID %s): %s"),
+				*Pair.Key, *AddOn->GetClass()->GetName(), *AddOn->GetGuid().ToString(), *InnerError);
+			UE_LOG(LogFlow, Error, TEXT("%s"), *OutErrorMessage);
+			return false;
 		}
 	}
 
@@ -842,7 +813,191 @@ bool UFlowGraphImporter::SetAddOnProperties(UFlowNodeAddOn* AddOn, const TMap<FS
 	return true;
 }
 
-bool UFlowGraphImporter::SetPropertyFromString(FProperty* Property, void* ValuePtr, const FString& ValueString, FString& OutErrorMessage)
+bool UFlowGraphImporter::ResolvePropertyPath(UStruct* OwnerStruct, void* ContainerPtr, const FString& PropertyPath, FProperty*& OutProperty, void*& OutValuePtr, FString& OutErrorMessage)
+{
+	TArray<FString> Segments;
+	PropertyPath.ParseIntoArray(Segments, TEXT("."), true);
+	if (Segments.IsEmpty())
+	{
+		OutErrorMessage = FString::Printf(TEXT("Empty property path '%s'"), *PropertyPath);
+		return false;
+	}
+
+	UStruct* CurrentOwnerStruct = OwnerStruct;
+	void* CurrentContainerPtr = ContainerPtr;
+
+	// Set when the previous segment resolved to an FArrayProperty - the next segment must be a
+	// numeric index into it rather than a property name on CurrentOwnerStruct.
+	FArrayProperty* PendingArrayProperty = nullptr;
+	void* PendingArrayContainerPtr = nullptr;
+
+	FProperty* ResolvedProperty = nullptr;
+	void* ResolvedValuePtr = nullptr;
+
+	for (int32 SegmentIndex = 0; SegmentIndex < Segments.Num(); ++SegmentIndex)
+	{
+		const FString& Segment = Segments[SegmentIndex];
+		const bool bIsLastSegment = (SegmentIndex == Segments.Num() - 1);
+
+		if (PendingArrayProperty)
+		{
+			if (!Segment.IsNumeric())
+			{
+				OutErrorMessage = FString::Printf(TEXT("Expected an array index after '%s' in path '%s', got '%s'"),
+					*PendingArrayProperty->GetName(), *PropertyPath, *Segment);
+				return false;
+			}
+
+			FScriptArrayHelper ArrayHelper(PendingArrayProperty, PendingArrayContainerPtr);
+			const int32 ArrayIndex = FCString::Atoi(*Segment);
+			if (!ArrayHelper.IsValidIndex(ArrayIndex))
+			{
+				OutErrorMessage = FString::Printf(TEXT("Array index %d out of bounds (size %d) for '%s' in path '%s'"),
+					ArrayIndex, ArrayHelper.Num(), *PendingArrayProperty->GetName(), *PropertyPath);
+				return false;
+			}
+
+			ResolvedProperty = PendingArrayProperty->Inner;
+			ResolvedValuePtr = ArrayHelper.GetRawPtr(ArrayIndex);
+			PendingArrayProperty = nullptr;
+		}
+		else
+		{
+			if (!CurrentOwnerStruct)
+			{
+				OutErrorMessage = FString::Printf(TEXT("Cannot resolve '%s' in path '%s' - preceding segment is not a struct"),
+					*Segment, *PropertyPath);
+				return false;
+			}
+
+			FProperty* Property = CurrentOwnerStruct->FindPropertyByName(*Segment);
+			if (!Property)
+			{
+				Property = FindFProperty<FProperty>(CurrentOwnerStruct, *Segment);
+			}
+
+			if (!Property)
+			{
+				OutErrorMessage = FString::Printf(TEXT("Could not find property '%s' (in path '%s') on %s"),
+					*Segment, *PropertyPath, *CurrentOwnerStruct->GetName());
+				return false;
+			}
+
+			ResolvedProperty = Property;
+			ResolvedValuePtr = Property->ContainerPtrToValuePtr<void>(CurrentContainerPtr);
+		}
+
+		if (bIsLastSegment)
+		{
+			break;
+		}
+
+		if (FStructProperty* StructProperty = CastField<FStructProperty>(ResolvedProperty))
+		{
+			CurrentOwnerStruct = StructProperty->Struct;
+			CurrentContainerPtr = ResolvedValuePtr;
+		}
+		else if (FArrayProperty* ArrayProperty = CastField<FArrayProperty>(ResolvedProperty))
+		{
+			PendingArrayProperty = ArrayProperty;
+			PendingArrayContainerPtr = ResolvedValuePtr;
+			CurrentOwnerStruct = nullptr;
+		}
+		else
+		{
+			OutErrorMessage = FString::Printf(TEXT("Cannot descend into '%s' (in path '%s') - property is a %s, which is neither a struct nor an array"),
+				*Segment, *PropertyPath, *ResolvedProperty->GetClass()->GetName());
+			return false;
+		}
+	}
+
+	OutProperty = ResolvedProperty;
+	OutValuePtr = ResolvedValuePtr;
+	return true;
+}
+
+// Splits "/Script/Foo.Bar(A=1,B=(C=2))" into its class path and its field block, so an instanced
+// object property can be authored as a class plus inline field values. Returns false for a plain
+// object path, which keeps the pre-existing LoadObject behaviour untouched.
+static bool TryParseClassWithFields(const FString& ValueString, FString& OutClassPath, FString& OutFields)
+{
+	const FString Trimmed = ValueString.TrimStartAndEnd();
+	if (!Trimmed.EndsWith(TEXT(")")))
+	{
+		return false;
+	}
+
+	int32 OpenIndex = INDEX_NONE;
+	if (!Trimmed.FindChar(TEXT('('), OpenIndex) || OpenIndex <= 0)
+	{
+		return false;
+	}
+
+	OutClassPath = Trimmed.Left(OpenIndex).TrimStartAndEnd();
+	OutFields = Trimmed.Mid(OpenIndex + 1, Trimmed.Len() - OpenIndex - 2);
+
+	return !OutClassPath.IsEmpty();
+}
+
+// Splits a field block on commas that sit outside any parentheses or quoted string, so a nested
+// struct value such as ObjectiveNameTag=(TagName="A.B") survives as one field rather than being
+// torn in half at its inner comma.
+static void SplitFieldsAtTopLevel(const FString& Fields, TArray<FString>& OutFields)
+{
+	int32 Depth = 0;
+	bool bInQuotes = false;
+	FString Current;
+
+	for (int32 CharIndex = 0; CharIndex < Fields.Len(); ++CharIndex)
+	{
+		const TCHAR Character = Fields[CharIndex];
+		const bool bIsEscaped = bInQuotes && CharIndex > 0 && Fields[CharIndex - 1] == TEXT('\\');
+
+		if (Character == TEXT('"') && !bIsEscaped)
+		{
+			bInQuotes = !bInQuotes;
+		}
+		else if (!bInQuotes && (Character == TEXT('(') || Character == TEXT('[')))
+		{
+			++Depth;
+		}
+		else if (!bInQuotes && (Character == TEXT(')') || Character == TEXT(']')))
+		{
+			--Depth;
+		}
+		else if (!bInQuotes && Depth == 0 && Character == TEXT(','))
+		{
+			OutFields.Add(Current.TrimStartAndEnd());
+			Current.Reset();
+
+			continue;
+		}
+
+		Current.AppendChar(Character);
+	}
+
+	const FString Last = Current.TrimStartAndEnd();
+	if (!Last.IsEmpty())
+	{
+		OutFields.Add(Last);
+	}
+}
+
+// True when Property is meant to own the object it points at, rather than reference a shared asset.
+// Only these may be authored as a class plus fields; a plain object reference must keep resolving
+// through LoadObject so an ordinary asset pointer is never silently replaced by a fresh instance.
+static bool IsInstancedObjectProperty(const FObjectProperty& ObjectProperty)
+{
+	if (ObjectProperty.HasAnyPropertyFlags(CPF_InstancedReference | CPF_ExportObject))
+	{
+		return true;
+	}
+
+	return ObjectProperty.PropertyClass && ObjectProperty.PropertyClass->HasAnyClassFlags(CLASS_EditInlineNew);
+}
+
+bool UFlowGraphImporter::SetPropertyFromString(FProperty* Property, void* ValuePtr, const FString& ValueString, FString& OutErrorMessage,
+	UObject* OwnerForInstancedSubobjects)
 {
 	if (!Property || !ValuePtr)
 	{
@@ -872,7 +1027,14 @@ bool UFlowGraphImporter::SetPropertyFromString(FProperty* Property, void* ValueP
 	}
 	else if (FStrProperty* StrProperty = CastField<FStrProperty>(Property))
 	{
-		StrProperty->SetPropertyValue(ValuePtr, ValueString);
+		// Strip surrounding quotes and unescape - mirror of the exporter's escaping.
+		FString CleanString = ValueString;
+		if (CleanString.Len() >= 2 && CleanString.StartsWith(TEXT("\"")) && CleanString.EndsWith(TEXT("\"")))
+		{
+			CleanString = CleanString.Mid(1, CleanString.Len() - 2);
+		}
+
+		StrProperty->SetPropertyValue(ValuePtr, CleanString.ReplaceEscapedCharWithChar());
 		return true;
 	}
 	else if (FNameProperty* NameProperty = CastField<FNameProperty>(Property))
@@ -883,6 +1045,7 @@ bool UFlowGraphImporter::SetPropertyFromString(FProperty* Property, void* ValueP
 		{
 			CleanString = CleanString.Mid(1, CleanString.Len() - 2);
 		}
+
 		NameProperty->SetPropertyValue(ValuePtr, FName(*CleanString));
 		return true;
 	}
@@ -904,13 +1067,13 @@ bool UFlowGraphImporter::SetPropertyFromString(FProperty* Property, void* ValueP
 		}
 		else
 		{
-			// Simple string to text conversion
+			// Simple string-to-text: strip quotes and unescape.
 			FString CleanString = ValueString;
 			if (CleanString.StartsWith(TEXT("\"")) && CleanString.EndsWith(TEXT("\"")))
 			{
 				CleanString = CleanString.Mid(1, CleanString.Len() - 2);
 			}
-			TextProperty->SetPropertyValue(ValuePtr, FText::FromString(CleanString));
+			TextProperty->SetPropertyValue(ValuePtr, FText::FromString(CleanString.ReplaceEscapedCharWithChar()));
 			return true;
 		}
 	}
@@ -948,6 +1111,84 @@ bool UFlowGraphImporter::SetPropertyFromString(FProperty* Property, void* ValueP
 	}
 	else if (FObjectProperty* ObjectProperty = CastField<FObjectProperty>(Property))
 	{
+		// An instanced subobject does not exist until something creates it, so LoadObject can never
+		// resolve one. Accept "ClassPath(Field=Value,...)" for these, mirroring the shape the
+		// TInstancedStruct branch above already uses, and construct the subobject under its owner.
+		FString SubobjectClassPath;
+		FString SubobjectFields;
+		if (TryParseClassWithFields(ValueString, SubobjectClassPath, SubobjectFields))
+		{
+			if (!IsInstancedObjectProperty(*ObjectProperty))
+			{
+				OutErrorMessage = FString::Printf(
+					TEXT("Property '%s' is a plain object reference, not an instanced subobject - supply an object path rather than '%s'"),
+					*ObjectProperty->GetName(), *ValueString);
+				return false;
+			}
+
+			if (!IsValid(OwnerForInstancedSubobjects))
+			{
+				OutErrorMessage = FString::Printf(
+					TEXT("Property '%s' needs an owning object to construct an instanced subobject; this call site supplied none"),
+					*ObjectProperty->GetName());
+				return false;
+			}
+
+			UClass* SubobjectClass = LoadClass<UObject>(nullptr, *SubobjectClassPath);
+			if (!SubobjectClass)
+			{
+				OutErrorMessage = FString::Printf(TEXT("Failed to load class '%s' for instanced subobject property '%s'"),
+					*SubobjectClassPath, *ObjectProperty->GetName());
+				return false;
+			}
+
+			// Reuse the existing subobject when the class is unchanged, so a re-applied document
+			// preserves subobject identity the way UpsertNode preserves a node's GUID.
+			UObject* Subobject = ObjectProperty->GetObjectPropertyValue(ValuePtr);
+			if (!IsValid(Subobject) || Subobject->GetClass() != SubobjectClass)
+			{
+				Subobject = NewObject<UObject>(OwnerForInstancedSubobjects, SubobjectClass, NAME_None, RF_Transactional);
+				ObjectProperty->SetObjectPropertyValue(ValuePtr, Subobject);
+			}
+
+			TArray<FString> Fields;
+			SplitFieldsAtTopLevel(SubobjectFields, Fields);
+
+			for (const FString& Field : Fields)
+			{
+				FString FieldName;
+				FString FieldValue;
+				if (!Field.Split(TEXT("="), &FieldName, &FieldValue))
+				{
+					OutErrorMessage = FString::Printf(TEXT("Malformed field '%s' for instanced subobject property '%s'"),
+						*Field, *ObjectProperty->GetName());
+					return false;
+				}
+
+				FieldName.TrimStartAndEndInline();
+
+				FProperty* FieldProperty = Subobject->GetClass()->FindPropertyByName(*FieldName);
+				if (!FieldProperty)
+				{
+					OutErrorMessage = FString::Printf(TEXT("Class '%s' has no property '%s'"),
+						*SubobjectClass->GetName(), *FieldName);
+					return false;
+				}
+
+				void* FieldValuePtr = FieldProperty->ContainerPtrToValuePtr<void>(Subobject);
+
+				FString FieldError;
+				if (!SetPropertyFromString(FieldProperty, FieldValuePtr, FieldValue.TrimStartAndEnd(), FieldError, Subobject))
+				{
+					OutErrorMessage = FString::Printf(TEXT("Failed to set '%s' on instanced subobject of '%s': %s"),
+						*FieldName, *SubobjectClass->GetName(), *FieldError);
+					return false;
+				}
+			}
+
+			return true;
+		}
+
 		// Try to load the object
 		UObject* Object = LoadObject<UObject>(nullptr, *ValueString);
 		if (Object)
@@ -986,79 +1227,132 @@ bool UFlowGraphImporter::SetPropertyFromString(FProperty* Property, void* ValueP
 	return false;
 }
 
-FString UFlowGraphImporter::ExtractSection(const FString& ImportText, const FString& SectionName)
+static FName ParsePinNameToken(const FString& RawToken)
 {
-	int32 SectionStart = ImportText.Find(SectionName);
-	if (SectionStart == INDEX_NONE)
+	// A pin name is normally free text with incidental whitespace trimmed - but exactly one class
+	// declares an intentionally-blank pin name (a single-space-named exec pin, seen in some
+	// project-specific nodes), and trimming that down to an empty string collapses it to NAME_None, which
+	// then fails to resolve against the real pin. If trimming would erase an otherwise non-empty
+	// token, the token *was* meaningful whitespace - fall back to a single space rather than losing
+	// it, matching that class's own sentinel value.
+	const FString Trimmed = RawToken.TrimStartAndEnd();
+	if (Trimmed.IsEmpty() && !RawToken.IsEmpty())
 	{
-		return FString();
+		return FName(TEXT(" "));
 	}
-
-	// Find the end of the section (marked by "---")
-	int32 SectionEnd = ImportText.Find(TEXT("---"), ESearchCase::CaseSensitive, ESearchDir::FromStart, SectionStart + SectionName.Len());
-	if (SectionEnd == INDEX_NONE)
-	{
-		SectionEnd = ImportText.Len();
-	}
-
-	return ImportText.Mid(SectionStart + SectionName.Len(), SectionEnd - SectionStart - SectionName.Len());
+	return FName(*Trimmed);
 }
 
-bool UFlowGraphImporter::ParseGuid(const FString& GuidString, FGuid& OutGuid)
+bool UFlowGraphImporter::ParsePinDecl(const FString& PinDecl, FName& OutPinName, FString& OutPinType, FString& OutSubCategoryPath)
 {
-	return FGuid::Parse(GuidString, OutGuid);
+	// Trim only the trailing edge here, for the same reason ParseNodes's pin-line extraction does -
+	// the leading edge can legitimately be (part of) an intentionally-blank pin's name, and a full
+	// trim would erase it before the " [" name/type boundary below is ever located.
+	FString Trimmed = PinDecl;
+	Trimmed.TrimEndInline();
+	if (Trimmed.IsEmpty())
+	{
+		return false;
+	}
+
+	FString PinName;
+	FString BracketContent;
+	if (Trimmed.Split(TEXT(" ["), &PinName, &BracketContent))
+	{
+		BracketContent.RemoveFromEnd(TEXT("]"));
+		BracketContent = BracketContent.TrimStartAndEnd();
+
+		// Sub-category form: "PinType:/Object/Path" - split on first ':'
+		FString TypePart;
+		FString SubCatPart;
+		if (BracketContent.Split(TEXT(":"), &TypePart, &SubCatPart))
+		{
+			OutPinType          = TypePart.TrimStartAndEnd();
+			OutSubCategoryPath  = SubCatPart.TrimStartAndEnd();
+		}
+		else
+		{
+			OutPinType         = BracketContent;
+			OutSubCategoryPath = FString();
+		}
+		OutPinName = ParsePinNameToken(PinName);
+	}
+	else
+	{
+		// No " [Type]" suffix at all (bare name) - this shape never carries the blank-pin ambiguity
+		// (the real format always includes a type annotation), so a normal full trim is correct here.
+		OutPinName         = FName(*Trimmed.TrimStartAndEnd());
+		OutPinType         = FString();
+		OutSubCategoryPath = FString();
+	}
+
+	return !OutPinName.IsNone();
 }
 
-bool UFlowGraphImporter::ParseConnectionLine(const FString& Line, FFlowGraphParsedConnection& OutConnection, FString& OutErrorMessage)
+void UFlowGraphImporter::ApplyDeclaredPins(UFlowNode* NewNode, const FFlowGraphParsedNode& ParsedNode)
 {
-	// Format: "GUID1.PinName1 -> GUID2.PinName2"
-	int32 ArrowIndex = Line.Find(TEXT("->"));
-	if (ArrowIndex == INDEX_NONE)
+	FArrayProperty* InputPinsProperty  = FindFProperty<FArrayProperty>(UFlowNode::StaticClass(), TEXT("InputPins"));
+	FArrayProperty* OutputPinsProperty = FindFProperty<FArrayProperty>(UFlowNode::StaticClass(), TEXT("OutputPins"));
+
+	auto AddPinIfAbsent = [](FArrayProperty* PinsProperty, UFlowNode* Node, FName PinName, const FString& PinType, const FString& SubCategoryPath)
 	{
-		OutErrorMessage = FString::Printf(TEXT("Invalid connection line (missing '->'): %s"), *Line);
-		return false;
+		if (!PinsProperty)
+		{
+			return;
+		}
+
+		// Skip if the pin is already present (CDO-declared or previously applied).
+		FScriptArrayHelper Helper(PinsProperty, PinsProperty->ContainerPtrToValuePtr<void>(Node));
+		for (int32 i = 0; i < Helper.Num(); ++i)
+		{
+			const FFlowPin* Existing = reinterpret_cast<const FFlowPin*>(Helper.GetRawPtr(i));
+			if (Existing && Existing->PinName == PinName)
+			{
+				return;
+			}
+		}
+
+		FFlowPin* NewPin = reinterpret_cast<FFlowPin*>(Helper.GetRawPtr(Helper.AddValue()));
+		NewPin->PinName    = PinName;
+		NewPin->PinToolTip = PinName.ToString();
+		// InputPins/OutputPins are always exec-pin arrays on UFlowNode, so an omitted type here means
+		// Exec, not wildcard (wildcard is only correct for the separate data-pin declaration path).
+		const FString EffectiveType = PinType.IsEmpty() ? FString(TEXT("Exec")) : PinType;
+		NewPin->SetPinTypeName(FFlowPinTypeName(*EffectiveType));
+		if (!SubCategoryPath.IsEmpty())
+		{
+			// Explicit sub-category path from export - load and apply directly.
+			if (UObject* SubCatObject = LoadObject<UObject>(nullptr, *SubCategoryPath))
+			{
+				NewPin->SetPinSubCategoryObject(SubCatObject);
+			}
+		}
+	};
+
+	for (const FString& PinDecl : ParsedNode.InputPins)
+	{
+		FName PinName;
+		FString PinType;
+		FString SubCategoryPath;
+		if (ParsePinDecl(PinDecl, PinName, PinType, SubCategoryPath) && !PinName.IsNone())
+		{
+			// Apply every declared pin, exec included. AddPinIfAbsent already no-ops when the CDO
+			// provides the pin; a dynamic-pin class whose exec pins come from reflection (not a
+			// literal CDO array) has no such entry, so unconditionally skipping exec pins here
+			// silently dropped them for those classes.
+			AddPinIfAbsent(InputPinsProperty, NewNode, PinName, PinType, SubCategoryPath);
+		}
 	}
 
-	FString SourcePart = Line.Left(ArrowIndex).TrimStartAndEnd();
-	FString TargetPart = Line.Mid(ArrowIndex + 2).TrimStartAndEnd();
-
-	// Parse source
-	int32 SourceDotIndex;
-	if (!SourcePart.FindChar('.', SourceDotIndex))
+	for (const FString& PinDecl : ParsedNode.OutputPins)
 	{
-		OutErrorMessage = FString::Printf(TEXT("Invalid connection source (missing '.'): %s"), *SourcePart);
-		return false;
+		FName PinName;
+		FString PinType;
+		FString SubCategoryPath;
+		if (ParsePinDecl(PinDecl, PinName, PinType, SubCategoryPath) && !PinName.IsNone())
+		{
+			// See the InputPins loop above - same reasoning applies to output exec pins.
+			AddPinIfAbsent(OutputPinsProperty, NewNode, PinName, PinType, SubCategoryPath);
+		}
 	}
-
-	FString SourceGuidString = SourcePart.Left(SourceDotIndex);
-	FString SourcePinString = SourcePart.Mid(SourceDotIndex + 1);
-
-	if (!ParseGuid(SourceGuidString, OutConnection.SourceNodeGuid))
-	{
-		OutErrorMessage = FString::Printf(TEXT("Invalid source GUID: %s"), *SourceGuidString);
-		return false;
-	}
-
-	OutConnection.SourcePinName = FName(*SourcePinString);
-
-	// Parse target
-	int32 TargetDotIndex;
-	if (!TargetPart.FindChar('.', TargetDotIndex))
-	{
-		OutErrorMessage = FString::Printf(TEXT("Invalid connection target (missing '.'): %s"), *TargetPart);
-		return false;
-	}
-
-	FString TargetGuidString = TargetPart.Left(TargetDotIndex);
-	FString TargetPinString = TargetPart.Mid(TargetDotIndex + 1);
-
-	if (!ParseGuid(TargetGuidString, OutConnection.TargetNodeGuid))
-	{
-		OutErrorMessage = FString::Printf(TEXT("Invalid target GUID: %s"), *TargetGuidString);
-		return false;
-	}
-
-	OutConnection.TargetPinName = FName(*TargetPinString);
-
-	return true;
 }

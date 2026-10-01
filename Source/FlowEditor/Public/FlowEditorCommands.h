@@ -17,6 +17,11 @@ public:
 	TSharedPtr<FUICommandInfo> SearchInAsset;
 	TSharedPtr<FUICommandInfo> EditAssetDefaults;
 
+	TSharedPtr<FUICommandInfo> AutoFormatGraph;
+
+	/* Only shown while execution is halted at a Flow breakpoint. */
+	TSharedPtr<FUICommandInfo> ContinueFlowExecution;
+
 	virtual void RegisterCommands() override;
 };
 
@@ -30,6 +35,9 @@ public:
 
 	// Context Pins
 	TSharedPtr<FUICommandInfo> ReconstructNode;
+
+     // Create From Selection
+	TSharedPtr<FUICommandInfo> CreateSubGraphFromSelection;
 
 	// Pins
 	TSharedPtr<FUICommandInfo> AddInput;

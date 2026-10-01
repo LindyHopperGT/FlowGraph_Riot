@@ -2,9 +2,14 @@
 
 #include "FlowGraphImporter.h"
 #include "FlowGraphExporter.h"
+#include "FlowGraphReconciler.h"
 #include "FlowGraphRegrapher.h"
+#include "FlowCourierConverter.h"
+#include "FlowCourierDocument.h"
 #include "FlowAsset.h"
 #include "Nodes/FlowNode.h"
+#include "Nodes/Graph/FlowNode_CustomInput.h"
+#include "Nodes/Graph/FlowNode_CustomOutput.h"
 #include "AddOns/FlowNodeAddOn.h"
 #include "AddOns/FlowNodeAddOn_SwitchCase.h"
 #include "Graph/FlowGraph.h"
@@ -12,11 +17,55 @@
 #include "Misc/AutomationTest.h"
 #include "Editor.h"
 
+#include "Nodes/Actor/FlowNode_ExecuteComponent.h"
+#include "Components/BillboardComponent.h"
+
 #if WITH_DEV_AUTOMATION_TESTS
 
 BEGIN_DEFINE_SPEC(FFlowGraphImporterSpec, "FlowGraphCourier.EditorGame.Importer", EAutomationTestFlags::ProductFilter | EAutomationTestFlags::EditorContext)
 	UFlowAsset* TestFlowAsset;
 	FString TestImportText;
+
+	// Re-imports a Courier v2 JSON document (as produced by UFlowGraphExporter::ExportFlowGraphToString)
+	// into a new asset at TargetAssetPath - the document-based equivalent of feeding exported text
+	// back into ImportFlowGraphFromText, which only accepts v1 grammar.
+	static UFlowAsset* ImportFromExportedJson(const FString& TargetAssetPath, const FString& ExportedJson, FString& OutErrorMessage)
+	{
+		FFlowCourierDocument Document;
+		TArray<FFlowCourierIssue> Issues;
+		if (!FFlowCourierConverter::ParseDocument(ExportedJson, Document, Issues, OutErrorMessage))
+		{
+			return nullptr;
+		}
+
+		TArray<FFlowGraphParsedNode> ParsedNodes;
+		TArray<FFlowGraphParsedConnection> ParsedConnections;
+		TArray<FGuid> ScopedNodeGuidsUnused;
+		TMap<FString, FGuid> AliasMapUnused;
+		FFlowCourierConverter::ConvertToParsedGraph(Document, ParsedNodes, ParsedConnections, ScopedNodeGuidsUnused, AliasMapUnused, Issues);
+
+		return UFlowGraphImporter::ImportFlowGraphFromDocument(
+			TargetAssetPath, Document.AssetClass, Document.bWorldBound, ParsedNodes, ParsedConnections, OutErrorMessage);
+	}
+
+	// Document-based equivalent of UFlowGraphRegrapher::ImportAndRegraphFromText, which only
+	// accepts v1 grammar.
+	static UFlowAsset* ImportAndRegraphFixtureDocument(const FString& Json, const FString& TargetAssetPath)
+	{
+		FFlowCourierDocument Document;
+		TArray<FFlowCourierIssue> Issues;
+		FString ErrorMessage;
+		if (!FFlowCourierConverter::ParseDocument(Json, Document, Issues, ErrorMessage))
+		{
+			return nullptr;
+		}
+		TArray<FFlowGraphParsedNode> ParsedNodes;
+		TArray<FFlowGraphParsedConnection> ParsedConnections;
+		TArray<FGuid> ScopedNodeGuidsUnused;
+		TMap<FString, FGuid> AliasMapUnused;
+		FFlowCourierConverter::ConvertToParsedGraph(Document, ParsedNodes, ParsedConnections, ScopedNodeGuidsUnused, AliasMapUnused, Issues);
+		return UFlowGraphRegrapher::ImportAndRegraphFromDocument(TargetAssetPath, Document.AssetClass, Document.bWorldBound, ParsedNodes, ParsedConnections);
+	}
 END_DEFINE_SPEC(FFlowGraphImporterSpec)
 
 void FFlowGraphImporterSpec::Define()
@@ -44,35 +93,19 @@ void FFlowGraphImporterSpec::Define()
 			It("should import a simple flow graph with Start and Finish nodes", [this]()
 			{
 				TestImportText = TEXT(
-					"FlowGraphExport v1.0\n"
-					"WorldBound: true\n"
-					"ExpectedOwnerClass: None\n"
-					"---\n"
-					"\n"
-					"[NODES]\n"
-					"Node: 00000000-0000-0000-0000-000000000001\n"
-					"  Type: FlowNode_Start\n"
-					"  Properties:\n"
-					"  InputPins:\n"
-					"  OutputPins:\n"
-					"    - Out [Exec]\n"
-					"\n"
-					"Node: 00000000-0000-0000-0000-000000000002\n"
-					"  Type: FlowNode_Finish\n"
-					"  Properties:\n"
-					"  InputPins:\n"
-					"    - In [Exec]\n"
-					"  OutputPins:\n"
-					"\n"
-					"---\n"
-					"\n"
-					"[CONNECTIONS]\n"
-					"00000000-0000-0000-0000-000000000001.Out -> 00000000-0000-0000-0000-000000000002.In\n"
-					"---\n"
+					"{\"formatVersion\":2,\"mode\":\"Full\",\"bWorldBound\":true,"
+					"\"ops\":["
+					"{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000001\",\"type\":\"FlowNode_Start\","
+					"\"outputPins\":[{\"name\":\"Out\",\"type\":\"Exec\"}]},"
+					"{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000002\",\"type\":\"FlowNode_Finish\","
+					"\"inputPins\":[{\"name\":\"In\",\"type\":\"Exec\"}]},"
+					"{\"kind\":\"AddConnection\",\"source\":{\"nodeGuid\":\"00000000-0000-0000-0000-000000000001\",\"pin\":\"Out\"},"
+					"\"target\":{\"nodeGuid\":\"00000000-0000-0000-0000-000000000002\",\"pin\":\"In\"}}"
+					"]}"
 				);
 
 				FString ErrorMessage;
-				TestFlowAsset = UFlowGraphImporter::ImportFlowGraphFromText(
+				TestFlowAsset = ImportFromExportedJson(
 					TEXT("/Game/Test/TestImportBasic"),
 					TestImportText,
 					ErrorMessage
@@ -110,7 +143,7 @@ void FFlowGraphImporterSpec::Define()
 			It("should handle empty import text gracefully", [this]()
 			{
 				FString ErrorMessage;
-				TestFlowAsset = UFlowGraphImporter::ImportFlowGraphFromText(
+				TestFlowAsset = ImportFromExportedJson(
 					TEXT("/Game/Test/TestImportEmpty"),
 					TEXT(""),
 					ErrorMessage
@@ -123,27 +156,15 @@ void FFlowGraphImporterSpec::Define()
 			It("should parse asset metadata correctly", [this]()
 			{
 				TestImportText = TEXT(
-					"FlowGraphExport v1.0\n"
-					"WorldBound: false\n"
-					"ExpectedOwnerClass: None\n"
-					"---\n"
-					"\n"
-					"[NODES]\n"
-					"Node: 00000000-0000-0000-0000-000000000001\n"
-					"  Type: FlowNode_Start\n"
-					"  Properties:\n"
-					"  InputPins:\n"
-					"  OutputPins:\n"
-					"    - Out [Exec]\n"
-					"\n"
-					"---\n"
-					"\n"
-					"[CONNECTIONS]\n"
-					"---\n"
+					"{\"formatVersion\":2,\"mode\":\"Full\",\"bWorldBound\":false,"
+					"\"ops\":["
+					"{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000001\",\"type\":\"FlowNode_Start\","
+					"\"outputPins\":[{\"name\":\"Out\",\"type\":\"Exec\"}]}"
+					"]}"
 				);
 
 				FString ErrorMessage;
-				TestFlowAsset = UFlowGraphImporter::ImportFlowGraphFromText(
+				TestFlowAsset = ImportFromExportedJson(
 					TEXT("/Game/Test/TestImportMetadata"),
 					TestImportText,
 					ErrorMessage
@@ -156,6 +177,50 @@ void FFlowGraphImporterSpec::Define()
 					TestTrue("Asset GUID should be valid", TestFlowAsset->AssetGuid.IsValid());
 				}
 			});
+
+			It("should default a declared output pin with no explicit type to Exec, not wildcard", [this]()
+			{
+				TestImportText = TEXT(
+					"{\"formatVersion\":2,\"mode\":\"Full\",\"bWorldBound\":true,"
+					"\"ops\":["
+					"{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000001\",\"type\":\"FlowNode_Start\","
+					"\"outputPins\":[{\"name\":\"Out\",\"type\":\"Exec\"},{\"name\":\"UntypedEvent\"}]}"
+					"]}"
+				);
+
+				FString ErrorMessage;
+				TestFlowAsset = ImportFromExportedJson(
+					TEXT("/Game/Test/TestImportUntypedPin"),
+					TestImportText,
+					ErrorMessage
+				);
+
+				TestNotNull("Imported asset should not be null", TestFlowAsset);
+				if (!TestFlowAsset)
+				{
+					AddError(FString::Printf(TEXT("Import failed: %s"), *ErrorMessage));
+					return;
+				}
+
+				FGuid StartGuid;
+				FGuid::Parse(TEXT("00000000-0000-0000-0000-000000000001"), StartGuid);
+				UFlowNode* StartNode = TestFlowAsset->GetNode(StartGuid);
+				TestNotNull("Start node should exist", StartNode);
+				if (!StartNode)
+				{
+					return;
+				}
+
+				const FFlowPin* UntypedPin = StartNode->GetOutputPins().FindByPredicate([](const FFlowPin& Pin)
+				{
+					return Pin.PinName == FName("UntypedEvent");
+				});
+				TestNotNull("Untyped output pin should have been created", UntypedPin);
+				if (UntypedPin)
+				{
+					TestTrue("Untyped output pin on OutputPins should default to Exec", UntypedPin->IsExecPin());
+				}
+			});
 		});
 
 		Describe("Property Import", [this]()
@@ -163,27 +228,14 @@ void FFlowGraphImporterSpec::Define()
 			It("should import array properties with nested structs correctly", [this]()
 			{
 				TestImportText = TEXT(
-					"FlowGraphExport v1.0\n"
-					"WorldBound: false\n"
-					"ExpectedOwnerClass: None\n"
-					"---\n\n"
-					"[NODES]\n"
-					"Node: 00000000-0000-0000-0000-000000000001\n"
-					"  Type: /Script/Flow.FlowNode_DefineProperties\n"
-					"  Properties:\n"
-					"    NamedProperties: ((Name=\"TestProp\",DataPinValue=/Script/Flow.FlowDataPinValue_Text(Values=(\"Test Value\"))))\n"
-					"  InputPins:\n"
-					"  OutputPins:\n"
-					"    - TestProp [Text]\n"
-					"\n"
-					"---\n"
-					"\n"
-					"[CONNECTIONS]\n"
-					"---\n"
+					"{\"formatVersion\":2,\"mode\":\"Full\",\"bWorldBound\":false,"
+					"\"ops\":[{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000001\",\"type\":\"/Script/Flow.FlowNode_DefineProperties\","
+					"\"properties\":{\"NamedProperties\":\"((Name=\\\"TestProp\\\",DataPinValue=/Script/Flow.FlowDataPinValue_Text(Values=(\\\"Test Value\\\"))))\"},"
+					"\"outputPins\":[{\"name\":\"TestProp\",\"type\":\"Text\"}]}]}"
 				);
 
 				FString ErrorMessage;
-				TestFlowAsset = UFlowGraphImporter::ImportFlowGraphFromText(
+				TestFlowAsset = ImportFromExportedJson(
 					TEXT("/Game/Test/TestImportArrayProperties"),
 					TestImportText,
 					ErrorMessage
@@ -284,30 +336,15 @@ void FFlowGraphImporterSpec::Define()
 			It("should import float properties correctly", [this]()
 			{
 				TestImportText = TEXT(
-					"FlowGraphExport v1.0\n"
-					"WorldBound: false\n"
-					"ExpectedOwnerClass: None\n"
-					"---\n\n"
-					"[NODES]\n"
-					"Node: 00000000-0000-0000-0000-000000000001\n"
-					"  Type: /Script/Flow.FlowNode_Timer\n"
-					"  Properties:\n"
-					"    CompletionTime: 5.0\n"
-					"    StepTime: 1.0\n"
-					"  InputPins:\n"
-					"    - In [Exec]\n"
-					"  OutputPins:\n"
-					"    - Completed [Exec]\n"
-					"    - Step [Exec]\n"
-					"\n"
-					"---\n"
-					"\n"
-					"[CONNECTIONS]\n"
-					"---\n"
+					"{\"formatVersion\":2,\"mode\":\"Full\",\"bWorldBound\":false,"
+					"\"ops\":[{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000001\",\"type\":\"/Script/Flow.FlowNode_Timer\","
+					"\"properties\":{\"CompletionTime\":\"5.0\",\"StepTime\":\"1.0\"},"
+					"\"inputPins\":[{\"name\":\"In\",\"type\":\"Exec\"}],"
+					"\"outputPins\":[{\"name\":\"Completed\",\"type\":\"Exec\"},{\"name\":\"Step\",\"type\":\"Exec\"}]}]}"
 				);
 
 				FString ErrorMessage;
-				TestFlowAsset = UFlowGraphImporter::ImportFlowGraphFromText(
+				TestFlowAsset = ImportFromExportedJson(
 					TEXT("/Game/Test/TestImportProperties"),
 					TestImportText,
 					ErrorMessage
@@ -352,29 +389,19 @@ void FFlowGraphImporterSpec::Define()
 
 			It("should import FlowDataPinValue_Text struct properties correctly", [this]()
 			{
-				TestImportText = TEXT(
-					"FlowGraphExport v1.0\n"
-					"WorldBound: false\n"
-					"ExpectedOwnerClass: None\n"
-					"---\n\n"
-					"[NODES]\n"
-					"Node: 00000000-0000-0000-0000-000000000001\n"
-					"  Type: /LbExpeditions/Flow/FN_UpdatePhaseInstructions.FN_UpdatePhaseInstructions_C\n"
-					"  Properties:\n"
-					"    PhaseInstructions: (Values=(\"The Avarosans need your aid! Seek out the ancient Frostguard watchtower.\"))\n"
-					"  InputPins:\n"
-					"    - In [Exec]\n"
-					"  OutputPins:\n"
-					"    - Out [Exec]\n"
-					"\n"
-					"---\n"
-					"\n"
-					"[CONNECTIONS]\n"
-					"---\n"
-				);
+				// Uses FlowNode_DefineProperties (native, agnostic) with a FlowDataPinValue_Text
+				// struct property. The distinct assertion here is that the quoted string content
+				// survives the import byte-for-byte, not just the structural shape.
+				const FString PhaseInstructionsText = TEXT("The Avarosans need your aid! Seek out the ancient Frostguard watchtower.");
+				TestImportText = FString::Printf(TEXT(
+					"{\"formatVersion\":2,\"mode\":\"Full\",\"bWorldBound\":false,"
+					"\"ops\":[{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000001\",\"type\":\"/Script/Flow.FlowNode_DefineProperties\","
+					"\"properties\":{\"NamedProperties\":\"((Name=\\\"PhaseInstructions\\\",DataPinValue=/Script/Flow.FlowDataPinValue_Text(Values=(\\\"%s\\\"))))\"},"
+					"\"outputPins\":[{\"name\":\"PhaseInstructions\",\"type\":\"Text\"}]}]}"
+				), *PhaseInstructionsText);
 
 				FString ErrorMessage;
-				TestFlowAsset = UFlowGraphImporter::ImportFlowGraphFromText(
+				TestFlowAsset = ImportFromExportedJson(
 					TEXT("/Game/Test/TestImportTextProperties"),
 					TestImportText,
 					ErrorMessage
@@ -393,53 +420,275 @@ void FFlowGraphImporterSpec::Define()
 
 				if (Node)
 				{
-					FProperty* PhaseInstructionsProperty = Node->GetClass()->FindPropertyByName(TEXT("PhaseInstructions"));
-					if (!PhaseInstructionsProperty)
+					FProperty* NamedPropsProperty = Node->GetClass()->FindPropertyByName(TEXT("NamedProperties"));
+					FArrayProperty* ArrayProperty = CastField<FArrayProperty>(NamedPropsProperty);
+					TestNotNull("NamedProperties should be an array property", ArrayProperty);
+					if (!ArrayProperty) { return; }
+
+					void* ArrayPtr = ArrayProperty->ContainerPtrToValuePtr<void>(Node);
+					FScriptArrayHelper ArrayHelper(ArrayProperty, ArrayPtr);
+					TestEqual("NamedProperties should have 1 element", ArrayHelper.Num(), 1);
+					if (ArrayHelper.Num() == 0) { return; }
+
+					FStructProperty* InnerStructProp = CastField<FStructProperty>(ArrayProperty->Inner);
+					TestNotNull("Inner property should be a struct", InnerStructProp);
+					if (!InnerStructProp) { return; }
+
+					void* NamedPropStructPtr = ArrayHelper.GetRawPtr(0);
+					FProperty* DataPinValueProp = InnerStructProp->Struct->FindPropertyByName(TEXT("DataPinValue"));
+					TestNotNull("DataPinValue field should exist", DataPinValueProp);
+					if (!DataPinValueProp) { return; }
+
+					// DataPinValue is a TInstancedStruct<FFlowDataPinValue> wrapping the
+					// FFlowDataPinValue_Text - export to text (same proven pattern as the "should
+					// import array properties with nested structs correctly" test above) rather
+					// than assume TInstancedStruct's raw memory layout, and assert the exact quoted
+					// text content round-tripped, not just that a value is present.
+					FStructProperty* DataPinValueStructProp = CastField<FStructProperty>(DataPinValueProp);
+					TestNotNull("DataPinValue should be a struct property", DataPinValueStructProp);
+					if (!DataPinValueStructProp) { return; }
+
+					void* DataPinValuePtr = DataPinValueStructProp->ContainerPtrToValuePtr<void>(NamedPropStructPtr);
+					FString DataPinValueExport;
+					DataPinValueStructProp->ExportText_Direct(DataPinValueExport, DataPinValuePtr, nullptr, nullptr, PPF_None);
+
+					TestNotEqual("DataPinValue should not be None", DataPinValueExport, FString(TEXT("None")));
+					TestTrue(FString::Printf(TEXT("Exported DataPinValue should contain the exact PhaseInstructions text (got: %s)"), *DataPinValueExport),
+						DataPinValueExport.Contains(PhaseInstructionsText));
+				}
+			});
+		});
+
+		// UFlowNode_ExecuteComponent::ComponentTemplate (UPROPERTY(EditAnywhere, Instanced) TObjectPtr<UActorComponent>)
+		// is the fixture: a shipped, non-abstract Object property whose class carries CPF_InstancedReference,
+		// exactly the shape SetPropertyFromString's new "ClassPath(Field=Value,...)" branch targets. UBillboardComponent
+		// is the payload class - already editinlinenew, with plain scalar fields (ScreenSize, bIsScreenSizeScaled) and
+		// no asset dependency, so a fixture value never needs a texture reference. Property flags only, not node
+		// runtime behavior, are what this Describe block proves; ComponentSource/ComponentClass are left at defaults.
+		Describe("Instanced Subobject Properties", [this]()
+		{
+			It("should construct an instanced subobject from ClassPath(Field=Value) and apply its fields", [this]()
+			{
+				TestImportText = TEXT(
+					"{\"formatVersion\":2,\"mode\":\"Full\",\"bWorldBound\":false,"
+					"\"ops\":[{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000001\",\"type\":\"/Script/Flow.FlowNode_ExecuteComponent\","
+					"\"properties\":{\"ComponentTemplate\":\"/Script/Engine.BillboardComponent(ScreenSize=2.500000,bIsScreenSizeScaled=true)\"}}]}"
+				);
+
+				FString ErrorMessage;
+				TestFlowAsset = ImportFromExportedJson(TEXT("/Game/Test/TestInstancedSubobjectConstruct"), TestImportText, ErrorMessage);
+				TestNotNull("Imported asset should not be null", TestFlowAsset);
+				if (!TestFlowAsset)
+				{
+					AddError(FString::Printf(TEXT("Import failed: %s"), *ErrorMessage));
+					return;
+				}
+
+				FGuid NodeGuid;
+				FGuid::Parse(TEXT("00000000-0000-0000-0000-000000000001"), NodeGuid);
+				UFlowNode* Node = TestFlowAsset->GetNode(NodeGuid);
+				TestNotNull("ExecuteComponent node should exist", Node);
+				if (!Node) { return; }
+
+				FProperty* TemplateProperty = Node->GetClass()->FindPropertyByName(TEXT("ComponentTemplate"));
+				FObjectProperty* ObjectProperty = CastField<FObjectProperty>(TemplateProperty);
+				TestNotNull("ComponentTemplate should be an object property", ObjectProperty);
+				if (!ObjectProperty) { return; }
+
+				UObject* Subobject = ObjectProperty->GetObjectPropertyValue(ObjectProperty->ContainerPtrToValuePtr<void>(Node));
+				TestNotNull("ComponentTemplate should have been constructed", Subobject);
+				if (!Subobject) { return; }
+
+				TestEqual("Subobject class should be the requested class", Subobject->GetClass(), UBillboardComponent::StaticClass());
+				TestEqual("Subobject's Outer should be the owning node, not the asset or package",
+					Subobject->GetOuter(), Cast<UObject>(Node));
+
+				UBillboardComponent* Billboard = Cast<UBillboardComponent>(Subobject);
+				TestNotNull("Subobject should cast to UBillboardComponent", Billboard);
+				if (Billboard)
+				{
+					TestEqual("ScreenSize field should have been applied", Billboard->ScreenSize, 2.5f);
+					TestTrue("bIsScreenSizeScaled field should have been applied", Billboard->bIsScreenSizeScaled != 0);
+				}
+			});
+
+			It("should apply a nested-struct field without splitting on the field's own inner comma", [this]()
+			{
+				// U/UL/V are plain floats on UBillboardComponent; the point here is not the values
+				// themselves but that a value block containing a parenthesized sub-value with its
+				// own comma - as ObjectiveNameTag=(TagName="...") does on the real Meerkat fixture
+				// this feature was built for - is not mistaken for two top-level fields split at
+				// the inner comma. FVector2D exercises the same top-level-comma hazard using a type
+				// already available in this module, without depending on Meerkat-side classes.
+				TestImportText = TEXT(
+					"{\"formatVersion\":2,\"mode\":\"Full\",\"bWorldBound\":false,"
+					"\"ops\":[{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000001\",\"type\":\"/Script/Flow.FlowNode_ExecuteComponent\","
+					"\"properties\":{\"ComponentTemplate\":\"/Script/Engine.BillboardComponent(ScreenSize=3.000000,RelativeScale3D=(X=1.000000,Y=2.000000,Z=3.000000))\"}}]}"
+				);
+
+				FString ErrorMessage;
+				TestFlowAsset = ImportFromExportedJson(TEXT("/Game/Test/TestInstancedSubobjectNestedField"), TestImportText, ErrorMessage);
+				TestNotNull("Imported asset should not be null", TestFlowAsset);
+				if (!TestFlowAsset)
+				{
+					AddError(FString::Printf(TEXT("Import failed: %s"), *ErrorMessage));
+					return;
+				}
+
+				FGuid NodeGuid;
+				FGuid::Parse(TEXT("00000000-0000-0000-0000-000000000001"), NodeGuid);
+				UFlowNode* Node = TestFlowAsset->GetNode(NodeGuid);
+				TestNotNull("ExecuteComponent node should exist", Node);
+				if (!Node) { return; }
+
+				FProperty* TemplateProperty = Node->GetClass()->FindPropertyByName(TEXT("ComponentTemplate"));
+				FObjectProperty* ObjectProperty = CastField<FObjectProperty>(TemplateProperty);
+				UObject* Subobject = ObjectProperty ? ObjectProperty->GetObjectPropertyValue(ObjectProperty->ContainerPtrToValuePtr<void>(Node)) : nullptr;
+				UBillboardComponent* Billboard = Cast<UBillboardComponent>(Subobject);
+				TestNotNull("Subobject should cast to UBillboardComponent", Billboard);
+				if (!Billboard) { return; }
+
+				TestEqual("The field before the nested struct should still apply", Billboard->ScreenSize, 3.0f);
+				TestEqual("Nested struct field X should apply despite its own inner comma", Billboard->GetRelativeScale3D().X, 1.0);
+				TestEqual("Nested struct field Y should apply despite its own inner comma", Billboard->GetRelativeScale3D().Y, 2.0);
+				TestEqual("Nested struct field Z should apply despite its own inner comma", Billboard->GetRelativeScale3D().Z, 3.0);
+			});
+
+			It("should still fail a bare unresolvable object path exactly as before this feature (regression)", [this]()
+			{
+				// ComponentTemplate is Instanced, so this specifically proves the new class-plus-
+				// fields parser correctly declines a value with no trailing ")" and falls through to
+				// the original LoadObject call, rather than the presence of the new branch changing
+				// behavior for the pre-existing shape. "None" is not a real object path, so the
+				// original LoadObject call was always expected to fail here - the two things this
+				// test can actually observe are that it still fails (not silently succeeds or
+				// crashes) and that the error message names the original LoadObject failure text,
+				// not an instanced-construction error.
+				TestImportText = TEXT(
+					"{\"formatVersion\":2,\"mode\":\"Full\",\"bWorldBound\":false,"
+					"\"ops\":[{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000001\",\"type\":\"/Script/Flow.FlowNode_ExecuteComponent\","
+					"\"properties\":{\"ComponentTemplate\":\"None\"}}]}"
+				);
+
+				AddExpectedError(TEXT("Failed to load object"), EAutomationExpectedErrorFlags::Contains, 1);
+
+				FString ErrorMessage;
+				TestFlowAsset = ImportFromExportedJson(TEXT("/Game/Test/TestInstancedBarePathRegression"), TestImportText, ErrorMessage);
+				TestNull("A bare unresolvable path should still fail import, same as before this feature", TestFlowAsset);
+				TestTrue("The error should be the original LoadObject failure message, not an instanced-construction error",
+					ErrorMessage.Contains(TEXT("Failed to load object")));
+			});
+
+			It("should still resolve a bare path to a real object for a non-instanced property (regression)", [this]()
+			{
+				// FlowNode_ExecuteComponent's ComponentClass is TSubclassOf<UActorComponent> - a
+				// FClassProperty, not FObjectProperty, so IsInstancedObjectProperty's rejection branch
+				// does not run for it and it cannot demonstrate that rejection. What it can and does
+				// demonstrate: a bare class path on a property this feature does not touch at all
+				// keeps resolving exactly as before. UBillboardComponent's own class path is a
+				// real, always-loadable object (the UClass itself), so this needs no project content.
+				TestImportText = TEXT(
+					"{\"formatVersion\":2,\"mode\":\"Full\",\"bWorldBound\":false,"
+					"\"ops\":[{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000001\",\"type\":\"/Script/Flow.FlowNode_ExecuteComponent\","
+					"\"properties\":{\"ComponentClass\":\"/Script/Engine.BillboardComponent\"}}]}"
+				);
+
+				FString ErrorMessage;
+				TestFlowAsset = ImportFromExportedJson(TEXT("/Game/Test/TestNonInstancedClassPropertyRegression"), TestImportText, ErrorMessage);
+				TestNotNull("Imported asset should not be null", TestFlowAsset);
+				if (!TestFlowAsset)
+				{
+					AddError(FString::Printf(TEXT("Import failed: %s"), *ErrorMessage));
+					return;
+				}
+
+				FGuid NodeGuid;
+				FGuid::Parse(TEXT("00000000-0000-0000-0000-000000000001"), NodeGuid);
+				UFlowNode* Node = TestFlowAsset->GetNode(NodeGuid);
+				TestNotNull("ExecuteComponent node should exist", Node);
+				if (!Node) { return; }
+
+				FProperty* ClassProperty = Node->GetClass()->FindPropertyByName(TEXT("ComponentClass"));
+				FClassProperty* ClassProp = CastField<FClassProperty>(ClassProperty);
+				TestNotNull("ComponentClass should be a class property", ClassProp);
+				if (!ClassProp) { return; }
+
+				UClass* ResolvedClass = Cast<UClass>(ClassProp->GetObjectPropertyValue(ClassProp->ContainerPtrToValuePtr<void>(Node)));
+				TestEqual("ComponentClass should resolve to the requested class, unaffected by this feature",
+					ResolvedClass, UBillboardComponent::StaticClass());
+			});
+
+			It("should fail with a clear error when the requested class cannot be loaded", [this]()
+			{
+				TestImportText = TEXT(
+					"{\"formatVersion\":2,\"mode\":\"Full\",\"bWorldBound\":false,"
+					"\"ops\":[{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000001\",\"type\":\"/Script/Flow.FlowNode_ExecuteComponent\","
+					"\"properties\":{\"ComponentTemplate\":\"/Script/Engine.ThisClassDoesNotExist(ScreenSize=1.000000)\"}}]}"
+				);
+
+				AddExpectedError(TEXT("Failed to load class"), EAutomationExpectedErrorFlags::Contains, 1);
+
+				FString ErrorMessage;
+				TestFlowAsset = ImportFromExportedJson(TEXT("/Game/Test/TestInstancedUnresolvedClass"), TestImportText, ErrorMessage);
+				TestNull("Import should fail when the subobject class does not resolve", TestFlowAsset);
+				TestFalse("An error message should be reported", ErrorMessage.IsEmpty());
+			});
+
+			It("should export an owned subobject as ClassPath(Fields) and re-import it into a second asset", [this]()
+			{
+				// The bare-path form a subobject serialized as before this feature pointed inside its
+				// owning asset - re-importable into that same asset by accident at best, and never
+				// into a different one, which is what a real export/import round trip requires.
+				TestImportText = TEXT(
+					"{\"formatVersion\":2,\"mode\":\"Full\",\"bWorldBound\":false,"
+					"\"ops\":[{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000001\",\"type\":\"/Script/Flow.FlowNode_ExecuteComponent\","
+					"\"properties\":{\"ComponentTemplate\":\"/Script/Engine.BillboardComponent(ScreenSize=4.000000)\"}}]}"
+				);
+
+				FString ErrorMessage;
+				TestFlowAsset = ImportFromExportedJson(TEXT("/Game/Test/TestInstancedExportSource"), TestImportText, ErrorMessage);
+				TestNotNull("Imported asset should not be null", TestFlowAsset);
+				if (!TestFlowAsset)
+				{
+					AddError(FString::Printf(TEXT("Import failed: %s"), *ErrorMessage));
+					return;
+				}
+
+				const FString ExportedText = UFlowGraphExporter::ExportFlowGraphToString(TestFlowAsset);
+				TestTrue("Exported document should describe the subobject as ClassPath(Fields), not a bare path into the source asset",
+					ExportedText.Contains(TEXT("/Script/Engine.BillboardComponent(")));
+				TestFalse("Exported document should not reference the source asset's own package path for the subobject",
+					ExportedText.Contains(TEXT("TestInstancedExportSource:")));
+
+				UFlowAsset* ReimportedAsset = ImportFromExportedJson(TEXT("/Game/Test/TestInstancedExportTarget"), ExportedText, ErrorMessage);
+				TestNotNull("Re-import into a different asset should succeed", ReimportedAsset);
+				if (!ReimportedAsset)
+				{
+					AddError(FString::Printf(TEXT("Re-import failed: %s"), *ErrorMessage));
+					return;
+				}
+
+				FGuid NodeGuid;
+				FGuid::Parse(TEXT("00000000-0000-0000-0000-000000000001"), NodeGuid);
+				UFlowNode* ReimportedNode = ReimportedAsset->GetNode(NodeGuid);
+				TestNotNull("Node should exist in the re-imported asset", ReimportedNode);
+				if (ReimportedNode)
+				{
+					FProperty* TemplateProperty = ReimportedNode->GetClass()->FindPropertyByName(TEXT("ComponentTemplate"));
+					FObjectProperty* ObjectProperty = CastField<FObjectProperty>(TemplateProperty);
+					UObject* Subobject = ObjectProperty ? ObjectProperty->GetObjectPropertyValue(ObjectProperty->ContainerPtrToValuePtr<void>(ReimportedNode)) : nullptr;
+					UBillboardComponent* Billboard = Cast<UBillboardComponent>(Subobject);
+					TestNotNull("Re-imported subobject should cast to UBillboardComponent", Billboard);
+					if (Billboard)
 					{
-						PhaseInstructionsProperty = FindFProperty<FProperty>(Node->GetClass(), TEXT("PhaseInstructions"));
-					}
-					
-					if (PhaseInstructionsProperty)
-					{
-						FStructProperty* StructProperty = CastField<FStructProperty>(PhaseInstructionsProperty);
-						if (StructProperty && StructProperty->Struct->GetName() == TEXT("FlowDataPinValue_Text"))
-						{
-							// Access the Values array within the struct
-							void* StructPtr = StructProperty->ContainerPtrToValuePtr<void>(Node);
-							FProperty* ValuesProperty = StructProperty->Struct->FindPropertyByName(TEXT("Values"));
-							if (ValuesProperty)
-							{
-								FArrayProperty* ArrayProperty = CastField<FArrayProperty>(ValuesProperty);
-								if (ArrayProperty)
-								{
-									void* ArrayPtr = ValuesProperty->ContainerPtrToValuePtr<void>(StructPtr);
-									FScriptArrayHelper ArrayHelper(ArrayProperty, ArrayPtr);
-									
-									TestTrue("Values array should have at least one element", ArrayHelper.Num() > 0);
-									if (ArrayHelper.Num() > 0)
-									{
-										FTextProperty* TextProperty = CastField<FTextProperty>(ArrayProperty->Inner);
-										if (TextProperty)
-										{
-											FText Value = TextProperty->GetPropertyValue(ArrayHelper.GetRawPtr(0));
-											FString ValueString = Value.ToString();
-											TestEqual("PhaseInstructions should match", ValueString, FString(TEXT("The Avarosans need your aid! Seek out the ancient Frostguard watchtower.")));
-										}
-									}
-								}
-							}
-						}
-						else
-						{
-							AddError(FString::Printf(TEXT("PhaseInstructions property is not a FlowDataPinValue_Text struct, it's: %s"), 
-								StructProperty ? *StructProperty->Struct->GetName() : TEXT("not a struct")));
-						}
-					}
-					else
-					{
-						AddError(TEXT("PhaseInstructions property not found on node"));
+						TestEqual("Re-imported subobject's Outer should be the node in the NEW asset, not the original",
+							Billboard->GetOuter(), Cast<UObject>(ReimportedNode));
+						TestEqual("Re-imported subobject's field value should match the original", Billboard->ScreenSize, 4.0f);
 					}
 				}
+
+				ReimportedAsset->ClearFlags(RF_Standalone);
+				ReimportedAsset->MarkAsGarbage();
 			});
 		});
 
@@ -447,10 +696,13 @@ void FFlowGraphImporterSpec::Define()
 		{
 			It("should successfully roundtrip a test FlowAsset", [this]()
 			{
+				// Optional project-specific fixture, same as FlowGraphValidation.spec.cpp's
+				// RealAssetPaths - a plain informational skip, not a warning, when it isn't present
+				// in this project.
 				UFlowAsset* OriginalAsset = LoadObject<UFlowAsset>(nullptr, TEXT("/LbExpeditions/EncounterDefinitions/Tests/FA_ZTest_FlowGraph.FA_ZTest_FlowGraph"));
 				if (!OriginalAsset)
 				{
-					AddWarning(TEXT("Could not load test asset - skipping roundtrip test"));
+					AddInfo(TEXT("Could not load test asset - skipping roundtrip test"));
 					return;
 				}
 
@@ -458,11 +710,7 @@ void FFlowGraphImporterSpec::Define()
 				TestFalse("Exported text should not be empty", ExportedText.IsEmpty());
 
 				FString ErrorMessage;
-				TestFlowAsset = UFlowGraphImporter::ImportFlowGraphFromText(
-					TEXT("/Game/Test/TestImportRoundtrip"),
-					ExportedText,
-					ErrorMessage
-				);
+				TestFlowAsset = ImportFromExportedJson(TEXT("/Game/Test/TestImportRoundtrip"), ExportedText, ErrorMessage);
 
 				TestNotNull("Imported asset should not be null", TestFlowAsset);
 				if (!TestFlowAsset)
@@ -562,35 +810,19 @@ void FFlowGraphImporterSpec::Define()
 				}
 
 				TestImportText = TEXT(
-					"FlowGraphExport v1.0\n"
-					"WorldBound: true\n"
-					"ExpectedOwnerClass: None\n"
-					"---\n"
-					"\n"
-					"[NODES]\n"
-					"Node: 00000000-0000-0000-0000-000000000001\n"
-					"  Type: /Script/Flow.FlowNode_Start\n"
-					"  Properties:\n"
-					"  InputPins:\n"
-					"  OutputPins:\n"
-					"    - Out [Exec]\n"
-					"\n"
-					"Node: 00000000-0000-0000-0000-000000000002\n"
-					"  Type: /Script/Flow.FlowNode_Finish\n"
-					"  Properties:\n"
-					"  InputPins:\n"
-					"    - In [Exec]\n"
-					"  OutputPins:\n"
-					"\n"
-					"---\n"
-					"\n"
-					"[CONNECTIONS]\n"
-					"00000000-0000-0000-0000-000000000001.Out -> 00000000-0000-0000-0000-000000000002.In\n"
-					"---\n"
+					"{\"formatVersion\":2,\"mode\":\"Full\",\"assetClass\":\"/Script/Flow.FlowAsset\",\"bWorldBound\":true,"
+					"\"ops\":["
+					"{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000001\",\"type\":\"/Script/Flow.FlowNode_Start\","
+					"\"outputPins\":[{\"name\":\"Out\",\"type\":\"Exec\"}]},"
+					"{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000002\",\"type\":\"/Script/Flow.FlowNode_Finish\","
+					"\"inputPins\":[{\"name\":\"In\",\"type\":\"Exec\"}]},"
+					"{\"kind\":\"AddConnection\",\"source\":{\"nodeGuid\":\"00000000-0000-0000-0000-000000000001\",\"pin\":\"Out\"},"
+					"\"target\":{\"nodeGuid\":\"00000000-0000-0000-0000-000000000002\",\"pin\":\"In\"}}"
+					"]}"
 				);
 
 				FString ErrorMessage;
-				TestFlowAsset = UFlowGraphImporter::ImportFlowGraphFromText(
+				TestFlowAsset = ImportFromExportedJson(
 					TEXT("/Game/Test/TestImportWithRegrapher"),
 					TestImportText,
 					ErrorMessage
@@ -618,41 +850,48 @@ void FFlowGraphImporterSpec::Define()
 					{
 						UEdGraphNode* GraphNode = StartNode->GetGraphNode();
 						TestNotNull("Start node should have a graph node after regraphing", GraphNode);
+
+						if (GraphNode == nullptr)
+						{
+							return;
+						}
+						const FString CommentPatch = FString::Printf(
+							TEXT("{\"formatVersion\":2,\"mode\":\"Patch\",\"ops\":[")
+							TEXT("{\"kind\":\"UpsertNode\",\"guid\":\"%s\",\"comment\":\"Existing node comment\"}]}"),
+							*StartGuid.ToString());
+						FString ReconcileError;
+						const TSharedPtr<FFlowReconcileExecutionPlan> Plan =
+							FFlowGraphReconciler::ComputeReconcilePlan(
+								TestFlowAsset->GetPathName(), CommentPatch, ReconcileError);
+						TestTrue("Comment patch should produce a reconcile plan", Plan.IsValid());
+						if (Plan.IsValid())
+						{
+							const FFlowReconcileResult ReconcileResult =
+								FFlowGraphReconciler::ExecuteReconcilePlan(
+									*Plan, TestFlowAsset->GetPathName(), ReconcileError);
+							TestTrue("Comment patch should apply", ReconcileResult.bSuccess);
+						}
+						TestEqual("Existing node comment should match", GraphNode->NodeComment,
+							FString(TEXT("Existing node comment")));
 					}
 				}
 			});
 
-			It("should import and regraph in one call using ImportAndRegraphFromText", [this]()
+			It("should import and regraph in one call using ImportAndRegraphFromDocument", [this]()
 			{
 				TestImportText = TEXT(
-					"FlowGraphExport v1.0\n"
-					"WorldBound: true\n"
-					"ExpectedOwnerClass: None\n"
-					"---\n"
-					"\n"
-					"[NODES]\n"
-					"Node: 00000000-0000-0000-0000-000000000001\n"
-					"  Type: /Script/Flow.FlowNode_Start\n"
-					"  Properties:\n"
-					"  InputPins:\n"
-					"  OutputPins:\n"
-					"    - Out [Exec]\n"
-					"\n"
-					"Node: 00000000-0000-0000-0000-000000000002\n"
-					"  Type: /Script/Flow.FlowNode_Finish\n"
-					"  Properties:\n"
-					"  InputPins:\n"
-					"    - In [Exec]\n"
-					"  OutputPins:\n"
-					"\n"
-					"---\n"
-					"\n"
-					"[CONNECTIONS]\n"
-					"00000000-0000-0000-0000-000000000001.Out -> 00000000-0000-0000-0000-000000000002.In\n"
-					"---\n"
+					"{\"formatVersion\":2,\"mode\":\"Full\",\"assetClass\":\"/Script/Flow.FlowAsset\",\"bWorldBound\":true,"
+					"\"ops\":["
+					"{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000001\",\"type\":\"/Script/Flow.FlowNode_Start\","
+					"\"outputPins\":[{\"name\":\"Out\",\"type\":\"Exec\"}]},"
+					"{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000002\",\"type\":\"/Script/Flow.FlowNode_Finish\","
+					"\"inputPins\":[{\"name\":\"In\",\"type\":\"Exec\"}]},"
+					"{\"kind\":\"AddConnection\",\"source\":{\"nodeGuid\":\"00000000-0000-0000-0000-000000000001\",\"pin\":\"Out\"},"
+					"\"target\":{\"nodeGuid\":\"00000000-0000-0000-0000-000000000002\",\"pin\":\"In\"}}"
+					"]}"
 				);
 
-				UFlowAsset* ImportedAsset = UFlowGraphRegrapher::ImportAndRegraphFromText(
+				UFlowAsset* ImportedAsset = ImportAndRegraphFixtureDocument(
 					TestImportText,
 					TEXT("/Game/Test/TestImportAndRegraph")
 				);
@@ -696,61 +935,24 @@ void FFlowGraphImporterSpec::Define()
 
 			It("should properly connect data pins in EdGraphNodes after import and regraph", [this]()
 			{
-				// Create a flow with data pin connections: FN_Spawn.Location -> FN_UpdateMapMarker.MapMarkerLocation
+				// Uses FlowNode_FormatText (native, agnostic): it has both a real static output
+				// data pin ("Formatted Text", Text) and a property-meta-driven input data pin
+				// ("FormatText", Text via DefaultForInputFlowPin), exercising the full node-to-node
+				// data pin wiring path without any unsynced Blueprint content.
 				TestImportText = TEXT(
-					"FlowGraphExport v1.0\n"
-					"WorldBound: true\n"
-					"ExpectedOwnerClass: None\n"
-					"---\n"
-					"\n"
-					"[NODES]\n"
-					"Node: 00000000-0000-0000-0000-000000000001\n"
-					"  Type: /Script/Flow.FlowNode_Start\n"
-					"  Properties:\n"
-					"  InputPins:\n"
-					"  OutputPins:\n"
-					"    - Out [Exec]\n"
-					"\n"
-					"Node: 00000000-0000-0000-0000-000000000002\n"
-					"  Type: /LbExpeditions/Flow/FN_Spawn.FN_Spawn_C\n"
-					"  Properties:\n"
-					"    ActorType: /LbExpeditions/Flow/EA_Flow_GoalLocation.EA_Flow_GoalLocation_C\n"
-					"  InputPins:\n"
-					"    - In [Exec]\n"
-					"  OutputPins:\n"
-					"    - OnSpawned [Exec]\n"
-					"    - ActorID [InstancedStruct]\n"
-					"    - Location [Vector]\n"
-					"\n"
-					"Node: 00000000-0000-0000-0000-000000000003\n"
-					"  Type: /LbExpeditions/Flow/FN_UpdateMapMarker.FN_UpdateMapMarker_C\n"
-					"  Properties:\n"
-					"  InputPins:\n"
-					"    - In [Exec]\n"
-					"    - MapMarkerLocation [Vector]\n"
-					"  OutputPins:\n"
-					"    - Out [Exec]\n"
-					"\n"
-					"Node: 00000000-0000-0000-0000-000000000004\n"
-					"  Type: /Script/Flow.FlowNode_Finish\n"
-					"  Properties:\n"
-					"  InputPins:\n"
-					"    - In [Exec]\n"
-					"  OutputPins:\n"
-					"\n"
-					"---\n"
-					"\n"
-					"[CONNECTIONS]\n"
-					"; Exec connections\n"
-					"00000000-0000-0000-0000-000000000001.Out -> 00000000-0000-0000-0000-000000000002.In\n"
-					"00000000-0000-0000-0000-000000000002.OnSpawned -> 00000000-0000-0000-0000-000000000003.In\n"
-					"00000000-0000-0000-0000-000000000003.Out -> 00000000-0000-0000-0000-000000000004.In\n"
-					"; Data connection - this is what we're testing\n"
-					"00000000-0000-0000-0000-000000000002.Location -> 00000000-0000-0000-0000-000000000003.MapMarkerLocation\n"
-					"---\n"
+					"{\"formatVersion\":2,\"mode\":\"Full\",\"assetClass\":\"/Script/Flow.FlowAsset\",\"bWorldBound\":true,"
+					"\"ops\":["
+					"{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000001\",\"type\":\"/Script/Flow.FlowNode_FormatText\","
+					"\"outputPins\":[{\"name\":\"Formatted Text\",\"type\":\"Text\"}]},"
+					"{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000002\",\"type\":\"/Script/Flow.FlowNode_FormatText\","
+					"\"inputPins\":[{\"name\":\"FormatText\",\"type\":\"Text\"}],"
+					"\"outputPins\":[{\"name\":\"Formatted Text\",\"type\":\"Text\"}]},"
+					"{\"kind\":\"AddConnection\",\"source\":{\"nodeGuid\":\"00000000-0000-0000-0000-000000000001\",\"pin\":\"Formatted Text\"},"
+					"\"target\":{\"nodeGuid\":\"00000000-0000-0000-0000-000000000002\",\"pin\":\"FormatText\"}}"
+					"]}"
 				);
 
-				UFlowAsset* ImportedAsset = UFlowGraphRegrapher::ImportAndRegraphFromText(
+				UFlowAsset* ImportedAsset = ImportAndRegraphFixtureDocument(
 					TestImportText,
 					TEXT("/Game/Test/TestDataPinImportAndRegraph")
 				);
@@ -764,80 +966,80 @@ void FFlowGraphImporterSpec::Define()
 					TestNotNull("FlowGraph should exist", FlowGraph);
 
 					// Get the nodes
-					FGuid SpawnGuid;
-					FGuid::Parse(TEXT("00000000-0000-0000-0000-000000000002"), SpawnGuid);
-					UFlowNode* SpawnNode = ImportedAsset->GetNode(SpawnGuid);
-					
-					FGuid MapMarkerGuid;
-					FGuid::Parse(TEXT("00000000-0000-0000-0000-000000000003"), MapMarkerGuid);
-					UFlowNode* MapMarkerNode = ImportedAsset->GetNode(MapMarkerGuid);
+					FGuid SourceGuid;
+					FGuid::Parse(TEXT("00000000-0000-0000-0000-000000000001"), SourceGuid);
+					UFlowNode* SourceNode = ImportedAsset->GetNode(SourceGuid);
 
-					TestNotNull("FN_Spawn node should exist", SpawnNode);
-					TestNotNull("FN_UpdateMapMarker node should exist", MapMarkerNode);
+					FGuid TargetGuid;
+					FGuid::Parse(TEXT("00000000-0000-0000-0000-000000000002"), TargetGuid);
+					UFlowNode* TargetNode = ImportedAsset->GetNode(TargetGuid);
 
-					if (SpawnNode && MapMarkerNode)
+					TestNotNull("Source FormatText node should exist", SourceNode);
+					TestNotNull("Target FormatText node should exist", TargetNode);
+
+					if (SourceNode && TargetNode)
 					{
 						// Get the EdGraphNodes
-						UEdGraphNode* SpawnGraphNode = SpawnNode->GetGraphNode();
-						UEdGraphNode* MapMarkerGraphNode = MapMarkerNode->GetGraphNode();
+						UEdGraphNode* SourceGraphNode = SourceNode->GetGraphNode();
+						UEdGraphNode* TargetGraphNode = TargetNode->GetGraphNode();
 
-						TestNotNull("FN_Spawn should have a graph node", SpawnGraphNode);
-						TestNotNull("FN_UpdateMapMarker should have a graph node", MapMarkerGraphNode);
+						TestNotNull("Source node should have a graph node", SourceGraphNode);
+						TestNotNull("Target node should have a graph node", TargetGraphNode);
 
-						if (SpawnGraphNode && MapMarkerGraphNode)
+						if (SourceGraphNode && TargetGraphNode)
 						{
-							// Find the Location output pin on FN_Spawn
-							UEdGraphPin* LocationOutputPin = nullptr;
-							for (UEdGraphPin* Pin : SpawnGraphNode->Pins)
+							// Find the "Formatted Text" output pin on the source node
+							UEdGraphPin* TextOutputPin = nullptr;
+							for (UEdGraphPin* Pin : SourceGraphNode->Pins)
 							{
-								if (Pin && Pin->PinName == TEXT("Location") && Pin->Direction == EGPD_Output)
+								if (Pin && Pin->PinName == TEXT("Formatted Text") && Pin->Direction == EGPD_Output)
 								{
-									LocationOutputPin = Pin;
+									TextOutputPin = Pin;
 									break;
 								}
 							}
 
-							// Find the MapMarkerLocation input pin on FN_UpdateMapMarker
-							UEdGraphPin* MapMarkerLocationInputPin = nullptr;
-							for (UEdGraphPin* Pin : MapMarkerGraphNode->Pins)
+							// Find the "FormatText" input pin on the target node
+							UEdGraphPin* FormatTextInputPin = nullptr;
+							for (UEdGraphPin* Pin : TargetGraphNode->Pins)
 							{
-								if (Pin && Pin->PinName == TEXT("MapMarkerLocation") && Pin->Direction == EGPD_Input)
+								if (Pin && Pin->PinName == TEXT("FormatText") && Pin->Direction == EGPD_Input)
 								{
-									MapMarkerLocationInputPin = Pin;
+									FormatTextInputPin = Pin;
 									break;
 								}
 							}
 
-							TestNotNull("FN_Spawn should have Location output pin", LocationOutputPin);
-							TestNotNull("FN_UpdateMapMarker should have MapMarkerLocation input pin", MapMarkerLocationInputPin);
+							TestNotNull("Source node should have a Formatted Text output pin", TextOutputPin);
+							TestNotNull("Target node should have a FormatText input pin", FormatTextInputPin);
 
-							if (LocationOutputPin && MapMarkerLocationInputPin)
+							if (TextOutputPin && FormatTextInputPin)
 							{
 								// Verify the data pin connection exists in the EdGraph
 								bool bFoundConnection = false;
-								for (UEdGraphPin* LinkedPin : LocationOutputPin->LinkedTo)
+								for (UEdGraphPin* LinkedPin : TextOutputPin->LinkedTo)
 								{
-									if (LinkedPin == MapMarkerLocationInputPin)
+									if (LinkedPin == FormatTextInputPin)
 									{
 										bFoundConnection = true;
 										break;
 									}
 								}
 
-								TestTrue("Location output pin should be linked to MapMarkerLocation input pin", bFoundConnection);
+								TestTrue("Formatted Text output pin should be linked to FormatText input pin", bFoundConnection);
 
 								// Also verify the reverse connection
 								bool bFoundReverseConnection = false;
-								for (UEdGraphPin* LinkedPin : MapMarkerLocationInputPin->LinkedTo)
+								for (UEdGraphPin* LinkedPin : FormatTextInputPin->LinkedTo)
 								{
-									if (LinkedPin == LocationOutputPin)
+									if (LinkedPin == TextOutputPin)
 									{
 										bFoundReverseConnection = true;
 										break;
 									}
 								}
 
-								TestTrue("MapMarkerLocation input pin should be linked to Location output pin", bFoundReverseConnection);
+								TestTrue("FormatText input pin should be linked to Formatted Text output pin", bFoundReverseConnection);
 							}
 						}
 					}
@@ -854,30 +1056,20 @@ void FFlowGraphImporterSpec::Define()
 			auto MakeSwitchCaseAddonText = [](const FString& CaseName) -> FString
 			{
 				return FString::Printf(TEXT(
-					"FlowGraphExport v1.0\n"
-					"WorldBound: false\n"
-					"ExpectedOwnerClass: None\n"
-					"---\n\n"
-					"[NODES]\n"
-					"Node: 00000000-0000-0000-0000-000000000001\n"
-					"  Type: /Script/Flow.FlowNode_Start\n"
-					"  Properties:\n"
-					"  InputPins:\n"
-					"  OutputPins:\n"
-					"    - Out [Exec]\n"
-					"  AddOn: /Script/Flow.FlowNodeAddOn_SwitchCase\n"
-					"    CaseName: %s\n"
-					"\n"
-					"---\n\n"
-					"[CONNECTIONS]\n"
-					"---\n"
+					"{\"formatVersion\":2,\"mode\":\"Full\",\"bWorldBound\":false,"
+					"\"ops\":["
+					"{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000001\",\"type\":\"/Script/Flow.FlowNode_Start\","
+					"\"outputPins\":[{\"name\":\"Out\",\"type\":\"Exec\"}]},"
+					"{\"kind\":\"UpsertAddon\",\"newAlias\":\"case\",\"parentGuid\":\"00000000-0000-0000-0000-000000000001\","
+					"\"type\":\"/Script/Flow.FlowNodeAddOn_SwitchCase\",\"properties\":{\"CaseName\":\"%s\"}}"
+					"]}"
 				), *CaseName);
 			};
 
 			It("should import a node with a single AddOn attached", [this, MakeSwitchCaseAddonText]()
 			{
 				FString ErrorMessage;
-				TestFlowAsset = UFlowGraphImporter::ImportFlowGraphFromText(
+				TestFlowAsset = ImportFromExportedJson(
 					TEXT("/Game/Test/TestAddOnImportSingle"),
 					MakeSwitchCaseAddonText(TEXT("CaseA")),
 					ErrorMessage
@@ -912,10 +1104,216 @@ void FFlowGraphImporterSpec::Define()
 				}
 			});
 
+			It("should preserve imported AddOns through regraph and save update", [this, MakeSwitchCaseAddonText]()
+			{
+				FString ErrorMessage;
+				TestFlowAsset = ImportFromExportedJson(
+					TEXT("/Game/Test/TestAddOnRegraph"),
+					MakeSwitchCaseAddonText(TEXT("CaseRegraph")),
+					ErrorMessage
+				);
+				TestNotNull("Imported asset should not be null", TestFlowAsset);
+				if (!TestFlowAsset)
+				{
+					return;
+				}
+				TestTrue("Regraph should succeed", UFlowGraphRegrapher::RegraphFlowAsset(TestFlowAsset));
+				UFlowGraph* const FlowGraph = Cast<UFlowGraph>(TestFlowAsset->GetGraph());
+				TestNotNull("Editor graph should exist", FlowGraph);
+				if (!FlowGraph)
+				{
+					return;
+				}
+				FlowGraph->OnSave();
+				FGuid NodeGuid;
+				FGuid::Parse(TEXT("00000000-0000-0000-0000-000000000001"), NodeGuid);
+				UFlowNode* const StartNode = TestFlowAsset->GetNode(NodeGuid);
+				TestNotNull("Start node should exist", StartNode);
+				if (!StartNode)
+				{
+					return;
+				}
+				const TArray<UFlowNodeAddOn*>& AddOns = StartNode->GetFlowNodeAddOnChildren();
+				TestEqual("Runtime AddOn should survive save update", AddOns.Num(), 1);
+				UFlowGraphNode* EditorNode = nullptr;
+				for (UEdGraphNode* const Candidate : FlowGraph->Nodes)
+				{
+					UFlowGraphNode* const FlowCandidate = Cast<UFlowGraphNode>(Candidate);
+					if (FlowCandidate && FlowCandidate->GetFlowNodeBase() == StartNode)
+					{
+						EditorNode = FlowCandidate;
+						break;
+					}
+				}
+				TestNotNull("Editor node should exist", EditorNode);
+				if (EditorNode)
+				{
+					TestEqual("Editor node should have one AddOn subnode", EditorNode->SubNodes.Num(), 1);
+					if (EditorNode->SubNodes.Num() == 1 && AddOns.Num() == 1)
+					{
+						TestEqual("Editor AddOn should mirror runtime AddOn",
+							EditorNode->SubNodes[0]->GetFlowNodeBase(), static_cast<UFlowNodeBase*>(AddOns[0]));
+						UFlowGraphNode* const OriginalSubNode = EditorNode->SubNodes[0];
+						TestTrue("Second regraph should succeed", UFlowGraphRegrapher::RegraphFlowAsset(TestFlowAsset));
+						TestEqual("Second regraph should reuse the AddOn subnode", EditorNode->SubNodes.Num(), 1);
+						if (EditorNode->SubNodes.Num() == 1)
+						{
+							TestEqual("Second regraph should preserve subnode identity",
+								EditorNode->SubNodes[0].Get(), OriginalSubNode);
+						}
+						StartNode->GetFlowNodeAddOnChildrenByEditor().Reset();
+						TestTrue("Regraph after runtime removal should succeed",
+							UFlowGraphRegrapher::RegraphFlowAsset(TestFlowAsset));
+						FlowGraph->OnSave();
+						TestTrue("Removed runtime AddOn should stay removed",
+							StartNode->GetFlowNodeAddOnChildren().IsEmpty());
+						TestTrue("Removed AddOn editor subnode should be pruned", EditorNode->SubNodes.IsEmpty());
+					}
+				}
+				TestFlowAsset->GetPackage()->SetDirtyFlag(false);
+			});
+
+			It("should preserve a runtime AddOn reparent in either direction", [this]()
+			{
+				const FString Document = TEXT(
+					"{\"formatVersion\":2,\"mode\":\"Full\",\"bWorldBound\":false,\"ops\":["
+					"{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000001\",\"type\":\"/Script/Flow.FlowNode_Start\"},"
+					"{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000002\",\"type\":\"/Script/Flow.FlowNode_Finish\"},"
+					"{\"kind\":\"UpsertAddon\",\"newAlias\":\"case\",\"parentGuid\":\"00000000-0000-0000-0000-000000000001\","
+					"\"type\":\"/Script/Flow.FlowNodeAddOn_SwitchCase\",\"properties\":{\"CaseName\":\"ReparentCase\"}}]}");
+				FString ErrorMessage;
+				TestFlowAsset = ImportFromExportedJson(TEXT("/Game/Test/TestAddOnReparent"), Document, ErrorMessage);
+				TestNotNull("Imported asset should not be null", TestFlowAsset);
+				if (!TestFlowAsset || !UFlowGraphRegrapher::RegraphFlowAsset(TestFlowAsset))
+				{
+					return;
+				}
+				FGuid StartGuid;
+				FGuid FinishGuid;
+				FGuid::Parse(TEXT("00000000-0000-0000-0000-000000000001"), StartGuid);
+				FGuid::Parse(TEXT("00000000-0000-0000-0000-000000000002"), FinishGuid);
+				UFlowNode* const StartNode = TestFlowAsset->GetNode(StartGuid);
+				UFlowNode* const FinishNode = TestFlowAsset->GetNode(FinishGuid);
+				if (!StartNode || !FinishNode || StartNode->GetFlowNodeAddOnChildren().Num() != 1)
+				{
+					AddError(TEXT("Imported reparent fixture is incomplete."));
+					return;
+				}
+				UFlowNodeAddOn* const AddOn = StartNode->GetFlowNodeAddOnChildren()[0];
+				auto MoveAndVerify = [this, AddOn](UFlowNode* FromNode, UFlowNode* ToNode, const TCHAR* Label)
+				{
+					FromNode->GetFlowNodeAddOnChildrenByEditor().Reset();
+					ToNode->GetFlowNodeAddOnChildrenByEditor().Add(AddOn);
+					TestTrue(FString::Printf(TEXT("%s regraph succeeds"), Label),
+						UFlowGraphRegrapher::RegraphFlowAsset(TestFlowAsset));
+					CastChecked<UFlowGraph>(TestFlowAsset->GetGraph())->OnSave();
+					TestTrue(FString::Printf(TEXT("%s old parent stays empty"), Label),
+						FromNode->GetFlowNodeAddOnChildren().IsEmpty());
+					TestEqual(FString::Printf(TEXT("%s new parent owns AddOn"), Label),
+						ToNode->GetFlowNodeAddOnChildren().Num(), 1);
+					const UFlowGraphNode* const AddOnGraphNode = Cast<UFlowGraphNode>(AddOn->GetGraphNode());
+					TestTrue(FString::Printf(TEXT("%s editor subnode points at the new parent"), Label),
+						IsValid(AddOnGraphNode) && IsValid(AddOnGraphNode->GetParentNode())
+							&& AddOnGraphNode->GetParentNode()->GetFlowNodeBase() == ToNode);
+				};
+				MoveAndVerify(StartNode, FinishNode, TEXT("Forward"));
+				MoveAndVerify(FinishNode, StartNode, TEXT("Reverse"));
+				TestFlowAsset->GetPackage()->SetDirtyFlag(false);
+			});
+
+			It("should reject one runtime AddOn owned by multiple parents before mutation", [this]()
+			{
+				const FString Document = TEXT(
+					"{\"formatVersion\":2,\"mode\":\"Full\",\"bWorldBound\":false,\"ops\":["
+					"{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000001\",\"type\":\"/Script/Flow.FlowNode_Start\"},"
+					"{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000002\",\"type\":\"/Script/Flow.FlowNode_Finish\"},"
+					"{\"kind\":\"UpsertAddon\",\"newAlias\":\"case\",\"parentGuid\":\"00000000-0000-0000-0000-000000000001\","
+					"\"type\":\"/Script/Flow.FlowNodeAddOn_SwitchCase\",\"properties\":{\"CaseName\":\"SharedCase\"}}]}");
+				FString ErrorMessage;
+				TestFlowAsset = ImportFromExportedJson(TEXT("/Game/Test/TestAddOnMultipleParents"), Document, ErrorMessage);
+				TestNotNull("Imported asset should not be null", TestFlowAsset);
+				if (!TestFlowAsset || !UFlowGraphRegrapher::RegraphFlowAsset(TestFlowAsset))
+				{
+					return;
+				}
+				FGuid StartGuid;
+				FGuid FinishGuid;
+				FGuid::Parse(TEXT("00000000-0000-0000-0000-000000000001"), StartGuid);
+				FGuid::Parse(TEXT("00000000-0000-0000-0000-000000000002"), FinishGuid);
+				UFlowNode* const StartNode = TestFlowAsset->GetNode(StartGuid);
+				UFlowNode* const FinishNode = TestFlowAsset->GetNode(FinishGuid);
+				if (!StartNode || !FinishNode || StartNode->GetFlowNodeAddOnChildren().Num() != 1)
+				{
+					AddError(TEXT("Imported multiple-parent fixture is incomplete."));
+					return;
+				}
+				UFlowNodeAddOn* const AddOn = StartNode->GetFlowNodeAddOnChildren()[0];
+				UFlowGraphNode* const OriginalWrapper = Cast<UFlowGraphNode>(AddOn->GetGraphNode());
+				UFlowGraphNode* const OriginalParent = IsValid(OriginalWrapper)
+					? OriginalWrapper->GetParentNode() : nullptr;
+				FinishNode->GetFlowNodeAddOnChildrenByEditor().Add(AddOn);
+				AddExpectedError(TEXT("has more than one parent"), EAutomationExpectedErrorFlags::Contains, 1);
+				TestFalse("Multiple runtime parents should fail regraph",
+					UFlowGraphRegrapher::RegraphFlowAsset(TestFlowAsset));
+				UFlowGraph* const FlowGraph = Cast<UFlowGraph>(TestFlowAsset->GetGraph());
+				TestFalse("Failed preflight should leave graph unlocked", IsValid(FlowGraph) && FlowGraph->IsLocked());
+				TestEqual("Failed preflight should preserve wrapper identity",
+					Cast<UFlowGraphNode>(AddOn->GetGraphNode()), OriginalWrapper);
+				TestEqual("Failed preflight should preserve editor parent",
+					IsValid(OriginalWrapper) ? OriginalWrapper->GetParentNode() : nullptr, OriginalParent);
+				TestFlowAsset->GetPackage()->SetDirtyFlag(false);
+			});
+
+			It("should preflight invalid runtime endpoints before editor mutation", [this]()
+			{
+				const FString Document = TEXT(
+					"{\"formatVersion\":2,\"mode\":\"Full\",\"bWorldBound\":false,\"ops\":["
+					"{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000001\",\"type\":\"/Script/Flow.FlowNode_Start\"},"
+					"{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000002\",\"type\":\"/Script/Flow.FlowNode_Finish\"}]}");
+				FString ErrorMessage;
+				TestFlowAsset = ImportFromExportedJson(TEXT("/Game/Test/TestRegraphInvalidEndpoint"), Document, ErrorMessage);
+				if (!TestFlowAsset || !UFlowGraphRegrapher::RegraphFlowAsset(TestFlowAsset))
+				{
+					AddError(TEXT("Imported endpoint fixture is incomplete."));
+					return;
+				}
+				FGuid StartGuid;
+				FGuid FinishGuid;
+				FGuid::Parse(TEXT("00000000-0000-0000-0000-000000000001"), StartGuid);
+				FGuid::Parse(TEXT("00000000-0000-0000-0000-000000000002"), FinishGuid);
+				UFlowNode* const StartNode = TestFlowAsset->GetNode(StartGuid);
+				UFlowNode* const FinishNode = TestFlowAsset->GetNode(FinishGuid);
+				if (!StartNode || !FinishNode || StartNode->GetOutputPins().IsEmpty()
+					|| FinishNode->GetInputPins().IsEmpty())
+				{
+					AddError(TEXT("Endpoint fixture nodes have no default pins."));
+					return;
+				}
+				const FName OutputName = StartNode->GetOutputPins()[0].PinName;
+				TMap<FName, FConnectedPin> InvalidConnections;
+				InvalidConnections.Add(OutputName, FConnectedPin(FinishGuid, TEXT("MissingInput")));
+				StartNode->SetConnections(InvalidConnections);
+				AddExpectedError(TEXT("targets missing exec input"), EAutomationExpectedErrorFlags::Contains, 1);
+				TestFalse("Missing runtime target pin should fail preflight",
+					UFlowGraphRegrapher::RegraphFlowAsset(TestFlowAsset));
+				UFlowGraph* const FlowGraph = Cast<UFlowGraph>(TestFlowAsset->GetGraph());
+				TestFalse("Failed endpoint preflight should leave graph unlocked",
+					IsValid(FlowGraph) && FlowGraph->IsLocked());
+				TestEqual("Failed endpoint preflight should preserve runtime target pin",
+					StartNode->GetConnection(OutputName).PinName, FName(TEXT("MissingInput")));
+
+				TMap<FName, FConnectedPin> ValidConnections;
+				ValidConnections.Add(OutputName,
+					FConnectedPin(FinishGuid, FinishNode->GetInputPins()[0].PinName));
+				StartNode->SetConnections(ValidConnections);
+				TestTrue("Corrected endpoint should regraph", UFlowGraphRegrapher::RegraphFlowAsset(TestFlowAsset));
+				TestFlowAsset->GetPackage()->SetDirtyFlag(false);
+			});
+
 			It("should preserve AddOn property value through import", [this, MakeSwitchCaseAddonText]()
 			{
 				FString ErrorMessage;
-				TestFlowAsset = UFlowGraphImporter::ImportFlowGraphFromText(
+				TestFlowAsset = ImportFromExportedJson(
 					TEXT("/Game/Test/TestAddOnImportProperty"),
 					MakeSwitchCaseAddonText(TEXT("MyCaseName")),
 					ErrorMessage
@@ -954,27 +1352,17 @@ void FFlowGraphImporterSpec::Define()
 			{
 				// Build the asset via importer so we have a known addon attached.
 				const FString ImportText = TEXT(
-					"FlowGraphExport v1.0\n"
-					"WorldBound: false\n"
-					"ExpectedOwnerClass: None\n"
-					"---\n\n"
-					"[NODES]\n"
-					"Node: 00000000-0000-0000-0000-000000000001\n"
-					"  Type: /Script/Flow.FlowNode_Start\n"
-					"  Properties:\n"
-					"  InputPins:\n"
-					"  OutputPins:\n"
-					"    - Out [Exec]\n"
-					"  AddOn: /Script/Flow.FlowNodeAddOn_SwitchCase\n"
-					"    CaseName: ExportedCase\n"
-					"\n"
-					"---\n\n"
-					"[CONNECTIONS]\n"
-					"---\n"
+					"{\"formatVersion\":2,\"mode\":\"Full\",\"bWorldBound\":false,"
+					"\"ops\":["
+					"{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000001\",\"type\":\"/Script/Flow.FlowNode_Start\","
+					"\"outputPins\":[{\"name\":\"Out\",\"type\":\"Exec\"}]},"
+					"{\"kind\":\"UpsertAddon\",\"newAlias\":\"case\",\"parentGuid\":\"00000000-0000-0000-0000-000000000001\","
+					"\"type\":\"/Script/Flow.FlowNodeAddOn_SwitchCase\",\"properties\":{\"CaseName\":\"ExportedCase\"}}"
+					"]}"
 				);
 
 				FString ErrorMessage;
-				TestFlowAsset = UFlowGraphImporter::ImportFlowGraphFromText(
+				TestFlowAsset = ImportFromExportedJson(
 					TEXT("/Game/Test/TestAddOnExport"),
 					ImportText,
 					ErrorMessage
@@ -990,8 +1378,8 @@ void FFlowGraphImporterSpec::Define()
 				const FString ExportedText = UFlowGraphExporter::ExportFlowGraphToString(TestFlowAsset);
 
 				TestFalse("Exported text should not be empty", ExportedText.IsEmpty());
-				TestTrue("Exported text should contain AddOn: line",
-					ExportedText.Contains(TEXT("AddOn:")));
+				TestTrue("Exported text should contain an UpsertAddon op",
+					ExportedText.Contains(TEXT("\"kind\": \"UpsertAddon\"")));
 				TestTrue("Exported text should contain the SwitchCase class path",
 					ExportedText.Contains(TEXT("FlowNodeAddOn_SwitchCase")));
 			});
@@ -999,7 +1387,7 @@ void FFlowGraphImporterSpec::Define()
 			It("should roundtrip a node with a single AddOn preserving type and property", [this, MakeSwitchCaseAddonText]()
 			{
 				FString ErrorMessage;
-				UFlowAsset* OriginalAsset = UFlowGraphImporter::ImportFlowGraphFromText(
+				UFlowAsset* OriginalAsset = ImportFromExportedJson(
 					TEXT("/Game/Test/TestAddOnRoundtripOrig"),
 					MakeSwitchCaseAddonText(TEXT("RoundtripCase")),
 					ErrorMessage
@@ -1015,11 +1403,7 @@ void FFlowGraphImporterSpec::Define()
 				const FString ExportedText = UFlowGraphExporter::ExportFlowGraphToString(OriginalAsset);
 				TestFalse("Exported text should not be empty", ExportedText.IsEmpty());
 
-				TestFlowAsset = UFlowGraphImporter::ImportFlowGraphFromText(
-					TEXT("/Game/Test/TestAddOnRoundtripReimport"),
-					ExportedText,
-					ErrorMessage
-				);
+				TestFlowAsset = ImportFromExportedJson(TEXT("/Game/Test/TestAddOnRoundtripReimport"), ExportedText, ErrorMessage);
 
 				// Clean up original (not tracked by TestFlowAsset)
 				OriginalAsset->ClearFlags(RF_Standalone);
@@ -1057,29 +1441,19 @@ void FFlowGraphImporterSpec::Define()
 			It("should roundtrip multiple AddOns on the same node preserving order", [this]()
 			{
 				const FString ImportText = TEXT(
-					"FlowGraphExport v1.0\n"
-					"WorldBound: false\n"
-					"ExpectedOwnerClass: None\n"
-					"---\n\n"
-					"[NODES]\n"
-					"Node: 00000000-0000-0000-0000-000000000001\n"
-					"  Type: /Script/Flow.FlowNode_Start\n"
-					"  Properties:\n"
-					"  InputPins:\n"
-					"  OutputPins:\n"
-					"    - Out [Exec]\n"
-					"  AddOn: /Script/Flow.FlowNodeAddOn_SwitchCase\n"
-					"    CaseName: Alpha\n"
-					"  AddOn: /Script/Flow.FlowNodeAddOn_SwitchCase\n"
-					"    CaseName: Beta\n"
-					"\n"
-					"---\n\n"
-					"[CONNECTIONS]\n"
-					"---\n"
+					"{\"formatVersion\":2,\"mode\":\"Full\",\"bWorldBound\":false,"
+					"\"ops\":["
+					"{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000001\",\"type\":\"/Script/Flow.FlowNode_Start\","
+					"\"outputPins\":[{\"name\":\"Out\",\"type\":\"Exec\"}]},"
+					"{\"kind\":\"UpsertAddon\",\"newAlias\":\"caseAlpha\",\"parentGuid\":\"00000000-0000-0000-0000-000000000001\","
+					"\"type\":\"/Script/Flow.FlowNodeAddOn_SwitchCase\",\"properties\":{\"CaseName\":\"Alpha\"}},"
+					"{\"kind\":\"UpsertAddon\",\"newAlias\":\"caseBeta\",\"parentGuid\":\"00000000-0000-0000-0000-000000000001\","
+					"\"type\":\"/Script/Flow.FlowNodeAddOn_SwitchCase\",\"properties\":{\"CaseName\":\"Beta\"}}"
+					"]}"
 				);
 
 				FString ErrorMessage;
-				UFlowAsset* OriginalAsset = UFlowGraphImporter::ImportFlowGraphFromText(
+				UFlowAsset* OriginalAsset = ImportFromExportedJson(
 					TEXT("/Game/Test/TestMultiAddOnOrig"),
 					ImportText,
 					ErrorMessage
@@ -1108,11 +1482,7 @@ void FFlowGraphImporterSpec::Define()
 				OriginalAsset->ClearFlags(RF_Standalone);
 				OriginalAsset->MarkAsGarbage();
 
-				TestFlowAsset = UFlowGraphImporter::ImportFlowGraphFromText(
-					TEXT("/Game/Test/TestMultiAddOnReimport"),
-					ExportedText,
-					ErrorMessage
-				);
+				TestFlowAsset = ImportFromExportedJson(TEXT("/Game/Test/TestMultiAddOnReimport"), ExportedText, ErrorMessage);
 
 				TestNotNull("Re-imported asset should not be null", TestFlowAsset);
 				if (!TestFlowAsset)
@@ -1153,26 +1523,17 @@ void FFlowGraphImporterSpec::Define()
 			It("should fail import gracefully when AddOn class path is unknown", [this]()
 			{
 				const FString ImportText = TEXT(
-					"FlowGraphExport v1.0\n"
-					"WorldBound: false\n"
-					"ExpectedOwnerClass: None\n"
-					"---\n\n"
-					"[NODES]\n"
-					"Node: 00000000-0000-0000-0000-000000000001\n"
-					"  Type: /Script/Flow.FlowNode_Start\n"
-					"  Properties:\n"
-					"  InputPins:\n"
-					"  OutputPins:\n"
-					"    - Out [Exec]\n"
-					"  AddOn: /Script/Flow.FlowNodeAddOn_DoesNotExist\n"
-					"\n"
-					"---\n\n"
-					"[CONNECTIONS]\n"
-					"---\n"
+					"{\"formatVersion\":2,\"mode\":\"Full\",\"bWorldBound\":false,"
+					"\"ops\":["
+					"{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000001\",\"type\":\"/Script/Flow.FlowNode_Start\","
+					"\"outputPins\":[{\"name\":\"Out\",\"type\":\"Exec\"}]},"
+					"{\"kind\":\"UpsertAddon\",\"newAlias\":\"case\",\"parentGuid\":\"00000000-0000-0000-0000-000000000001\","
+					"\"type\":\"/Script/Flow.FlowNodeAddOn_DoesNotExist\"}"
+					"]}"
 				);
 
 				FString ErrorMessage;
-				TestFlowAsset = UFlowGraphImporter::ImportFlowGraphFromText(
+				TestFlowAsset = ImportFromExportedJson(
 					TEXT("/Game/Test/TestAddOnUnknownClass"),
 					ImportText,
 					ErrorMessage
@@ -1191,55 +1552,32 @@ void FFlowGraphImporterSpec::Define()
 				// (only 0 and 1 exist by default) and fell back to wildcard/data, causing the
 				// connection to be stored on the wrong node and silently dropped on export.
 				TestImportText = TEXT(
-					"FlowGraphExport v1.0\n"
-					"WorldBound: true\n"
-					"ExpectedOwnerClass: None\n"
-					"---\n\n"
-					"[NODES]\n"
-					"Node: 00000000-0000-0000-0000-000000000001\n"
-					"  Type: /Script/Flow.FlowNode_Start\n"
-					"  Properties:\n"
-					"  InputPins:\n"
-					"  OutputPins:\n"
-					"    - Out [Exec]\n\n"
-					"Node: 00000000-0000-0000-0000-000000000002\n"
-					"  Type: /Script/Flow.FlowNode_ExecutionSequence\n"
-					"  Properties:\n"
-					"  InputPins:\n"
-					"    - In [Exec]\n"
-					"  OutputPins:\n"
-					"    - 0 [Exec]\n"
-					"    - 1 [Exec]\n"
-					"    - 2 [Exec]\n\n"
-					"Node: 00000000-0000-0000-0000-000000000003\n"
-					"  Type: /Script/Flow.FlowNode_Finish\n"
-					"  Properties:\n"
-					"  InputPins:\n"
-					"    - In [Exec]\n"
-					"  OutputPins:\n\n"
-					"Node: 00000000-0000-0000-0000-000000000004\n"
-					"  Type: /Script/Flow.FlowNode_Finish\n"
-					"  Properties:\n"
-					"  InputPins:\n"
-					"    - In [Exec]\n"
-					"  OutputPins:\n\n"
-					"Node: 00000000-0000-0000-0000-000000000005\n"
-					"  Type: /Script/Flow.FlowNode_Finish\n"
-					"  Properties:\n"
-					"  InputPins:\n"
-					"    - In [Exec]\n"
-					"  OutputPins:\n\n"
-					"---\n\n"
-					"[CONNECTIONS]\n"
-					"00000000-0000-0000-0000-000000000001.Out -> 00000000-0000-0000-0000-000000000002.In\n"
-					"00000000-0000-0000-0000-000000000002.0 -> 00000000-0000-0000-0000-000000000003.In\n"
-					"00000000-0000-0000-0000-000000000002.1 -> 00000000-0000-0000-0000-000000000004.In\n"
-					"00000000-0000-0000-0000-000000000002.2 -> 00000000-0000-0000-0000-000000000005.In\n"
-					"---\n"
+					"{\"formatVersion\":2,\"mode\":\"Full\",\"bWorldBound\":true,"
+					"\"ops\":["
+					"{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000001\",\"type\":\"/Script/Flow.FlowNode_Start\","
+					"\"outputPins\":[{\"name\":\"Out\",\"type\":\"Exec\"}]},"
+					"{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000002\",\"type\":\"/Script/Flow.FlowNode_ExecutionSequence\","
+					"\"inputPins\":[{\"name\":\"In\",\"type\":\"Exec\"}],"
+					"\"outputPins\":[{\"name\":\"0\",\"type\":\"Exec\"},{\"name\":\"1\",\"type\":\"Exec\"},{\"name\":\"2\",\"type\":\"Exec\"}]},"
+					"{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000003\",\"type\":\"/Script/Flow.FlowNode_Finish\","
+					"\"inputPins\":[{\"name\":\"In\",\"type\":\"Exec\"}]},"
+					"{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000004\",\"type\":\"/Script/Flow.FlowNode_Finish\","
+					"\"inputPins\":[{\"name\":\"In\",\"type\":\"Exec\"}]},"
+					"{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000005\",\"type\":\"/Script/Flow.FlowNode_Finish\","
+					"\"inputPins\":[{\"name\":\"In\",\"type\":\"Exec\"}]},"
+					"{\"kind\":\"AddConnection\",\"source\":{\"nodeGuid\":\"00000000-0000-0000-0000-000000000001\",\"pin\":\"Out\"},"
+					"\"target\":{\"nodeGuid\":\"00000000-0000-0000-0000-000000000002\",\"pin\":\"In\"}},"
+					"{\"kind\":\"AddConnection\",\"source\":{\"nodeGuid\":\"00000000-0000-0000-0000-000000000002\",\"pin\":\"0\"},"
+					"\"target\":{\"nodeGuid\":\"00000000-0000-0000-0000-000000000003\",\"pin\":\"In\"}},"
+					"{\"kind\":\"AddConnection\",\"source\":{\"nodeGuid\":\"00000000-0000-0000-0000-000000000002\",\"pin\":\"1\"},"
+					"\"target\":{\"nodeGuid\":\"00000000-0000-0000-0000-000000000004\",\"pin\":\"In\"}},"
+					"{\"kind\":\"AddConnection\",\"source\":{\"nodeGuid\":\"00000000-0000-0000-0000-000000000002\",\"pin\":\"2\"},"
+					"\"target\":{\"nodeGuid\":\"00000000-0000-0000-0000-000000000005\",\"pin\":\"In\"}}"
+					"]}"
 				);
 
 				FString ErrorMessage;
-				TestFlowAsset = UFlowGraphImporter::ImportFlowGraphFromText(
+				TestFlowAsset = ImportFromExportedJson(
 					TEXT("/Game/Test/TestDynamicExecPin"),
 					TestImportText,
 					ErrorMessage
@@ -1275,6 +1613,335 @@ void FFlowGraphImporterSpec::Define()
 				}
 			});
 		});
+
+		// P7.2/P7.4 - Declared pin reconstruction and pin type round-trip
+		Describe("Declared pin reconstruction (P7.4)", [this]()
+		{
+			It("ParsePinDecl parses name, type, and sub-category path correctly", [this]()
+			{
+				FName Name; FString Type; FString SubCat;
+
+				TestTrue("'Value [Vector]' parses", UFlowGraphImporter::ParsePinDecl(TEXT("Value [Vector]"), Name, Type, SubCat));
+				TestEqual("name is Value", Name, FName("Value"));
+				TestEqual("type is Vector", Type, FString("Vector"));
+				TestTrue("no sub-category for plain type", SubCat.IsEmpty());
+
+				TestTrue("'Out [Exec]' parses", UFlowGraphImporter::ParsePinDecl(TEXT("Out [Exec]"), Name, Type, SubCat));
+				TestEqual("name is Out", Name, FName("Out"));
+				TestEqual("type is Exec", Type, FString("Exec"));
+				TestTrue("no sub-category for Exec", SubCat.IsEmpty());
+
+				// P7.3 sub-category form
+				TestTrue("'Pos [Struct:/Script/CoreUObject.Vector]' parses", UFlowGraphImporter::ParsePinDecl(TEXT("Pos [Struct:/Script/CoreUObject.Vector]"), Name, Type, SubCat));
+				TestEqual("name is Pos", Name, FName("Pos"));
+				TestEqual("type is Struct", Type, FString("Struct"));
+				TestEqual("sub-category path", SubCat, FString("/Script/CoreUObject.Vector"));
+
+				TestTrue("bare name parses", UFlowGraphImporter::ParsePinDecl(TEXT("MyPin"), Name, Type, SubCat));
+				TestEqual("bare name is MyPin", Name, FName("MyPin"));
+				TestTrue("bare name has empty type", Type.IsEmpty());
+				TestTrue("bare name has empty sub-category", SubCat.IsEmpty());
+
+				TestFalse("empty string does not parse", UFlowGraphImporter::ParsePinDecl(TEXT(""), Name, Type, SubCat));
+			});
+
+			It("declared unconnected data pin is reconstructed on import", [this]()
+			{
+				// A node that declares a data output pin but has no connection using it.
+				// Before P7.4 fix, this pin was silently lost after import.
+				TestImportText = TEXT(
+					"{\"formatVersion\":2,\"mode\":\"Full\",\"assetClass\":\"/Script/Flow.FlowAsset\",\"bWorldBound\":true,"
+					"\"ops\":["
+					"{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000001\",\"type\":\"/Script/Flow.FlowNode_Start\","
+					"\"outputPins\":[{\"name\":\"Out\",\"type\":\"Exec\"},{\"name\":\"DataOut\",\"type\":\"Vector\"}]},"
+					"{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000002\",\"type\":\"/Script/Flow.FlowNode_Finish\","
+					"\"inputPins\":[{\"name\":\"In\",\"type\":\"Exec\"},{\"name\":\"DataIn\",\"type\":\"Int\"}]},"
+					"{\"kind\":\"AddConnection\",\"source\":{\"nodeGuid\":\"00000000-0000-0000-0000-000000000001\",\"pin\":\"Out\"},"
+					"\"target\":{\"nodeGuid\":\"00000000-0000-0000-0000-000000000002\",\"pin\":\"In\"}}"
+					"]}"
+				);
+
+				FString ErrorMessage;
+				TestFlowAsset = ImportFromExportedJson(
+					TEXT("/Game/Test/TestDeclaredPinRecon"),
+					TestImportText,
+					ErrorMessage
+				);
+
+				TestNotNull("Imported asset should not be null", TestFlowAsset);
+				if (!TestFlowAsset) { AddError(FString::Printf(TEXT("Import failed: %s"), *ErrorMessage)); return; }
+
+				FGuid StartGuid; FGuid::Parse(TEXT("00000000-0000-0000-0000-000000000001"), StartGuid);
+				FGuid FinishGuid; FGuid::Parse(TEXT("00000000-0000-0000-0000-000000000002"), FinishGuid);
+				UFlowNode* StartNode  = TestFlowAsset->GetNode(StartGuid);
+				UFlowNode* FinishNode = TestFlowAsset->GetNode(FinishGuid);
+				TestNotNull("Start node must exist", StartNode);
+				TestNotNull("Finish node must exist", FinishNode);
+				if (!StartNode || !FinishNode) { return; }
+
+				// DataOut on Start - unconnected declared data pin
+				bool bDataOutFound = false;
+				FName DataOutTypeName;
+				for (const FFlowPin& Pin : StartNode->GetOutputPins())
+				{
+					if (Pin.PinName == FName("DataOut"))
+					{
+						bDataOutFound = true;
+						DataOutTypeName = Pin.GetPinTypeName().Name;
+						break;
+					}
+				}
+				TestTrue("Start.DataOut pin must be present after import", bDataOutFound);
+				TestEqual("Start.DataOut pin type must be Vector", DataOutTypeName, FName("Vector"));
+
+				// DataIn on Finish - unconnected declared data pin
+				bool bDataInFound = false;
+				FName DataInTypeName;
+				for (const FFlowPin& Pin : FinishNode->GetInputPins())
+				{
+					if (Pin.PinName == FName("DataIn"))
+					{
+						bDataInFound = true;
+						DataInTypeName = Pin.GetPinTypeName().Name;
+						break;
+					}
+				}
+				TestTrue("Finish.DataIn pin must be present after import", bDataInFound);
+				TestEqual("Finish.DataIn pin type must be Int", DataInTypeName, FName("Int"));
+			});
+
+			It("connected data pin retains declared type (not wildcard)", [this]()
+			{
+				// A node that declares a typed data pin AND has a connection using it.
+				// Before P7.2 fix, the connected pin was created as wildcard by the connection fallback.
+				TestImportText = TEXT(
+					"{\"formatVersion\":2,\"mode\":\"Full\",\"assetClass\":\"/Script/Flow.FlowAsset\",\"bWorldBound\":true,"
+					"\"ops\":["
+					"{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000001\",\"type\":\"/Script/Flow.FlowNode_Start\","
+					"\"outputPins\":[{\"name\":\"Out\",\"type\":\"Exec\"},{\"name\":\"Score\",\"type\":\"Float\"}]},"
+					"{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000002\",\"type\":\"/Script/Flow.FlowNode_Finish\","
+					"\"inputPins\":[{\"name\":\"In\",\"type\":\"Exec\"},{\"name\":\"Score\",\"type\":\"Float\"}]},"
+					"{\"kind\":\"AddConnection\",\"source\":{\"nodeGuid\":\"00000000-0000-0000-0000-000000000001\",\"pin\":\"Out\"},"
+					"\"target\":{\"nodeGuid\":\"00000000-0000-0000-0000-000000000002\",\"pin\":\"In\"}},"
+					"{\"kind\":\"AddConnection\",\"source\":{\"nodeGuid\":\"00000000-0000-0000-0000-000000000001\",\"pin\":\"Score\"},"
+					"\"target\":{\"nodeGuid\":\"00000000-0000-0000-0000-000000000002\",\"pin\":\"Score\"}}"
+					"]}"
+				);
+
+				FString ErrorMessage;
+				TestFlowAsset = ImportFromExportedJson(
+					TEXT("/Game/Test/TestConnectedPinType"),
+					TestImportText,
+					ErrorMessage
+				);
+
+				TestNotNull("Imported asset should not be null", TestFlowAsset);
+				if (!TestFlowAsset) { AddError(FString::Printf(TEXT("Import failed: %s"), *ErrorMessage)); return; }
+
+				FGuid StartGuid; FGuid::Parse(TEXT("00000000-0000-0000-0000-000000000001"), StartGuid);
+				UFlowNode* StartNode = TestFlowAsset->GetNode(StartGuid);
+				TestNotNull("Start node must exist", StartNode);
+				if (!StartNode) { return; }
+
+				bool bScorePinFound = false;
+				FName ScoreTypeName;
+				for (const FFlowPin& Pin : StartNode->GetOutputPins())
+				{
+					if (Pin.PinName == FName("Score"))
+					{
+						bScorePinFound = true;
+						ScoreTypeName = Pin.GetPinTypeName().Name;
+						break;
+					}
+				}
+				TestTrue("Start.Score output pin must exist", bScorePinFound);
+				TestEqual("Start.Score pin type must be Float (not wildcard)", ScoreTypeName, FName("Float"));
+			});
+
+			// Regression test for the 2026-07-23 investigation: ApplyDeclaredPins used to skip every
+			// declared Exec pin on the assumption that the node's own CDO already provides it. That's
+			// true for a static-pin class like FlowNode_Start/Finish, but not for a dynamic-pin class
+			// (e.g. a project-specific node whose exec pins come from reflection-driven metadata,
+			// not a literal CDO array) - declaring an Exec pin the CDO doesn't already have exercises
+			// that same shape without any cross-project dependency.
+			It("declared exec pin absent from the node's own CDO is reconstructed on import", [this]()
+			{
+				TestImportText = TEXT(
+					"{\"formatVersion\":2,\"mode\":\"Full\",\"assetClass\":\"/Script/Flow.FlowAsset\",\"bWorldBound\":true,"
+					"\"ops\":[{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000001\",\"type\":\"/Script/Flow.FlowNode_Start\","
+					"\"inputPins\":[{\"name\":\"Trigger\",\"type\":\"Exec\"}],"
+					"\"outputPins\":[{\"name\":\"Out\",\"type\":\"Exec\"}]}]}"
+				);
+
+				FString ErrorMessage;
+				TestFlowAsset = ImportFromExportedJson(
+					TEXT("/Game/Test/TestDeclaredExecPinRecon"),
+					TestImportText,
+					ErrorMessage
+				);
+
+				TestNotNull("Imported asset should not be null", TestFlowAsset);
+				if (!TestFlowAsset) { AddError(FString::Printf(TEXT("Import failed: %s"), *ErrorMessage)); return; }
+
+				FGuid StartGuid; FGuid::Parse(TEXT("00000000-0000-0000-0000-000000000001"), StartGuid);
+				UFlowNode* StartNode = TestFlowAsset->GetNode(StartGuid);
+				TestNotNull("Start node must exist", StartNode);
+				if (!StartNode) { return; }
+
+				bool bTriggerFound = false;
+				FName TriggerTypeName;
+				for (const FFlowPin& Pin : StartNode->GetInputPins())
+				{
+					if (Pin.PinName == FName("Trigger"))
+					{
+						bTriggerFound = true;
+						TriggerTypeName = Pin.GetPinTypeName().Name;
+						break;
+					}
+				}
+				TestTrue("Start.Trigger input pin must be present even though the CDO never declares it", bTriggerFound);
+				TestEqual("Start.Trigger pin type must be Exec", TriggerTypeName, FName("Exec"));
+			});
+
+			// Regression test for the 2026-07-23 investigation: ParseConnectionLine and ParsePinDecl
+			// used to blanket-trim source/target/pin-name tokens, which collapses a pin name that is
+			// itself pure whitespace (e.g. a project-specific node's intentionally-blank single-space
+			// exec pin) down to NAME_None - the connection then silently failed to resolve.
+			It("a connection to/from a pure-whitespace pin name round-trips instead of collapsing to None", [this]()
+			{
+				TestImportText = TEXT(
+					"{\"formatVersion\":2,\"mode\":\"Full\",\"assetClass\":\"/Script/Flow.FlowAsset\",\"bWorldBound\":true,"
+					"\"ops\":["
+					"{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000001\",\"type\":\"/Script/Flow.FlowNode_Start\","
+					"\"outputPins\":[{\"name\":\" \",\"type\":\"Exec\"}]},"
+					"{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000002\",\"type\":\"/Script/Flow.FlowNode_Finish\","
+					"\"inputPins\":[{\"name\":\"In\",\"type\":\"Exec\"}]},"
+					"{\"kind\":\"AddConnection\",\"source\":{\"nodeGuid\":\"00000000-0000-0000-0000-000000000001\",\"pin\":\" \"},"
+					"\"target\":{\"nodeGuid\":\"00000000-0000-0000-0000-000000000002\",\"pin\":\"In\"}}"
+					"]}"
+				);
+
+				FString ErrorMessage;
+				TestFlowAsset = ImportFromExportedJson(
+					TEXT("/Game/Test/TestBlankPinNameRoundTrip"),
+					TestImportText,
+					ErrorMessage
+				);
+
+				TestNotNull("Imported asset should not be null", TestFlowAsset);
+				if (!TestFlowAsset) { AddError(FString::Printf(TEXT("Import failed: %s"), *ErrorMessage)); return; }
+
+				FGuid StartGuid; FGuid::Parse(TEXT("00000000-0000-0000-0000-000000000001"), StartGuid);
+				FGuid FinishGuid; FGuid::Parse(TEXT("00000000-0000-0000-0000-000000000002"), FinishGuid);
+				UFlowNode* StartNode = TestFlowAsset->GetNode(StartGuid);
+				TestNotNull("Start node must exist", StartNode);
+				if (!StartNode) { return; }
+
+				bool bBlankPinFound = false;
+				for (const FFlowPin& Pin : StartNode->GetOutputPins())
+				{
+					if (Pin.PinName == FName(TEXT(" ")))
+					{
+						bBlankPinFound = true;
+						break;
+					}
+				}
+				TestTrue("Start's single-space-named output pin must exist (not collapsed to None)", bBlankPinFound);
+
+				FConnectedPin Connection = StartNode->GetConnection(FName(TEXT(" ")));
+				TestEqual("The blank-named pin's connection must target the Finish node", Connection.NodeGuid, FinishGuid);
+				TestEqual("The blank-named pin's connection must target Finish.In", Connection.PinName, FName("In"));
+			});
+		});
+
+		// P7.5 - Subgraph interface CustomInputs/CustomOutputs round-trip
+		Describe("Subgraph interface round-trip (P7.5)", [this]()
+		{
+			It("CustomInputs and CustomOutputs are populated after importing a subgraph asset", [this]()
+			{
+				TestImportText = TEXT(
+					"{\"formatVersion\":2,\"mode\":\"Full\",\"assetClass\":\"/Script/Flow.FlowAsset\",\"bWorldBound\":true,"
+					"\"ops\":["
+					"{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000001\",\"type\":\"/Script/Flow.FlowNode_CustomInput\","
+					"\"properties\":{\"EventName\":\"Cancel\"},\"outputPins\":[{\"name\":\"Out\",\"type\":\"Exec\"}]},"
+					"{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000002\",\"type\":\"/Script/Flow.FlowNode_CustomOutput\","
+					"\"properties\":{\"EventName\":\"Done\"},\"inputPins\":[{\"name\":\"In\",\"type\":\"Exec\"}]},"
+					"{\"kind\":\"AddConnection\",\"source\":{\"nodeGuid\":\"00000000-0000-0000-0000-000000000001\",\"pin\":\"Out\"},"
+					"\"target\":{\"nodeGuid\":\"00000000-0000-0000-0000-000000000002\",\"pin\":\"In\"}}"
+					"]}"
+				);
+
+				FString ErrorMessage;
+				TestFlowAsset = ImportFromExportedJson(
+					TEXT("/Game/Test/TestSubgraphInterface"),
+					TestImportText,
+					ErrorMessage
+				);
+
+				TestNotNull("Imported asset should not be null", TestFlowAsset);
+				if (!TestFlowAsset) { AddError(FString::Printf(TEXT("Import failed: %s"), *ErrorMessage)); return; }
+
+#if WITH_EDITOR
+				const TArray<FName>& Inputs  = TestFlowAsset->GetCustomInputs();
+				const TArray<FName>& Outputs = TestFlowAsset->GetCustomOutputs();
+
+				TestEqual("CustomInputs should have one entry", Inputs.Num(), 1);
+				if (Inputs.Num() == 1) { TestEqual("CustomInput name should be Cancel", Inputs[0], FName("Cancel")); }
+
+				TestEqual("CustomOutputs should have one entry", Outputs.Num(), 1);
+				if (Outputs.Num() == 1) { TestEqual("CustomOutput name should be Done", Outputs[0], FName("Done")); }
+#endif
+			});
+		});
+
+		// P7.6 - DefaultForInputFlowPin value round-trip
+		Describe("DefaultForInputFlowPin value round-trip (P7.6)", [this]()
+		{
+			It("FText DefaultForInputFlowPin property value survives import via Properties block", [this]()
+			{
+				// FlowNode_FormatText.FormatText is UPROPERTY(meta=(DefaultForInputFlowPin, FlowPinType=Text)).
+				// Its value is just a reflected FText property, so it must round-trip through Properties:
+				// exactly like any other node property - no special handling needed.
+				TestImportText = TEXT(
+					"{\"formatVersion\":2,\"mode\":\"Full\",\"assetClass\":\"/Script/Flow.FlowAsset\",\"bWorldBound\":true,"
+					"\"ops\":[{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000001\",\"type\":\"/Script/Flow.FlowNode_FormatText\","
+					"\"properties\":{\"FormatText\":\"Hello {Name}\"},"
+					"\"outputPins\":[{\"name\":\"Formatted Text\",\"type\":\"Text\"}]}]}"
+				);
+
+				FString ErrorMessage;
+				TestFlowAsset = ImportFromExportedJson(
+					TEXT("/Game/Test/TestDefaultForInputFlowPin"),
+					TestImportText,
+					ErrorMessage
+				);
+
+				TestNotNull("Imported asset should not be null", TestFlowAsset);
+				if (!TestFlowAsset) { AddError(FString::Printf(TEXT("Import failed: %s"), *ErrorMessage)); return; }
+
+				FGuid NodeGuid; FGuid::Parse(TEXT("00000000-0000-0000-0000-000000000001"), NodeGuid);
+				UFlowNode* FormatNode = TestFlowAsset->GetNode(NodeGuid);
+				TestNotNull("FormatText node must exist", FormatNode);
+				if (!FormatNode) { return; }
+
+				// The FormatText property is private on UFlowNode_FormatText, so verify via reflection.
+				FProperty* FormatTextProp = FindFProperty<FProperty>(FormatNode->GetClass(), TEXT("FormatText"));
+				TestNotNull("FormatText property must be found via reflection", FormatTextProp);
+				if (!FormatTextProp) { return; }
+
+				FString ExportedValue;
+				FormatTextProp->ExportTextItem_Direct(ExportedValue, FormatTextProp->ContainerPtrToValuePtr<void>(FormatNode), nullptr, nullptr, PPF_None);
+				TestTrue("FormatText value should contain 'Hello'", ExportedValue.Contains(TEXT("Hello")));
+				TestTrue("FormatText value should contain '{Name}'", ExportedValue.Contains(TEXT("{Name}")));
+			});
+		});
+
+		// P7.7's node comment round-trip is still exercised via the document path's "comment" op
+		// field (FlowCourierFormat.spec.cpp's Node Position tests, and FlowSearch.spec.cpp's
+		// SingleNodeDoc fixture, both regraph a commented node and read back UEdGraphNode::NodeComment).
+		// The unit test that lived here targeted UFlowGraphImporter::ParseNodeComments directly - a
+		// v1-only text-grammar parser deleted per FLOW_COURIER_V2_SPEC.md section 10 - so it has no
+		// document-based equivalent and is removed rather than converted.
 	});
 }
 

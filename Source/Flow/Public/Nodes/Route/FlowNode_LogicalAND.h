@@ -25,8 +25,14 @@ private:
 public:
 #if WITH_EDITOR
 	virtual bool CanUserAddInput() const override { return true; }
+
+	virtual FString GetStatusString() const override;
 #endif
 
 	virtual void ExecuteInput(const FName& PinName) override;
 	virtual void Cleanup() override;
+
+#if WITH_EDITOR
+	virtual const FFlowAgentDoc& GetAgentDoc() const override;
+#endif
 };

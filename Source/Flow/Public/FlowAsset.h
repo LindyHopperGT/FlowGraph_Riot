@@ -5,7 +5,11 @@
 #include "FlowTypes.h"
 #include "Asset/FlowAssetParamsTypes.h"
 #include "Asset/FlowDeferredTransitionScope.h"
+#include "Interfaces/FlowGraphOutputDataReceiverInterface.h"
 #include "Nodes/FlowNode.h"
+#include "Types/FlowDataPinValue.h"
+#include "Types/FlowNamedDataPinProperty.h"
+#include "Types/FlowOutputDataPinValues.h"
 
 #if WITH_EDITOR
 #include "FlowMessageLog.h"
@@ -26,10 +30,11 @@ struct FFlowPinConnectionPolicy;
 
 class UEdGraph;
 class UEdGraphNode;
+class UFlowAsset;
+class UFlowAssetParams;
 
 #if !UE_BUILD_SHIPPING
 DECLARE_DELEGATE(FFlowGraphEvent);
-DECLARE_DELEGATE_TwoParams(FFlowSignalEvent, UFlowNode* /*FlowNode*/, const FName& /*PinName*/);
 #endif
 
 /**
@@ -49,6 +54,7 @@ public:
 	friend class FFlowAssetDetails;
 	friend class FFlowNode_SubGraphDetails;
 	friend class UFlowGraphSchema;
+	friend struct FFlowDeferredTransitionScope;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Flow Asset")
 	FGuid AssetGuid;
@@ -102,6 +108,15 @@ public:
 
 	virtual TSubclassOf<UFlowAsset> GetDefaultFlowAssetForSubgraphs() const { return GetClass(); }
 
+	/* Sub-classes can override once they support edits in PIE.Called by the Asset Editor. */
+	virtual bool CanEditInPIE() const { return false; }
+
+	/* Re-mints the NodeGuid of any UFlowNodeAddOn (at any nesting depth) whose Guid collides with
+	 * one already seen earlier in the walk, keeping the first occurrence of each Guid unchanged.
+	 * Called from PreSaveRoot so every explicit save self-heals; also callable directly to repair
+	 * already-saved assets. Returns the number of AddOns that were re-minted. */
+	int32 RepairDuplicateAddOnGuids();
+
 protected:
 	bool CanFlowNodeClassBeUsedByFlowAsset(const UClass& FlowNodeClass) const;
 	bool CanFlowAssetUseFlowNodeClass(const UClass& FlowNodeClass) const;
@@ -111,6 +126,9 @@ protected:
 	bool IsFlowNodeClassInDeniedClasses(const UClass& FlowNodeClass) const;
 
 private:
+	/* Validates every direct child attachment on OwnerNode and recursively validates child trees. */
+	void ValidateAddOnChildren(UFlowNodeBase& OwnerNode, FFlowMessageLog& MessageLog);
+
 	/* Recursively validates the given addon and its children. */
 	void ValidateAddOnTree(UFlowNodeAddOn& AddOn, FFlowMessageLog& MessageLog);
 #endif
@@ -130,6 +148,15 @@ protected:
 private:
 	UPROPERTY()
 	TMap<FGuid, TObjectPtr<UFlowNode>> Nodes;
+
+public:
+	const TArray<FFlowNamedDataPinProperty>& GetOutputDataPinDeclarations() const { return OutputDataPinDeclarations; }
+
+protected:
+	/* Output Data Pins define typed data values that this graph produces when it finishes.
+	* Sub Graph node using this Flow Asset will generate a context Output Data Pin for every entry on this list. */
+	UPROPERTY(EditAnywhere, Category = "Sub Graph")
+	TArray<FFlowNamedDataPinProperty> OutputDataPinDeclarations;
 
 public:
 #if WITH_EDITOR
@@ -234,6 +261,12 @@ public:
 	const TArray<FName>& GetCustomInputs() const { return CustomInputs; }
 	const TArray<FName>& GetCustomOutputs() const { return CustomOutputs; }
 
+	// Rebuilds CustomInputs/CustomOutputs by scanning the current Nodes map for
+	// UFlowNode_CustomInput and UFlowNode_CustomOutput instances. Call this after
+	// any procedural node creation (e.g. Flow Courier import) to keep the editor-only
+	// arrays in sync so FlowNode_SubGraph context pins regenerate correctly.
+	void RebuildCustomInterfaceLists();
+
 protected:
 	void AddCustomInput(const FName& EventName);
 	void RemoveCustomInput(const FName& EventName);
@@ -286,7 +319,7 @@ protected:
 
 private:
 	/* Original object holds references to instances. */
-	UPROPERTY(Transient)
+	UPROPERTY(Transient, NonTransactional)
 	TArray<TObjectPtr<UFlowAsset>> ActiveInstances;
 
 #if WITH_EDITORONLY_DATA
@@ -357,10 +390,22 @@ protected:
 	UPROPERTY(Transient)
 	EFlowFinishPolicy FinishPolicy;
 
+	 /* Receiver that will be given a snapshot of OutputDataPinValues when this graph finishes.
+	  * Typically the SubGraph node that created this instance. */
+	UPROPERTY(Transient)
+	TWeakObjectPtr<UObject> OutputDataReceiver;
+
+	/* Live output data pin values for this running instance.
+	 * Initialized from OutputDataPinDeclarations defaults at StartFlow; updated by SetGraphOutput/Finish nodes. */
+	UPROPERTY(Transient)
+	FFlowOutputDataPinValues OutputDataPinValues;
+
 public:
 	virtual void InitializeInstance(const TWeakObjectPtr<UObject> InOwner, UFlowAsset& InTemplateAsset);
 	virtual void DeinitializeInstance();
 	bool IsInstanceInitialized() const { return IsValid(TemplateAsset); }
+
+	void FinishFlowAndDeinitializeInstance(const EFlowFinishPolicy InFinishPolicy);
 
 	UFlowAsset* GetTemplateAsset() const { return TemplateAsset; }
 
@@ -380,18 +425,28 @@ public:
 	AActor* TryFindActorOwner() const;
 
 	virtual void PreStartFlow();
-	virtual void StartFlow(IFlowDataPinValueSupplierInterface* DataPinValueSupplier = nullptr);
+	virtual void StartFlow(IFlowDataPinValueSupplierInterface* DataPinValueSupplier = nullptr, IFlowGraphOutputDataReceiverInterface* InOutputDataReceiver = nullptr);
+
+	/* Write a single output data pin value into the live store for this running instance.
+	 * Called by SetGraphOutput and Finish nodes for each connected output pin. */
+	void WriteOutputDataPinValue(const FName& PinName, const TInstancedStruct<FFlowDataPinValue>& Value);
+
+	/* Flush all of the OutputDataPinValues to the receiver (if set) */
+	void FlushOutputDataPinValuesToReceiver();
+
+	virtual void FinishFlow(const EFlowFinishPolicy InFinishPolicy);
+
 	bool HasStartedFlow() const;
 
 protected:
 	virtual void FinishNode(UFlowNode* Node);
 	void ResetNodes();
-	
-public:	
-	virtual void FinishFlow(const EFlowFinishPolicy InFinishPolicy, const bool bRemoveInstance = true);
+
+	void InitializeOutputDataReceiverAndValues(IFlowGraphOutputDataReceiverInterface* InOutputDataReceiver);
 
 public:
 	UFlowSubsystem* GetFlowSubsystem() const;
+	FName GetDisplayName() const;
 
 	UFlowNode_SubGraph* GetNodeOwningThisAssetInstance() const;
 	UFlowAsset* GetParentInstance() const;
@@ -424,15 +479,11 @@ protected:
 	virtual void InitializePreloadPolicy();
 
 public:
+	void EnsurePreloadPolicyInitialized();
 	const FFlowPreloadPolicy& GetPreloadPolicy() const;
 
 //////////////////////////////////////////////////////////////////////////
 // Trigger Input
-
-#if !UE_BUILD_SHIPPING
-public:	
-	FFlowSignalEvent OnPinTriggered;
-#endif
 	
 protected:
 	/* Stack of active deferred transition scopes (innermost = top).
@@ -464,8 +515,7 @@ protected:
 	bool TryFlushAndRemoveDeferredTransitionScope(const TSharedPtr<FFlowDeferredTransitionScope>& Scope);
 
 public:
-	/* Try to flush (and clear) all Deferred Trigger scopes.
-	 * Can fail to flush all if a FFlowExecutionGate causes a new halt. */
+	/* Try to flush (and clear) all Deferred Trigger scopes. */
 	bool TryFlushAllDeferredTriggerScopes();
 
 	/* Clear (do not trigger) any remaining deferred transitions (for shutdown cases). */

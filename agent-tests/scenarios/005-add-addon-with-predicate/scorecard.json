@@ -1,0 +1,41 @@
+{
+  "scenario_id": "005-add-addon-with-predicate",
+  "structural_assertions": [
+    {
+      "description": "1. Exactly one FlowNodeAddOn_PredicateRequireGameplayTags addon exists",
+      "passed": true
+    },
+    {
+      "description": "2. That addon is attached to B (not A, not a top-level node)",
+      "passed": true
+    },
+    {
+      "description": "3. B still exists as a normal node in [NODES]",
+      "passed": true
+    }
+  ],
+  "structural_assertions_passed": 3,
+  "structural_assertions_total": 3,
+  "preservation": {
+    "nodes_preserved": 1,
+    "nodes_total": 2,
+    "score": 0.5,
+    "changed_guids": [
+      "b2222222222222222222222222222222"
+    ],
+    "removed_guids": [],
+    "added_guids": [],
+    "anti_goal_violations": [
+      "b2222222222222222222222222222222 changed (properties or Pos) but is in must_not_change"
+    ]
+  },
+  "validator": {
+    "no_errors": true,
+    "live_findings_supplied": false,
+    "findings": []
+  },
+  "gate_passed": false,
+  "scenario_dir": "005-add-addon-with-predicate",
+  "after_path": "t:\\p4\\meerkat\\dev-main\\.agent-config\\temp\\flow-courier-scenarios\\005-after.flowtext",
+  "graded_at": "2026-07-22T22:11:51.489561+00:00"
+}

@@ -2,6 +2,7 @@
 #pragma once
 
 #include "EditorUndoClient.h"
+#include "Delegates/Delegate.h"
 #include "Misc/NotifyHook.h"
 #include "Toolkits/AssetEditorToolkit.h"
 #include "Toolkits/IToolkitHost.h"
@@ -46,6 +47,7 @@ protected:
 	TSharedPtr<SFlowGraphEditor> GraphEditor;
 	TSharedPtr<class IDetailsView> DetailsView;
 	TSharedPtr<class SFlowPalette> Palette;
+	TSharedPtr<class SWidget> GraphEditorWidget;
 
 #if ENABLE_SEARCH_IN_ASSET_EDITOR
 	TSharedPtr<class SSearchBrowser> SearchBrowser;
@@ -61,9 +63,14 @@ protected:
 	TSharedPtr<class SWidget> ValidationLog;
 	TSharedPtr<class IMessageLogListing> ValidationLogListing;
 
+	/* Assigned by the Asset opened for editing. */
+	bool bCanEditInPIE = false;
+
 private:
 	/* The current UI selection state of this editor. */
 	FName CurrentUISelection;
+
+	FDelegateHandle FlowGraphEditorSettingsChangedHandle;
 
 public:
 	FFlowAssetEditor();
@@ -141,10 +148,18 @@ protected:
 
 	void EditAssetDefaults_Clicked() const;
 
+	virtual void AutoFormatGraph();
+
+	/* Continues execution halted at a Flow breakpoint. Only available while halted. */
+	void ContinueFlowExecution();
+	bool IsFlowExecutionHalted() const;
+	static class UFlowDebugEditorSubsystem* GetFlowDebugEditorSubsystem();
+
 	virtual void CreateWidgets();
 	virtual void CreateGraphWidget();
 
-	static bool CanEdit();
+	bool CanEdit();
+	void SetCanEditInPIE(bool value);
 
 public:
 	void SetUISelectionState(const FName SelectionOwner);

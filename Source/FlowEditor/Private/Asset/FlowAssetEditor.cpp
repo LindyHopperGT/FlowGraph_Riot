@@ -7,14 +7,22 @@
 
 #include "Asset/FlowAssetEditorContext.h"
 #include "Asset/FlowAssetToolbar.h"
+#include "Asset/FlowDebugEditorSubsystem.h"
 #include "Asset/FlowMessageLogListing.h"
 #include "Graph/FlowGraphEditor.h"
+#include "Graph/FlowGraphEditorSettings.h"
 #include "Graph/FlowGraphSchema.h"
 #include "Graph/Widgets/SFlowPalette.h"
 
 #include "FlowAsset.h"
+#include "Widgets/Text/STextBlock.h"
+#include "Widgets/Layout/SBox.h"
+#include "Widgets/SOverlay.h"
+#include "Graph/FlowGraphEditorLayout.h"
+#include "Graph/Nodes/FlowGraphNode.h"
 
 #include "EdGraph/EdGraphNode.h"
+#include "ScopedTransaction.h"
 #include "Editor.h"
 #include "EditorClassUtils.h"
 #include "GraphEditor.h"
@@ -24,6 +32,7 @@
 #include "MessageLogModule.h"
 #include "Misc/UObjectToken.h"
 #include "Modules/ModuleManager.h"
+#include "ObjectEditorUtils.h"
 #include "PropertyEditorModule.h"
 #include "ToolMenus.h"
 #include "Widgets/Docking/SDockTab.h"
@@ -35,6 +44,21 @@
 #endif
 
 #define LOCTEXT_NAMESPACE "FlowAssetEditor"
+
+namespace FlowAssetEditor_Private
+{
+	bool ShouldShowDetailsProperty(const FPropertyAndParent& PropertyAndParent)
+	{
+		const FName CategoryName = FObjectEditorUtils::GetCategoryFName(&PropertyAndParent.Property);
+		if (CategoryName == TEXT("FlowNode") || CategoryName == TEXT("FlowNodeAddOn"))
+		{
+			return false;
+		}
+
+		return PropertyAndParent.Property.GetFName() != TEXT("AddOns")
+			|| GetDefault<UFlowGraphEditorSettings>()->bMergeAddOnDetails;
+	}
+}
 
 const FName FFlowAssetEditor::DetailsTab(TEXT("Details"));
 const FName FFlowAssetEditor::GraphTab(TEXT("Graph"));
@@ -50,6 +74,11 @@ FFlowAssetEditor::FFlowAssetEditor()
 
 FFlowAssetEditor::~FFlowAssetEditor()
 {
+	if (FlowGraphEditorSettingsChangedHandle.IsValid())
+	{
+		UFlowGraphEditorSettings::OnSettingsChanged().Remove(FlowGraphEditorSettingsChangedHandle);
+	}
+
 	GEditor->UnregisterForUndo(this);
 }
 
@@ -235,9 +264,9 @@ TSharedRef<SDockTab> FFlowAssetEditor::SpawnTab_Graph(const FSpawnTabArgs& Args)
 	TSharedRef<SDockTab> SpawnedTab = SNew(SDockTab)
 		.Label(LOCTEXT("FlowGraphTitle", "Graph"));
 
-	if (GraphEditor.IsValid())
+	if (GraphEditorWidget.IsValid())
 	{
-		SpawnedTab->SetContent(GraphEditor.ToSharedRef());
+		SpawnedTab->SetContent(GraphEditorWidget.ToSharedRef());
 	}
 
 	return SpawnedTab;
@@ -308,6 +337,11 @@ void FFlowAssetEditor::InitFlowAssetEditor(const EToolkitMode::Type Mode, const 
 
 	UFlowGraphSchema::SubscribeToAssetChanges();
 	FlowAsset->OnDetailsRefreshRequested.BindThreadSafeSP(this, &FFlowAssetEditor::RefreshDetails);
+
+	FlowGraphEditorSettingsChangedHandle = UFlowGraphEditorSettings::OnSettingsChanged().AddRaw(
+		this, &FFlowAssetEditor::RefreshDetails);
+
+	bCanEditInPIE = FlowAsset->CanEditInPIE();
 
 	BindToolbarCommands();
 	CreateToolbar();
@@ -396,7 +430,7 @@ void FFlowAssetEditor::BindToolbarCommands()
 	// Editing
 	ToolkitCommands->MapAction(ToolbarCommands.RefreshAsset,
 	                           FExecuteAction::CreateSP(this, &FFlowAssetEditor::RefreshAsset),
-	                           FCanExecuteAction::CreateStatic(&FFlowAssetEditor::CanEdit));
+							   FCanExecuteAction::CreateSP(this, &FFlowAssetEditor::CanEdit));
 
 	ToolkitCommands->MapAction(ToolbarCommands.ValidateAsset,
 	                           FExecuteAction::CreateSP(this, &FFlowAssetEditor::ValidateAsset_Internal),
@@ -410,8 +444,87 @@ void FFlowAssetEditor::BindToolbarCommands()
 	                           FExecuteAction::CreateSP(this, &FFlowAssetEditor::EditAssetDefaults_Clicked),
 	                           FCanExecuteAction());
 
+	ToolkitCommands->MapAction(ToolbarCommands.AutoFormatGraph,
+	                           FExecuteAction::CreateSP(this, &FFlowAssetEditor::AutoFormatGraph),
+								FCanExecuteAction::CreateSP(this, &FFlowAssetEditor::CanEdit));
+
+	ToolkitCommands->MapAction(ToolbarCommands.ContinueFlowExecution,
+	                           FExecuteAction::CreateSP(this, &FFlowAssetEditor::ContinueFlowExecution),
+	                           FCanExecuteAction::CreateSP(this, &FFlowAssetEditor::IsFlowExecutionHalted),
+	                           FIsActionChecked(),
+	                           FIsActionButtonVisible::CreateSP(this, &FFlowAssetEditor::IsFlowExecutionHalted));
+
 	// Engine's Play commands
 	ToolkitCommands->Append(FPlayWorldCommands::GlobalPlayWorldActions.ToSharedRef());
+}
+
+void FFlowAssetEditor::ContinueFlowExecution()
+{
+	if (UFlowDebugEditorSubsystem* DebugSubsystem = GetFlowDebugEditorSubsystem())
+	{
+		DebugSubsystem->RequestContinue();
+	}
+}
+
+bool FFlowAssetEditor::IsFlowExecutionHalted() const
+{
+	const UFlowDebugEditorSubsystem* DebugSubsystem = GetFlowDebugEditorSubsystem();
+
+	return DebugSubsystem && DebugSubsystem->IsHaltedAtBreakpoint();
+}
+
+UFlowDebugEditorSubsystem* FFlowAssetEditor::GetFlowDebugEditorSubsystem()
+{
+	return GEngine ? GEngine->GetEngineSubsystem<UFlowDebugEditorSubsystem>() : nullptr;
+}
+
+void FFlowAssetEditor::AutoFormatGraph()
+{
+	if (!FlowAsset || !GraphEditor.IsValid())
+	{
+		return;
+	}
+
+	const FScopedTransaction Transaction(LOCTEXT("AutoFormatGraph", "Auto-Format Flow Graph"));
+
+	TSet<FGuid> TargetGuids;
+	const TSet<UFlowGraphNode*> SelectedNodes = GraphEditor->GetSelectedFlowNodes();
+	if (SelectedNodes.Num() > 0)
+	{
+		for (const UFlowGraphNode* GraphNode : SelectedNodes)
+		{
+			if (GraphNode)
+			{
+				TargetGuids.Add(GraphNode->NodeGuid);
+			}
+		}
+	}
+
+	TMap<FGuid, FIntPoint> MeasuredNodeSizes;
+	for (const TPair<FGuid, UFlowNode*>& Pair : FlowAsset->GetNodes())
+	{
+		if (!Pair.Value || (!TargetGuids.IsEmpty() && !TargetGuids.Contains(Pair.Key)))
+		{
+			continue;
+		}
+
+		const UEdGraphNode* GraphNode = Pair.Value->GetGraphNode();
+		FSlateRect Bounds;
+		if (GraphNode && GraphEditor->GetBoundsForNode(GraphNode, Bounds, 0.0f))
+		{
+			MeasuredNodeSizes.Add(Pair.Key, FIntPoint(
+				FMath::CeilToInt(Bounds.Right - Bounds.Left),
+				FMath::CeilToInt(Bounds.Bottom - Bounds.Top)));
+		}
+	}
+
+	TMap<FGuid, FIntPoint> Positions;
+	UFlowGraphEditorLayout::ComputeAutoFormatPositionsWithSizes(
+		FlowAsset, TargetGuids, MeasuredNodeSizes, Positions);
+	UFlowGraphEditorLayout::ApplyPositionsToExistingGraphWithSizes(
+		FlowAsset, Positions, MeasuredNodeSizes);
+
+	GraphEditor->NotifyGraphChanged();
 }
 
 void FFlowAssetEditor::RefreshAsset()
@@ -478,7 +591,9 @@ void FFlowAssetEditor::CreateWidgets()
 
 		FPropertyEditorModule& PropertyModule = FModuleManager::LoadModuleChecked<FPropertyEditorModule>("PropertyEditor");
 		DetailsView = PropertyModule.CreateDetailView(Args);
-		DetailsView->SetIsPropertyEditingEnabledDelegate(FIsPropertyEditingEnabled::CreateStatic(&FFlowAssetEditor::CanEdit));
+		DetailsView->SetIsPropertyEditingEnabledDelegate(FIsPropertyEditingEnabled::CreateSP(this, &FFlowAssetEditor::CanEdit));
+		DetailsView->SetIsPropertyVisibleDelegate(
+			FIsPropertyVisible::CreateStatic(&FlowAssetEditor_Private::ShouldShowDetailsProperty));
 		DetailsView->SetObject(FlowAsset);
 	}
 
@@ -513,12 +628,39 @@ void FFlowAssetEditor::CreateWidgets()
 void FFlowAssetEditor::CreateGraphWidget()
 {
 	SAssignNew(GraphEditor, SFlowGraphEditor, SharedThis(this))
-	.DetailsView(DetailsView);
+		.DetailsView(DetailsView)
+		.CanEditInPIE(bCanEditInPIE);
+
+	// Wrap the graph editor in an overlay with the asset name text
+	GraphEditorWidget = SNew(SOverlay)
+		+ SOverlay::Slot()
+		[
+			GraphEditor.ToSharedRef()
+		]
+		+ SOverlay::Slot()
+		.HAlign(HAlign_Left)
+		.VAlign(VAlign_Top)
+		.Padding(10.0f, 10.0f)
+		[
+			SNew(SBox)
+			.Visibility(EVisibility::HitTestInvisible)
+			[
+				SNew(STextBlock)
+				.Text(FText::FromString(FlowAsset->GetName()))
+				.TextStyle(FAppStyle::Get(), "GraphBreadcrumbButtonText")
+				.ColorAndOpacity(FLinearColor(1.0f, 1.0f, 1.0f, 0.7f))
+			]
+		];
 }
 
 bool FFlowAssetEditor::CanEdit()
 {
-	return GEditor->PlayWorld == nullptr;
+	return GEditor->PlayWorld == nullptr || bCanEditInPIE;
+}
+
+void FFlowAssetEditor::SetCanEditInPIE(bool value)
+{
+	bCanEditInPIE = value;
 }
 
 void FFlowAssetEditor::SetUISelectionState(const FName SelectionOwner)

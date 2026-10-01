@@ -117,7 +117,7 @@ bool FFlowActorOwnerComponentFilters::IsFilteredComponent(const UActorComponent&
 	check(bHasBuiltFilters);
 
 	// For Now(tm) at least, hard coding excluding Transient components
-	//  (could make this configurable, but that doesn't make any sense for FRGIPeerComponentReference)
+	//  (could make this configurable, but that doesn't make sense for a typical filtered component reference)
 	constexpr bool bAllowTransient = false;
 	if constexpr (!bAllowTransient)
 	{

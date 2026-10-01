@@ -545,6 +545,11 @@ void UFlowGraphNode::GetNodeContextMenuActions(class UToolMenu* Menu, class UGra
 		}
 
 		{
+			FToolMenuSection& Section = Menu->AddSection("FlowGraphNodeSubGraph", LOCTEXT("NodeSubGraphMenuHeader", "SubGraph"));
+			Section.AddMenuEntry(FlowGraphCommands.CreateSubGraphFromSelection);
+		}
+
+		{
 			FToolMenuSection& Section = Menu->AddSection("FlowGraphNodeBreakpoints", LOCTEXT("NodeBreakpointsMenuHeader", "Node Breakpoints"));
 			Section.AddMenuEntry(GraphCommands.AddBreakpoint);
 			Section.AddMenuEntry(GraphCommands.RemoveBreakpoint);
@@ -828,7 +833,7 @@ void UFlowGraphNode::JumpToDefinition() const
 {
 	if (NodeInstance)
 	{
-		if (NodeInstance->GetClass()->IsNative())
+		if (NodeInstance->GetClass()->ClassGeneratedBy == nullptr)
 		{
 			if (FSourceCodeNavigation::CanNavigateToClass(NodeInstance->GetClass()))
 			{
@@ -1157,7 +1162,7 @@ void UFlowGraphNode::GetPinHoverText(const UEdGraphPin& Pin, FString& HoverTextO
 		if (FlowPinType::IsSuccess(DataResult.Result) && DataResult.ResultValue.IsValid())
 		{
 			const FFlowDataPinValue& Value = DataResult.ResultValue.Get<FFlowDataPinValue>();
-			if (!Value.TryConvertValuesToString(ValueString))
+			if (!Value.GetDebugString(ValueString))
 			{
 				ValueString = TEXT("<unformattable>");
 			}

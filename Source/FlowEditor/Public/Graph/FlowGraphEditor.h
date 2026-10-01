@@ -7,6 +7,7 @@
 #include "FlowGraph.h"
 
 class FFlowAssetEditor;
+class FFlowCollapseToSubGraphTool;
 class IDetailsView;
 class UEdGraphPin;
 class UFlowDebuggerSubsystem;
@@ -17,13 +18,17 @@ struct FFlowBreakpoint;
  */
 class FLOWEDITOR_API SFlowGraphEditor : public SGraphEditor
 {
+	friend class FFlowCollapseToSubGraphTool;
+
 public:
 	SLATE_BEGIN_ARGS(SFlowGraphEditor)
+		: _CanEditInPIE(false)
 		{
 		}
 
 		SLATE_ARGUMENT(FGraphEditorEvents, GraphEvents)
 		SLATE_ARGUMENT(TSharedPtr<IDetailsView>, DetailsView)
+		SLATE_ARGUMENT(bool, CanEditInPIE)
 	SLATE_END_ARGS()
 
 protected:
@@ -32,6 +37,7 @@ protected:
 	TWeakPtr<FFlowAssetEditor> FlowAssetEditor;
 	TSharedPtr<IDetailsView> DetailsView;
 	TSharedPtr<FUICommandList> CommandList;
+	bool bCanEditInPIE;
 
 	TWeakObjectPtr<UFlowDebuggerSubsystem> DebuggerSubsystem;
 
@@ -56,7 +62,7 @@ private:
 public:
 	virtual bool IsTabFocused() const;
 	
-	static bool CanEdit();
+	bool CanEdit() const;
 	static bool IsPIE();
 	static bool IsPlaySessionPaused();
 
@@ -104,6 +110,9 @@ protected:
 
 	virtual void ReconstructNode() const;
 	virtual bool CanReconstructNode() const;
+
+	virtual void CreateSubGraphFromSelection();
+	virtual bool CanCreateSubGraphFromSelection() const;
 
 	// ---- Pin breakpoint helpers ----
 	static bool GetValidExecBreakpointPinContext(const UEdGraphPin* Pin, FGuid& OutNodeGuid, FName& OutPinName);

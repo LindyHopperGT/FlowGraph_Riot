@@ -37,6 +37,8 @@ public:
 	// UObject
 	virtual void PostEditChangeChainProperty(FPropertyChangedChainEvent& PropertyChangedEvent) override;
 	// --
+
+	virtual const FFlowAgentDoc& GetAgentDoc() const override;
 #endif
 
 	// IFlowNamedPropertiesSupplierInterface

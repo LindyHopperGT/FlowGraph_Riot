@@ -21,7 +21,12 @@ public class FlowGraphCourier : ModuleRules
 			new string[]
 			{
 				"UnrealEd",
-				"Json"
+				"AssetRegistry",
+				"Json",
+				"JsonUtilities",
+				"Projects",
+				"ToolsetRegistry",
+				"SourceControl"
 			}
 		);
 	}

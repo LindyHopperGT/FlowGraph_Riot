@@ -4,6 +4,8 @@
 #include "EdGraph/EdGraphSchema.h"
 #include "Templates/SubclassOf.h"
 
+#include "Templates/SharedPointer.h"
+
 #include "Policies/FlowPinTypeMatchPolicy.h"
 #include "FlowGraphSchema.generated.h"
 
@@ -14,6 +16,8 @@ class UFlowNodeBase;
 class UFlowGraphNode;
 struct FFlowPinType;
 class UFlowGraphNode_Reroute;
+
+class SGraphPin;
 
 DECLARE_MULTICAST_DELEGATE(FFlowGraphSchemaRefresh);
 
@@ -40,6 +44,7 @@ private:
 public:
 	static void SubscribeToAssetChanges();
 	static void GetPaletteActions(FGraphActionMenuBuilder& ActionMenuBuilder, const UFlowAsset* EditedFlowAsset, const FString& CategoryName);
+	static void RefreshNodesForScriptReload();
 
 	// EdGraphSchema
 	virtual void GetGraphContextActions(FGraphContextMenuBuilder& ContextMenuBuilder) const override;
@@ -65,6 +70,10 @@ public:
 	virtual bool IsTitleBarPin(const UEdGraphPin& Pin) const override;
 	virtual bool CanShowDataTooltipForPin(const UEdGraphPin& Pin) const override;
 	// --
+	
+	// Lets a schema substitute its own widget for a pin, checked by FFlowGraphPinFactory before it falls back to
+	// the default Flow pin widgets (e.g. SFlowGraphPinExec). Returns null by default, meaning no substitution.
+	virtual TSharedPtr<SGraphPin> CreatePinWidget(UEdGraphPin* InPin) const { return nullptr; }
 
 	static const FFlowPinType* LookupDataPinTypeForPinCategory(const FName& PinCategory);
 

@@ -242,7 +242,7 @@ FText SFlowAssetInstanceList::JoinInstanceAndContextTexts(const FObjectKey& Asse
 {
 	if (const UFlowAsset* Instance = Cast<UFlowAsset>(AssetInstance.ResolveObjectPtr()))
 	{
-		FText Result = FText::FromName(Instance->GetFName());
+		FText Result = FText::FromName(Instance->GetDisplayName());
 
 		// add context name if there are multiple contexts present 
 		if (InstancesPerContext.Num() > 1)
@@ -321,7 +321,7 @@ void SFlowAssetBreadcrumb::FillBreadcrumb() const
 			TWeakObjectPtr<const UFlowAsset> Instance = InstancesFromRoot[Index];
 			TWeakObjectPtr<const UFlowAsset> ChildInstance = Index < InstancesFromRoot.Num() - 1 ? InstancesFromRoot[Index + 1] : nullptr;
 
-			BreadcrumbTrail->PushCrumb(FText::FromName(Instance->GetFName()), FFlowBreadcrumb(Instance, ChildInstance));
+			BreadcrumbTrail->PushCrumb(FText::FromName(Instance->GetDisplayName()), FFlowBreadcrumb(Instance, ChildInstance));
 		}
 	}
 }
@@ -368,6 +368,12 @@ void FFlowAssetToolbar::BuildAssetToolbar(UToolMenu* ToolbarMenu) const
 		Section.AddEntry(FToolMenuEntry::InitToolBarButton(FFlowToolbarCommands::Get().RefreshAsset));
 		Section.AddEntry(FToolMenuEntry::InitToolBarButton(FFlowToolbarCommands::Get().ValidateAsset));
 		Section.AddEntry(FToolMenuEntry::InitToolBarButton(FFlowToolbarCommands::Get().EditAssetDefaults));
+		Section.AddEntry(FToolMenuEntry::InitToolBarButton(
+			FFlowToolbarCommands::Get().AutoFormatGraph,
+			TAttribute<FText>(),
+			TAttribute<FText>(),
+			FSlateIcon(FAppStyle::GetAppStyleSetName(), "GraphEditor.StraightenConnections")
+		));
 	}
 
 	{
@@ -487,6 +493,15 @@ void FFlowAssetToolbar::BuildDebuggerToolbar(UToolMenu* ToolbarMenu) const
 		const UFlowAssetEditorContext* Context = InSection.FindContext<UFlowAssetEditorContext>();
 		if (Context && Context->GetFlowAsset())
 		{
+			// First, and only visible while halted: the level toolbar's Resume does not work while a
+			// Flow breakpoint holds the game thread, so this is the way to continue.
+			InSection.AddEntry(FToolMenuEntry::InitToolBarButton(
+				FFlowToolbarCommands::Get().ContinueFlowExecution,
+				TAttribute<FText>(),
+				TAttribute<FText>(),
+				FSlateIcon(FAppStyle::GetAppStyleSetName(), "PlayWorld.PlayInViewport")
+			));
+		
 			FPlayWorldCommands::BuildToolbar(InSection);
 
 			InSection.AddEntry(FToolMenuEntry::InitWidget("AssetInstances", SNew(SFlowAssetInstanceList, Context->GetFlowAsset()), FText(), true));
