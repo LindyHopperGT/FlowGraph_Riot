@@ -7,6 +7,14 @@ This is the upcoming release. This page is updated regularly after changes are p
 This release includes pull requests from the community: Bargestt (Vasilii Bulgakov), Chen-Gary (Gary Chen), dskliarov-gsc, EvanC4, LindyHopperGT (Riot Games).
 
 This is the first release for UE 5.8, and the last for UE 5.6.
+* [Flow 5.8](https://github.com/MothCocoon/FlowGraph/releases/tag/v2.3-5.8)
+* [Flow 5.7](https://github.com/MothCocoon/FlowGraph/releases/tag/v2.3-5.7)
+* [Flow 5.6](https://github.com/MothCocoon/FlowGraph/releases/tag/v2.3-5.6)
+
+Flow Game (sample project)
+* [Flow Game 5.8](https://github.com/MothCocoon/FlowGame/releases/tag/v2.3-5.8)
+* [Flow Game 5.7](https://github.com/MothCocoon/FlowGame/releases/tag/v2.3-5.7)
+* [Flow Game 5.6](https://github.com/MothCocoon/FlowGame/releases/tag/v2.3-5.6)
 
 ## Update Notes
 ### Critical warning for Data Pins users
