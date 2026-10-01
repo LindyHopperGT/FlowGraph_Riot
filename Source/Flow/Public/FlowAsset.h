@@ -35,6 +35,7 @@ class UFlowAssetParams;
 
 #if !UE_BUILD_SHIPPING
 DECLARE_DELEGATE(FFlowGraphEvent);
+DECLARE_DELEGATE_TwoParams(FFlowSignalEvent, UFlowNode* /*FlowNode*/, const FName& /*PinName*/);
 #endif
 
 /**
@@ -150,15 +151,6 @@ private:
 	TMap<FGuid, TObjectPtr<UFlowNode>> Nodes;
 
 public:
-	const TArray<FFlowNamedDataPinProperty>& GetOutputDataPinDeclarations() const { return OutputDataPinDeclarations; }
-
-protected:
-	/* Output Data Pins define typed data values that this graph produces when it finishes.
-	* Sub Graph node using this Flow Asset will generate a context Output Data Pin for every entry on this list. */
-	UPROPERTY(EditAnywhere, Category = "Sub Graph")
-	TArray<FFlowNamedDataPinProperty> OutputDataPinDeclarations;
-
-public:
 #if WITH_EDITOR
 	FFlowGraphEvent OnSubGraphReconstructionRequested;
 
@@ -262,6 +254,8 @@ public:
 	TArray<FName> GatherCustomInputNodeEventNames() const;
 	TArray<FName> GatherCustomOutputNodeEventNames() const;
 
+	const TArray<FFlowNamedDataPinProperty>& GetOutputDataPinDeclarations() const { return OutputDataPinDeclarations; }
+
 #if WITH_EDITOR
 	const TArray<FName>& GetCustomInputs() const { return CustomInputs; }
 	const TArray<FName>& GetCustomOutputs() const { return CustomOutputs; }
@@ -279,9 +273,6 @@ protected:
 	void AddCustomOutput(const FName& EventName);
 	void RemoveCustomOutput(const FName& EventName);
 #endif
-
-public:
-	const TArray<FFlowNamedDataPinProperty>& GetOutputDataPinDeclarations() const { return OutputDataPinDeclarations; }
 
 //////////////////////////////////////////////////////////////////////////
 // Pin connections

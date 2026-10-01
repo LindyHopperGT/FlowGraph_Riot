@@ -146,6 +146,7 @@ FFlowDataPinResult UFlowNode_SubGraph::TrySupplyDataPin(const FName PinName) con
 			return Result;
 		}
 	}
+
 	if (!IsInputConnected(PinName))
 	{
 		const bool bHasAssetParams = IsInputConnected(AssetParams_MemberName) || !AssetParams.IsNull();
@@ -187,11 +188,6 @@ void UFlowNode_SubGraph::OnLoad_Implementation()
 		GetFlowSubsystem()->LoadSubFlow(this, SavedAssetInstanceName);
 		SavedAssetInstanceName = FString();
 	}
-}
-
-void UFlowNode_SubGraph::ReceiveOutputDataSnapshot(const FFlowOutputDataPinValues& Snapshot)
-{
-	CachedOutputDataPinValues = Snapshot;
 }
 
 #if WITH_EDITOR

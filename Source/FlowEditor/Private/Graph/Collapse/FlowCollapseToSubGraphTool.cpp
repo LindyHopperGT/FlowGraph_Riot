@@ -23,7 +23,13 @@ void FFlowCollapseToSubGraphTool::Execute(SFlowGraphEditor& GraphEditor)
 		return;
 	}
 
-	const FlowCollapseToSubGraph::FCollapsePlan Plan = FlowCollapseToSubGraph::PlanCollapse(GraphEditor.GetSelectedFlowNodes());
+	TSet<UFlowGraphNode*> SelectedFlowNodes;
+	for (UFlowGraphNode* SelectedNode : GraphEditor.GetSelectedFlowNodes())
+	{
+		SelectedFlowNodes.Add(SelectedNode);
+	}
+
+	const FlowCollapseToSubGraph::FCollapsePlan Plan = FlowCollapseToSubGraph::PlanCollapse(SelectedFlowNodes);
 	if (!Plan.CanApply())
 	{
 		FTextBuilder ErrorBuilder;

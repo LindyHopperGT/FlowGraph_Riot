@@ -8,7 +8,6 @@
 #include "AddOns/FlowNodeAddOn.h"
 #include "Asset/FlowAssetParams.h"
 #include "Asset/FlowAssetParamsUtils.h"
-#include "Interfaces/FlowExecutionGate.h"
 #include "Interfaces/FlowGraphOutputDataReceiverInterface.h"
 #include "Types/FlowNamedDataPinProperty.h"
 #include "Nodes/FlowNodeBase.h"
@@ -1153,7 +1152,7 @@ AActor* UFlowAsset::TryFindActorOwner() const
 
 void UFlowAsset::FinishFlowAndDeinitializeInstance(const EFlowFinishPolicy InFinishPolicy)
 {
-	FinishFlow(InFinishPolicy);
+	FinishFlow(InFinishPolicy, false);
 	DeinitializeInstance();
 }
 
@@ -1294,7 +1293,7 @@ void UFlowAsset::ResetNodes()
 	RecordedNodes.Empty();
 }
 
-void UFlowAsset::FinishFlow(const EFlowFinishPolicy InFinishPolicy)
+void UFlowAsset::FinishFlow(const EFlowFinishPolicy InFinishPolicy, const bool bRemoveInstance)
 {
 	FinishPolicy = InFinishPolicy;
 
@@ -1307,6 +1306,11 @@ void UFlowAsset::FinishFlow(const EFlowFinishPolicy InFinishPolicy)
 	}
 
 	ActiveNodes.Empty();
+
+	if (bRemoveInstance)
+	{
+		DeinitializeInstance();
+	}
 }
 
 UFlowSubsystem* UFlowAsset::GetFlowSubsystem() const
@@ -1366,50 +1370,6 @@ const FFlowPreloadPolicy& UFlowAsset::GetPreloadPolicy() const
 {
 	checkf(PreloadPolicy.IsValid(), TEXT("PreloadPolicy must be initialized prior to calling GetPreloadPolicy()"));
 	return PreloadPolicy.Get();
-}
-
-void UFlowAsset::InitializeOutputDataReceiverAndValues(IFlowGraphOutputDataReceiverInterface* InOutputDataReceiver)
-{
-	OutputDataReceiver = Cast<UObject>(InOutputDataReceiver);
-
-	// Initialize the live output store from the template asset's declarations
-	OutputDataPinValues.Values.Reset();
-
-	if (const UFlowAsset* Template = TemplateAsset.Get())
-	{
-		for (const FFlowNamedDataPinProperty& Declaration : Template->OutputDataPinDeclarations)
-		{
-			if (Declaration.IsValid())
-			{
-				OutputDataPinValues.Values.Add(Declaration.Name, Declaration.DataPinValue);
-			}
-			else
-			{
-				UE_LOG(LogFlow, Warning, TEXT("Invalid OutputDataPin %s"), *Declaration.Name.ToString());
-			}
-		}
-	}
-}
-
-void UFlowAsset::WriteOutputDataPinValue(const FName& PinName, const TInstancedStruct<FFlowDataPinValue>& Value)
-{
-	if (OutputDataPinValues.Values.Contains(PinName))
-	{
-		OutputDataPinValues.Values[PinName] = Value;
-	}
-	else
-	{
-		UE_LOG(LogFlow, Warning, TEXT("Could not find pin named %s in WriteOutputDataPinValue"), *PinName.ToString());
-	}
-}
-
-void UFlowAsset::FlushOutputDataPinValuesToReceiver()
-{
-	if (IFlowGraphOutputDataReceiverInterface* Receiver = Cast<IFlowGraphOutputDataReceiverInterface>(OutputDataReceiver.Get()))
-	{
-		// Do an immediate push to the receiver
-		Receiver->ReceiveOutputDataSnapshot(OutputDataPinValues);
-	}
 }
 
 void UFlowAsset::TriggerCustomInput(const FName& EventName, IFlowDataPinValueSupplierInterface* DataPinValueSupplier)

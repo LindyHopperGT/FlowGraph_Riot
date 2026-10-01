@@ -85,10 +85,6 @@ protected:
 	// IFlowDataPinValueSupplierInterface
 	virtual FFlowDataPinResult TrySupplyDataPin(const FName PinName) const override;
 	// --
-	
-	// IFlowGraphOutputDataReceiverInterface
-	virtual void ReceiveOutputDataSnapshot(const FFlowOutputDataPinValues& Snapshot) override;
-	// --
 
 #if WITH_EDITORONLY_DATA
 protected:

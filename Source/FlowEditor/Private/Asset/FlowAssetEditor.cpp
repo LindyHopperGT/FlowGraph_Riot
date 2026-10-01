@@ -488,7 +488,7 @@ void FFlowAssetEditor::AutoFormatGraph()
 	const FScopedTransaction Transaction(LOCTEXT("AutoFormatGraph", "Auto-Format Flow Graph"));
 
 	TSet<FGuid> TargetGuids;
-	const TSet<UFlowGraphNode*> SelectedNodes = GraphEditor->GetSelectedFlowNodes();
+	const TArray<UFlowGraphNode*> SelectedNodes = GraphEditor->GetSelectedFlowNodes();
 	if (SelectedNodes.Num() > 0)
 	{
 		for (const UFlowGraphNode* GraphNode : SelectedNodes)

@@ -191,6 +191,7 @@ UFlowAsset* UFlowSubsystem::CreateSubFlow(UFlowNode_SubGraph* SubGraphNode, cons
 			AssetInstance->NodeOwningThisAssetInstance = SubGraphNode;
 		}
 		check(AssetInstance->NodeOwningThisAssetInstance == SubGraphNode);
+
 		SubGraphNode->GetFlowAsset()->ActiveSubGraphs.Add(SubGraphNode, AssetInstance);
 
 		// don't activate Start Node if we're loading Sub Graph from SaveGame
@@ -216,7 +217,7 @@ void UFlowSubsystem::FinishSubFlow(UFlowNode_SubGraph* SubGraphNode, const EFlow
 		SubgraphNodeParentFlow->ActiveSubGraphs.Remove(SubGraphNode);
 		
 		// Finish the flow but do not remove the instance. 
-		SubgraphFlowAsset->FinishFlow(FinishPolicy);
+		SubgraphFlowAsset->FinishFlow(FinishPolicy, false);
 	}
 }
 
@@ -231,7 +232,7 @@ void UFlowSubsystem::RemoveSubFlow(UFlowNode_SubGraph* SubGraphNode, const EFlow
 
 		if (AssetInstance->IsActive())
 		{
-			AssetInstance->FinishFlow(FinishPolicy);
+			AssetInstance->FinishFlow(FinishPolicy, false);
 		}
 		
 		AssetInstance->DeinitializeInstance();		
