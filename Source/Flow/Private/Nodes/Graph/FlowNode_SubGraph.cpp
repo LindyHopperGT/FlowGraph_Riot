@@ -52,7 +52,7 @@ void UFlowNode_SubGraph::FlushContent()
 {
 	if (CanBeAssetInstanced() && GetFlowSubsystem())
 	{
-		GetFlowSubsystem()->RemoveSubFlow(this, EFlowFinishPolicy::Abort);
+		GetFlowSubsystem()->FinishSubFlow(this, EFlowFinishPolicy::Abort, true);
 	}
 }
 
@@ -100,9 +100,12 @@ void UFlowNode_SubGraph::ExecuteInput(const FName& PinName)
 void UFlowNode_SubGraph::Cleanup()
 {
 	UFlowSubsystem* FlowSubsystem = GetFlowSubsystem();
-	if (CanBeAssetInstanced() && FlowSubsystem)
+	if (FlowSubsystem && CanBeAssetInstanced())
 	{
-		FlowSubsystem->FinishSubFlow(this, EFlowFinishPolicy::Keep);
+		const UFlowAsset* SubFlow = FlowSubsystem->GetInstancedSubFlows().FindRef(this);
+		const bool bRemoveInstanceOnCleanup = SubFlow && SubFlow->GetSubGraphFinishPolicy() == ESubGraphFinishPolicy::Deinitialize;
+		FlowSubsystem->FinishSubFlow(this, EFlowFinishPolicy::Keep, bRemoveInstanceOnCleanup);
+	}
 	}
 
 	Super::Cleanup();
@@ -111,11 +114,10 @@ void UFlowNode_SubGraph::Cleanup()
 void UFlowNode_SubGraph::DeinitializeInstance()
 {
 	UFlowSubsystem* FlowSubsystem = GetFlowSubsystem();
-	if (CanBeAssetInstanced() && FlowSubsystem)
+	if (FlowSubsystem && CanBeAssetInstanced())
 	{
-		FlowSubsystem->RemoveSubFlow(this, EFlowFinishPolicy::Keep);
+		FlowSubsystem->FinishSubFlow(this, EFlowFinishPolicy::Keep, true);
 	}
-	
 	Super::DeinitializeInstance();
 }
 
@@ -171,7 +173,7 @@ FFlowDataPinResult UFlowNode_SubGraph::TrySupplyDataPin(const FName PinName) con
 		}
 	}
 
-	// Prefer the standard lookup if the pin is connected 
+	// Prefer the standard lookup if the pin is connected
 	// (or if there is no FlowAssetParams to ask)
 	return Super::TrySupplyDataPin(PinName);
 }

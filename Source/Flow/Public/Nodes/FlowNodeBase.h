@@ -154,7 +154,6 @@ public:
 
 	UFUNCTION(BlueprintPure, Category = "FlowNode")
 	const FGuid& GetGuid() const { return NodeGuid; }
-
 //////////////////////////////////////////////////////////////////////////
 // Pins	
 
