@@ -22,9 +22,9 @@
  * keeps identity, position, and content. AutoFormatFlowGraph after structural edits. DiffFlowAsset
  * for verification.
  *
- * Every mutating op takes a Mutation (FFlowMCPMutationOptions) field: set bDryRun to preview a
- * change without applying it (requires bUseTransaction true, and fails inside an ambient
- * transaction - see FFlowMCPMutationOptions::bDryRun).
+ * Mutating ops take a Mutation (FFlowMCPMutationOptions) field. Where supported, set bDryRun to
+ * preview a change without applying it (requires bUseTransaction true and no ambient transaction).
+ * ImportAndRegraphFlowAsset creates a package and does not support a dry run.
  */
 UCLASS(BlueprintType)
 class FLOWGRAPHCOURIER_API UFlowMCPToolset : public UToolsetDefinition
@@ -43,7 +43,7 @@ public:
 
 	/**
 	 * Import a Courier v2 JSON document into a new FlowAsset and build its editor graph in one call.
-	 * Trap: this always creates - to mutate an existing asset in place, use ApplyFlowPatch instead.
+	 * An occupied asset path is rejected. Use ApplyFlowPatch to edit an existing asset.
 	 * @param Request Courier v2 JSON document, target path, and mutation policy.
 	 * @return Imported asset metadata and mutation report.
 	 */
@@ -198,6 +198,12 @@ public:
 	UFUNCTION(meta = (AICallable), Category = "Flow Courier")
 	static FFlowMCPApplyFlowPatchResult ApplyFlowPatch(const FFlowMCPApplyFlowPatchRequest& Request);
 
+	/**
+	 * Replace a node's class while preserving its graph identity and mapped connections. Preview
+	 * with Mutation.bDryRun and inspect Findings for properties, pins, and addons that cannot map.
+	 * @param Request Asset and node GUID, new class, optional mappings, and mutation policy.
+	 * @return Feasibility, class paths, affected addon GUIDs, findings, and mutation report.
+	 */
 	UFUNCTION(meta = (AICallable), Category = "Flow Courier")
 	static FFlowMCPReplaceFlowNodeClassResult ReplaceFlowNodeClass(const FFlowMCPReplaceFlowNodeClassRequest& Request);
 

@@ -11,18 +11,17 @@ applies uniformly to every article kind.
 Checks, across one or more `agent-docs/` roots:
   1. Every `$KB:<domain>:<kind>:<id>` reference resolves to a file that
      declares that exact tag as its own (a "definition" - the tag appearing
-     on its own line near the top of the file, per GARDENING.md's template).
+     on its own line near the top of the file, as described in INDEX.md).
   2. Every article's declared tag id matches its filename, normalized
-     (lowercased, `-`/`_` stripped) so `GARDENING.md` / `gardening` and
-     `CourierTextFormat.md` / `courier-text-format` compare equal without a
-     special case. The one real exemption is any file literally named
+     (lowercased, `-`/`_` stripped) so `CourierTextFormat.md` /
+     `courier-text-format` compare equal. The exemption is any file literally named
      `INDEX.md` (any casing) - every index in this KB deliberately decouples
-     its filename from its semantic id (e.g. `flowgraph-index`,
-     `master-index`) so every domain root can use the same filename.
+     its filename from its semantic id (e.g. `flowgraph-index`) so every domain
+     root can use the same filename.
   3. (Informational, non-failing) Orphan articles: a defined tag that no
      OTHER article references. Doesn't affect exit code - it's a discoverability
      signal (e.g. a pattern with no see-also pointing at it), not an error.
-     `guide` kind is excluded (index/gardening entry points are expected to be
+     `guide` kind is excluded (index and authoring entry points are expected to be
      link *targets* mentioned in prose without always being formally referenced).
 
 With --catalog <export.json> (a FlowCatalogQuery UTF-8 export, e.g. from
@@ -38,15 +37,14 @@ that markdown alone cannot provide:
   5. Stem-collision ladder rule: a group of same-kind classes sharing one
      derived stem where NONE of them kept the bare stem (every member fell
      back to its full class name) - the catalog could not break the tie, and
-     neither should this tool guess which one is right. This is a check on
-     the catalog's own naming, unrelated to markdown articles, so it survives
-     the v1-to-v2 narrowing unchanged.
+     neither should this tool guess which one is right. This checks catalog
+     naming independently of markdown articles.
 
 Usage:
     python kb_lint.py <root1> [<root2> ...] [--catalog <export.json>]
 
-Example (from repo root):
-    python CoreSDK/Plugins/Runtime/ThirdParty/FlowGraph/agent-docs/Scripts/kb_lint.py <your-project>/agent-docs --catalog /tmp/flow_catalog.json
+Example (from the plugin root):
+    python agent-docs/Scripts/kb_lint.py agent-docs
 
 Exit code is 0 if clean, 1 if any problem was found (suitable for CI/hooks).
 """
@@ -104,9 +102,7 @@ def scan_root(root: Path) -> list[KBFile]:
     files = []
     for path in sorted(root.rglob("*.md")):
         if "process" in path.relative_to(root).parts:
-            # process/ holds meta-documents about how the KB itself is built/maintained
-            # (e.g. FLOW_CODEV_AGENT_PLAN.md) - not KB articles. Its prose may contain
-            # illustrative $KB: tag examples that were never meant to resolve.
+            # Optional process notes are not KB articles and may contain illustrative tags.
             continue
         text = path.read_text(encoding="utf-8")
         kb_file = KBFile(path=path, text=text)
@@ -145,7 +141,7 @@ def lint(files: list[KBFile]) -> LintResult:
 
         for domain, kind, id_ in kb_file.definitions:
             # Every index in this KB is named INDEX.md by convention and carries a semantic id
-            # (flowgraph-index, master-index, ...) instead - filename/id decoupling is the point,
+            # (flowgraph-index, ...) instead - filename/id decoupling is the point,
             # not drift, so index files are exempt from this check entirely.
             if kb_file.path.stem.lower() == "index":
                 continue
@@ -194,7 +190,7 @@ def load_catalog_rows(catalog_path: Path) -> list[dict]:
 def find_pattern_concept_definitions(files: list[KBFile]) -> dict[tuple[str, str], Path]:
     """Maps (kind, slug) -> defining file, for pattern/concept tags only.
 
-    Bridges the two slug namespaces mechanically, per GARDENING.md's slug mapping rule: an article
+    Bridges the two slug namespaces mechanically: an article
     declares $KB:<domain>:<kind>:<slug>, while a class's AgentDoc.Articles entry stores
     "<kind>:<slug>" with no domain. Resolution is always by the exact tag, never by filename.
     """

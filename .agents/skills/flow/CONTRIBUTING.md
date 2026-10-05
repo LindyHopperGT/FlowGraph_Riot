@@ -14,21 +14,10 @@ For anyone editing this skill's own files. If you are here to do Flow work, go b
 - Anything that fits none of the above: a new reference file, plus a sentence in `SKILL.md`'s
   "Where to go next" naming when to read it.
 
-## This copy ships upstream
+## Portable scope
 
-The plugin copy is the source of truth, and it is kept self-contained so it can ship to the
-open-source project. Nothing in this directory may name a game-specific class, content prefix,
-scripting language or domain vocabulary, and no angle-bracketed vendor markers belong here. Push
-every project-specific dependency up into a domain skill. This is grep-enforced before commit.
-
-## The shim description must stay in sync
-
-A thin `SKILL.md` also exists at the repo root, under `.agents/skills/flow/`, purely so the skill is
-discoverable by name. The loader indexes `.agents/skills/*/SKILL.md` literally: it never resolves
-through to this file, and pointing that path here with a directory junction de-registers the skill
-entirely.
-
-That means the root shim's own frontmatter `description:` is what the loader reads to decide whether
-to trigger this skill. Keep the two `description:` blocks byte-identical, and change both in the same
-edit. Content goes in this copy; the shim stays a pointer.
+This skill ships with FlowGraph. Keep every instruction usable in a checkout containing only this
+plugin and Unreal Engine. Put project-specific classes, content prefixes, scripting languages,
+and domain decisions in the consuming project's own skill. Keep the frontmatter description focused
+on when to load this skill; keep detailed procedures in the body and references.
 

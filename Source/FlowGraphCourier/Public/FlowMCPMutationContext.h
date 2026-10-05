@@ -28,6 +28,7 @@ struct FLOWGRAPHCOURIER_API FFlowMCPMutationOptions
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flow Courier")
 	bool bDryRun = false;
 
+	/** Save modified packages after a successful mutation. False leaves them dirty in memory. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flow Courier")
 	bool bSave = true;
 
@@ -35,6 +36,7 @@ struct FLOWGRAPHCOURIER_API FFlowMCPMutationOptions
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flow Courier")
 	bool bUseTransaction = true;
 
+	/** Label shown for an owned editor transaction. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flow Courier")
 	FString TransactionDescription = TEXT("Flow MCP mutation");
 
@@ -96,6 +98,8 @@ public:
 		FString& OutError);
 	bool Complete(FFlowMCPMutationReport& OutReport, FString& OutError);
 	void Abort();
+	/** End an owned transaction that has no recorded object changes. */
+	void CancelUnmodified();
 	void RegisterDryRunRollback(TFunction<void()>&& InRollback);
 
 	bool IsDryRun() const

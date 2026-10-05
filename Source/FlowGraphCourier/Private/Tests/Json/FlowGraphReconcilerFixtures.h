@@ -62,8 +62,7 @@ inline const TCHAR* GReconcilerJson_AddNodeViaAlias = TEXT(R"JSON(
 )JSON");
 
 // Adds a new Finish node via newAlias "extraFinish" and retargets B's existing Completed
-// connection (previously pointing at C) onto the new aliased node - proves aliases resolve
-// before connection ops apply, in the same document.
+// connection from C onto the new aliased node. Aliases resolve before connection ops apply.
 inline const TCHAR* GReconcilerJson_AddNodeViaAliasAndConnect = TEXT(R"JSON(
 {
 	"formatVersion": 2,

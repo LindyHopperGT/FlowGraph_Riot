@@ -193,8 +193,8 @@ private:
 	// "Items.0.Name") against OwnerStruct/ContainerPtr, descending through nested FStructProperty
 	// members and FArrayProperty indices one path segment at a time. Used as a fallback by
 	// SetNodeProperties/SetAddOnProperties when a flat FindPropertyByName lookup fails and the key
-	// contains a dot. Self-contained (no dependency on RGIUnrealToolsets' FRGIPropertyPathResolver,
-	// which the Flow plugin cannot depend on).
+	// contains a dot. Resolution stays within this module so the importer can process nested
+	// properties without a separate toolset dependency.
 	static bool ResolvePropertyPath(UStruct* OwnerStruct, void* ContainerPtr, const FString& PropertyPath, FProperty*& OutProperty, void*& OutValuePtr, FString& OutErrorMessage);
 
 	// Applies parsed InputPins/OutputPins from ParsedNode to NewNode, creating any pins that are

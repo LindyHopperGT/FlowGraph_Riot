@@ -35,14 +35,8 @@ namespace
 		return !Endpoint.NodeGuid.IsEmpty() && !Endpoint.NodeAlias.IsEmpty();
 	}
 
-	// TEMPORARY bridge to FFlowGraphParsedNode::InputPins/OutputPins, which are still
-	// TArray<FString> declaration strings re-parsed by the soon-to-be-deleted ParsePinDecl/
-	// ParsePinNameToken. Removed once those fields widen to TArray<FFlowCourierPin> in the next
-	// Phase 2 checkpoint (FLOW_AGENT_RESTART_CHECKLIST.md) - this function must not gain any
-	// pin-name special-casing of its own; it only renders the same bracket-suffix shape
-	// ParsePinDecl already parses, so the old grammar's existing single-space-name handling
-	// continues to work correctly (not because this function knows about that case, but because
-	// it hasn't been asked to).
+	// Parsed graph nodes store pin declarations as strings. Render the Courier pin fields in the
+	// declaration form accepted by ParsePinDecl, preserving pin names exactly, including spaces.
 	FString RenderPinDeclBridge(const FFlowCourierPin& Pin)
 	{
 		if (Pin.Type.IsEmpty())

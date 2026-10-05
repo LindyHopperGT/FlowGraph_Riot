@@ -192,7 +192,7 @@ class FLOWGRAPHCOURIER_API FFlowGraphReconciler
 {
 public:
 	/**
-	 * Parses CourierDocumentJson (Courier v2 JSON - see FLOW_COURIER_V2_SPEC.md) against the
+	 * Parses CourierDocumentJson (Courier v2 JSON; see agent-docs/CourierTextFormat.md) against the
 	 * existing asset at TargetAssetPath (if any), classifies all changes, resolves aliases, and
 	 * runs pre-commit validation. Returns nullptr only on a hard parse failure that makes the
 	 * document meaningless (malformed JSON, wrong formatVersion) - OutErrorMessage set. Every
@@ -250,8 +250,8 @@ public:
 	// using the same source/key-pin logic ClassifyParsedConnections uses to detect "present".
 	// Rendered as "SourceGuid.SourcePin -> TargetGuid.TargetPin", split into those verified as
 	// actually wired (OutVerified) and those that did not land (OutNotLanded). The write paths
-	// this guards (SetupConnections, and a full reimport) do not themselves guarantee every
-	// requested connection took - see W10.21 - so a caller reporting success must check here
+	// this guards (SetupConnections and a full import) do not themselves guarantee every
+	// requested connection took, so a caller reporting success must check here
 	// rather than trust the write call's return value alone.
 	static void VerifyConnectionsLanded(
 		UFlowAsset* FlowAsset,

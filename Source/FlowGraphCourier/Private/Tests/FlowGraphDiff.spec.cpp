@@ -25,7 +25,7 @@ BEGIN_DEFINE_SPEC(FFlowGraphDiffSpec, "FlowGraphCourier.EditorGame.Diff", EAutom
 		), *NodeGuid, *AddOnsJsonOps);
 	}
 
-	// Two-node document with both an exec and a data connection, used by P7.8 connection-type tests.
+	// Two-node document with both an exec and a data connection.
 	// ConnectionsJsonOps is inserted verbatim as extra ops after both nodes' UpsertNode ops (empty
 	// for no connections; each connection op must start with a leading comma).
 	static FString MakeTwoNodeDocWithConnections(const FString& NodeAGuid, const FString& NodeBGuid, const FString& ConnectionsJsonOps)
@@ -165,8 +165,8 @@ void FFlowGraphDiffSpec::Define()
 		});
 	});
 
-	// P7.8 - Exec/data distinction in connection diff
-	Describe("Connection exec/data tagging (P7.8)", [this]()
+	// Connection diffs distinguish exec and data pins.
+	Describe("Connection exec/data tagging", [this]()
 	{
 		const FString NodeA = TEXT("00000000-0000-0000-0000-0000000000B1");
 		const FString NodeB = TEXT("00000000-0000-0000-0000-0000000000B2");

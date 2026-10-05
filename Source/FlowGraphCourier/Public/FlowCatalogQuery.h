@@ -57,8 +57,7 @@ FLOWGRAPHCOURIER_API bool LexTryParseString(EFlowClassOrigin& OutOrigin, const F
 /**
  * Which parts of a catalog row the caller wants, each independently gated.
  *
- * Replaces a names/summary/full ladder, which could not express "names and nothing else" and so
- * forced every bare name list to carry a full row's worth of empty fields.
+ * A caller can request a bare name list or combine only the sections it needs.
  */
 enum class EFlowCatalogSection : uint32
 {

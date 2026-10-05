@@ -3,6 +3,7 @@
 #include "FlowMCPToolset.h"
 
 #include "AddOns/FlowNodeAddOn.h"
+#include "AssetRegistry/AssetRegistryModule.h"
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
 #include "EdGraph/EdGraph.h"
@@ -35,6 +36,7 @@
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
 #include "UObject/SoftObjectPath.h"
+#include "UObject/UObjectGlobals.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(FlowMCPToolset)
 
@@ -44,6 +46,26 @@ namespace
 	{
 		UKismetSystemLibrary::RaiseScriptError(
 			FString::Printf(TEXT("FlowMCPToolset: %s"), *Message));
+	}
+
+	void DiscardFailedImport(const FTopLevelAssetPath& AssetPath, bool bPackageWasDirty)
+	{
+		UPackage* Package = FindPackage(nullptr, *AssetPath.GetPackageName().ToString());
+		if (!Package)
+		{
+			return;
+		}
+
+		if (UFlowAsset* Asset = FindObject<UFlowAsset>(Package, *AssetPath.GetAssetName().ToString()))
+		{
+			FAssetRegistryModule::AssetDeleted(Asset);
+			const FName TransientName = MakeUniqueObjectName(GetTransientPackage(), Asset->GetClass(), Asset->GetFName());
+			Asset->ClearFlags(RF_Public | RF_Standalone);
+			Asset->Rename(*TransientName.ToString(), GetTransientPackage(), REN_DontCreateRedirectors | REN_NonTransactional | REN_DoNotDirty);
+			Asset->MarkAsGarbage();
+		}
+
+		Package->SetDirtyFlag(bPackageWasDirty);
 	}
 
 	bool ParseAssetPath(
@@ -282,7 +304,25 @@ FFlowMCPImportAndRegraphFlowAssetResult UFlowMCPToolset::ImportAndRegraphFlowAss
 			return Result;
 		}
 	}
-
+	// Check loaded and saved assets of any class. An unsaved object in the current editor session
+	// must also block import at the same path.
+	UPackage* ExistingPackage = FindPackage(nullptr, *ParsedPath.GetPackageName().ToString());
+	UObject* ExistingObject = ExistingPackage
+		? FindObject<UObject>(ExistingPackage, *ParsedPath.GetAssetName().ToString())
+		: nullptr;
+	if (ExistingObject || LoadObject<UObject>(nullptr, *ParsedPath.ToString()))
+	{
+		RaiseFlowGraphToolError(TEXT("An asset already exists at AssetPath. Use ApplyFlowPatch to edit it."));
+		return Result;
+	}
+	UClass* AssetClass = LoadObject<UClass>(nullptr, *Document.AssetClass);
+	if (!AssetClass || !AssetClass->IsChildOf(UFlowAsset::StaticClass()))
+	{
+		RaiseFlowGraphToolError(FString::Printf(
+			TEXT("AssetClass is not a resolvable FlowAsset class: %s"), *Document.AssetClass));
+		return Result;
+	}
+	const bool bPackageWasDirty = ExistingPackage && ExistingPackage->IsDirty();
 	FFlowMCPMutationContext MutationContext(Request.Mutation);
 	if (!MutationContext.Begin(Error))
 	{
@@ -290,67 +330,33 @@ FFlowMCPImportAndRegraphFlowAssetResult UFlowMCPToolset::ImportAndRegraphFlowAss
 		return Result;
 	}
 
-	// Checks in-memory (FindObject) before disk (LoadObject) - a disk-only lookup here would miss
-	// an asset already created this session but not yet saved.
-	UFlowAsset* ExistingAsset = FFlowGraphReconciler::FindOrLoadFlowAsset(ParsedPath.ToString());
-	UFlowAsset* ImportedAsset = nullptr;
-	if (ExistingAsset && ExistingAsset->GetClass() != UFlowAsset::StaticClass())
-	{
-		if (!MutationContext.PrepareAsset(ExistingAsset, Error))
-		{
-			MutationContext.Abort();
-			RaiseFlowGraphToolError(Error);
-			return Result;
-		}
-
-		MutationContext.Modify(ExistingAsset);
-		if (!UFlowGraphImporter::PopulateFlowAssetFromDocument(ExistingAsset, Document.bWorldBound, ParsedNodes, ParsedConnections, Error))
-		{
-			MutationContext.Abort();
-			RaiseFlowGraphToolError(FString::Printf(
-				TEXT("Failed to populate FlowAsset from Courier document: %s"),
-				*Error));
-			return Result;
-		}
-
-		if (!UFlowGraphRegrapher::RegraphFlowAsset(ExistingAsset))
-		{
-			MutationContext.Abort();
-			RaiseFlowGraphToolError(
-				TEXT("Failed to rebuild the FlowAsset editor graph."));
-			return Result;
-		}
-
-		ImportedAsset = ExistingAsset;
-	}
-	else
-	{
-		ImportedAsset = UFlowGraphRegrapher::ImportAndRegraphFromDocument(
+	UFlowAsset* ImportedAsset = UFlowGraphRegrapher::ImportAndRegraphFromDocument(
 			ParsedPath.ToString(),
 			Document.AssetClass,
 			Document.bWorldBound,
 			ParsedNodes,
 			ParsedConnections);
-		if (!ImportedAsset)
-		{
-			MutationContext.Abort();
-			RaiseFlowGraphToolError(
-				TEXT("Failed to import and rebuild FlowAsset from Courier document."));
-			return Result;
-		}
-
-		if (!MutationContext.PrepareAsset(ImportedAsset, Error))
-		{
-			MutationContext.Abort();
-			RaiseFlowGraphToolError(Error);
-			return Result;
-		}
-
-		MutationContext.Modify(ImportedAsset);
+	if (!ImportedAsset)
+	{
+		MutationContext.CancelUnmodified();
+		DiscardFailedImport(ParsedPath, bPackageWasDirty);
+		RaiseFlowGraphToolError(TEXT("Failed to import and rebuild FlowAsset from Courier document."));
+		return Result;
 	}
+
+	if (!MutationContext.PrepareAsset(ImportedAsset, Error))
+	{
+		MutationContext.CancelUnmodified();
+		DiscardFailedImport(ParsedPath, bPackageWasDirty);
+		RaiseFlowGraphToolError(Error);
+		return Result;
+	}
+
+	MutationContext.Modify(ImportedAsset);
 
 	if (!CompleteMutation(ImportedAsset, MutationContext, Result.Mutation))
 	{
+		DiscardFailedImport(ParsedPath, bPackageWasDirty);
 		return FFlowMCPImportAndRegraphFlowAssetResult();
 	}
 
@@ -359,9 +365,8 @@ FFlowMCPImportAndRegraphFlowAssetResult UFlowMCPToolset::ImportAndRegraphFlowAss
 	Result.AssetName = ImportedAsset->GetName();
 	Result.NodeCount = ImportedAsset->GetNodes().Num();
 
-	// Neither PopulateFlowAssetFromDocument+RegraphFlowAsset (existing asset) nor
-	// ImportAndRegraphFromDocument (new asset) verify that every requested connection actually
-	// landed - see W10.21. Check post-apply and report rather than trust the write call's return.
+	// Verify every requested connection against the imported runtime graph. A successful import
+	// alone does not establish that every connection was created.
 	TArray<FString> VerifiedConnections, NotLandedConnections;
 	FFlowGraphReconciler::VerifyConnectionsLanded(ImportedAsset, ParsedConnections, VerifiedConnections, NotLandedConnections);
 	for (const FString& NotLandedLabel : NotLandedConnections)
@@ -1615,13 +1620,6 @@ FFlowMCPReplaceFlowNodeClassResult UFlowMCPToolset::ReplaceFlowNodeClass(
 		Result.bCanReplace = false;
 		return Result;
 	}
-	if (Request.Mutation.bSave && Request.Mutation.TargetChangelist.IsEmpty())
-	{
-		Result.Findings.Add(TEXT("A saved class replacement requires an explicit TargetChangelist."));
-		Result.bCanReplace = false;
-		return Result;
-	}
-
 	FFlowMCPMutationContext Context(Request.Mutation);
 	if (!BeginMutation(Plan.Asset, Context))
 	{

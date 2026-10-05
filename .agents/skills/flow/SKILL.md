@@ -1,12 +1,8 @@
 ---
 name: flow
 description: >
-  Flow graph tutor and co-developer for any FlowAsset: what a node or addon does, which node to
-  reach for, navigating the Flow knowledge base, reviewing or refactoring graph structure, and
-  reading or writing Courier v2 JSON graph documents. Triggers: "Flow node", "Flow graph",
-  "FlowAsset", "flow addon", "Courier", "Flow graph review", "Flow graph refactor", "subgraph",
-  "decompose graph". Load a project's own Flow skill first if the request names that project's own
-  asset subclass.
+  Flow graph authoring and Courier JSON editing for any FlowAsset. Use for Flow nodes, addons,
+  graph structure, and Courier tools. Load a project's Flow skill first for its own asset subclass.
 ---
 
 # Flow
@@ -73,15 +69,12 @@ mean, and the export-text rules that govern property values, fetch
 
 Flow's agent-facing knowledge base is markdown, federated across `agent-docs/` roots:
 
-- `CoreSDK/Plugins/Runtime/ThirdParty/FlowGraph/agent-docs/` - this plugin's concepts and
-  authoring guides.
-- `CoreSDK/Plugins/Runtime/ThirdParty/AIFlowGraph/agent-docs/` - the AIFlowGraph plugin's, when
-  that plugin is present.
+- This plugin's `agent-docs/` - generic concepts and authoring guides.
+- An extension plugin's `agent-docs/`, when that plugin is installed.
 - A project's own `agent-docs/` root, for its asset subclasses and its design-decision log. A
   companion domain skill names that path; this file deliberately does not.
 
-`FlowGraph/docs/`, with no `agent-docs` in it, is not part of this knowledge base. That is the
-upstream open-source project's published site.
+The plugin's `docs/` is its published site, separate from the agent knowledge base.
 
 Cross-links are `$KB:<domain>:<kind>:<id>`, for example `$KB:flow:concept:subgraphs`. Resolve one
 by grepping the exact tag string, never by guessing a file path or a section number. Per-class

@@ -128,7 +128,7 @@ void UFlowGraphExporter::BuildDocumentNodes(const UFlowAsset* FlowAsset, FFlowCo
 
 			// Only editable state is authored content; generated/runtime state (e.g. a pin
 			// definition map with no EditAnywhere) is rebuilt by the node itself, not carried
-			// in the document. See FLOW_COURIER_V2_SPEC.md Section 7.
+			// in the document. See agent-docs/CourierTextFormat.md.
 			if (!Property || Property->HasAnyPropertyFlags(CPF_Transient | CPF_Deprecated) || !Property->HasAnyPropertyFlags(CPF_Edit))
 			{
 				continue;

@@ -1,4 +1,4 @@
-// Copyright https://github.com/MothCocoon/FlowGraph/graphs/contributors
+﻿// Copyright https://github.com/MothCocoon/FlowGraph/graphs/contributors
 
 #include "FlowCatalogQuery.h"
 #include "FlowLogChannels.h"
@@ -631,8 +631,7 @@ FFlowCatalogClassRow UFlowCatalogQuery::BuildRow(const UClass* Class, bool bIsAd
 
 		if (Params.bDescriptionOnly)
 		{
-			// Description alone is the "brief" preset's whole payload now that Guidance/Tags require
-			// the full authored doc - skip gathering AgentDoc entirely rather than gathering and discarding it.
+			// The "brief" preset carries only Description; avoid gathering the authored doc.
 			Row.Doc = FFlowCatalogDocRow();
 		}
 		else
@@ -1039,8 +1038,7 @@ namespace
 	}
 
 	/**
-	 * Emits only the fields a row actually carries. Emitting every field unconditionally is what made
-	 * a bare name list cost more than the whole hand-written index it replaced.
+	 * Emits only requested sections so a bare name list contains no empty detail fields.
 	 */
 	TArray<TSharedPtr<FJsonValue>> RowsToJson(const TArray<FFlowCatalogClassRow>& Rows, EFlowCatalogSection Sections)
 	{
@@ -1369,8 +1367,7 @@ FString UFlowCatalogQuery::GetNodeDescription(const UClass* NodeOrAddOnClass)
 	}
 	
 #if WITH_EDITOR
-	// Read through UFlowNodeBase so addons get the same treatment as nodes; casting to UFlowNode here
-	// is what used to blank every addon's description and category.
+	// UFlowNodeBase supplies tooltips for both nodes and addons.
 	if (const UFlowNodeBase* DefaultNode = Cast<UFlowNodeBase>(NodeOrAddOnClass->GetDefaultObject()))
 	{
 		const FText Tooltip = DefaultNode->GetNodeToolTip();

@@ -42,9 +42,8 @@ UFlowAsset* UFlowGraphImporter::ImportFlowGraphFromDocument(
 		return nullptr;
 	}
 
-	// Prefer the concrete class recorded in the document's AssetClass so creating e.g. a
-	// project-specific FlowAsset subclass does not silently downgrade it to a plain UFlowAsset.
-	// Falls back to UFlowAsset when AssetClass is absent or unresolved.
+	// Use the document's concrete asset class. An explicit class that cannot be loaded must fail
+	// rather than creating a base FlowAsset with different graph rules.
 	UClass* ResolvedAssetClass = UFlowAsset::StaticClass();
 	if (!AssetClassPath.IsEmpty() && !AssetClassPath.Equals(TEXT("None"), ESearchCase::IgnoreCase))
 	{
@@ -55,7 +54,8 @@ UFlowAsset* UFlowGraphImporter::ImportFlowGraphFromDocument(
 		}
 		else
 		{
-			UE_LOG(LogFlow, Warning, TEXT("ImportFlowGraphFromDocument: Could not resolve AssetClass '%s', falling back to UFlowAsset"), *AssetClassPath);
+			OutErrorMessage = FString::Printf(TEXT("AssetClass is not a resolvable FlowAsset class: %s"), *AssetClassPath);
+			return nullptr;
 		}
 	}
 
@@ -330,7 +330,7 @@ bool UFlowGraphImporter::SetupConnections(UFlowAsset* FlowAsset, const TMap<FGui
 		bool bIsExecPin = false;
 		if (!ResolveSourcePin(SourceNode, Connection.SourcePinName, DeclaredOutputPinTypes, bIsExecPin))
 		{
-			UE_LOG(LogFlow, Warning, TEXT("FlowGraphImporter: Could not resolve source pin %s on node %s — skipping connection"),
+			UE_LOG(LogFlow, Warning, TEXT("FlowGraphImporter: Could not resolve source pin %s on node %s - skipping connection"),
 				*Connection.SourcePinName.ToString(), *SourceNode->GetClass()->GetName());
 			continue;
 		}
@@ -940,7 +940,7 @@ static bool TryParseClassWithFields(const FString& ValueString, FString& OutClas
 }
 
 // Splits a field block on commas that sit outside any parentheses or quoted string, so a nested
-// struct value such as ObjectiveNameTag=(TagName="A.B") survives as one field rather than being
+// struct value such as Configuration=(Name="A.B") survives as one field rather than being
 // torn in half at its inner comma.
 static void SplitFieldsAtTopLevel(const FString& Fields, TArray<FString>& OutFields)
 {

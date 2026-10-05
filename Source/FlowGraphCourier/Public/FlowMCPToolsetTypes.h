@@ -64,6 +64,7 @@ struct FLOWGRAPHCOURIER_API FFlowMCPImportAndRegraphFlowAssetRequest
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flow Courier")
 	FString AssetPath;
 
+	/** Save and transaction policy for creating the asset. Dry runs are unsupported. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flow Courier")
 	FFlowMCPMutationOptions Mutation;
 };
@@ -313,6 +314,7 @@ struct FLOWGRAPHCOURIER_API FFlowMCPFindFlowNodeTypesRequest
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flow Courier")
 	TArray<FString> ClassNames;
 
+	/** Search nodes, addons, or both. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flow Courier")
 	EFlowCatalogKind Kind = EFlowCatalogKind::Any;
 
@@ -355,6 +357,7 @@ struct FLOWGRAPHCOURIER_API FFlowMCPFindFlowNodeTypesRequest
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flow Courier")
 	int32 Limit = 0;
 
+	/** Number of matching rows to skip before returning results. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flow Courier")
 	int32 Offset = 0;
 };
@@ -478,6 +481,7 @@ struct FLOWGRAPHCOURIER_API FFlowMCPSetFlowAgentDocRequest
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flow Courier")
 	TArray<FString> Articles;
 
+	/** Save and transaction policy for a Blueprint class documentation write. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flow Courier")
 	FFlowMCPMutationOptions Mutation;
 };
@@ -592,15 +596,19 @@ struct FLOWGRAPHCOURIER_API FFlowMCPFindFlowNodesRequest
 {
 	GENERATED_BODY()
 
+	/** Full object path of the FlowAsset to search. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flow Courier")
 	FString AssetPath;
 
+	/** Case-insensitive substring of the live editor node title; empty matches any title. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flow Courier")
 	FString TitleFilter;
 
+	/** Node class short name or full path; empty matches any class. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flow Courier")
 	FString ClassFilter;
 
+	/** Return only nodes with no incoming connections. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flow Courier")
 	bool bEntryPointsOnly = false;
 };
@@ -625,6 +633,7 @@ struct FLOWGRAPHCOURIER_API FFlowMCPExportFlowSubgraphRequest
 {
 	GENERATED_BODY()
 
+	/** Full object path of the FlowAsset containing the start node. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flow Courier")
 	FString AssetPath;
 
@@ -659,6 +668,7 @@ struct FLOWGRAPHCOURIER_API FFlowMCPPlanFlowSubgraphFromSelectionRequest
 {
 	GENERATED_BODY()
 
+	/** Full object path of the FlowAsset containing the selected nodes. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flow Courier")
 	FString TargetAssetPath;
 
@@ -723,15 +733,19 @@ struct FLOWGRAPHCOURIER_API FFlowMCPCreateFlowSubgraphFromSelectionRequest
 {
 	GENERATED_BODY()
 
+	/** Full object path of the FlowAsset containing the selected nodes. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flow Courier")
 	FString TargetAssetPath;
 
+	/** GUIDs of top-level nodes to move into the child asset. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flow Courier")
 	TArray<FString> SelectionGuids;
 
+	/** New child asset name without a package path; requires the Subgraph_ prefix. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flow Courier")
 	FString NewAssetName;
 
+	/** Save and transaction policy; this operation requires its own transaction. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flow Courier")
 	FFlowMCPMutationOptions Mutation;
 };
@@ -765,6 +779,7 @@ struct FLOWGRAPHCOURIER_API FFlowMCPFindOrCreateFlowNodeRequest
 {
 	GENERATED_BODY()
 
+	/** Full object path of the FlowAsset to search or update. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flow Courier")
 	FString TargetAssetPath;
 
@@ -776,6 +791,7 @@ struct FLOWGRAPHCOURIER_API FFlowMCPFindOrCreateFlowNodeRequest
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flow Courier")
 	TMap<FString, FString> MatchProperties;
 
+	/** Save and transaction policy when a node needs to be created. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flow Courier")
 	FFlowMCPMutationOptions Mutation;
 };
@@ -810,7 +826,7 @@ struct FLOWGRAPHCOURIER_API FFlowMCPCreateFlowNodeBlueprintRequest
 {
 	GENERATED_BODY()
 
-	/** Destination package folder, e.g. "/Enemy_Threat_Angler/Gameplay/Actions". No asset name. */
+	/** Destination package folder, e.g. "/Game/FlowNodes". No asset name. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flow Courier")
 	FString PackagePath;
 
@@ -834,6 +850,7 @@ struct FLOWGRAPHCOURIER_API FFlowMCPCreateFlowNodeBlueprintRequest
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flow Courier")
 	FString Description;
 
+	/** Save and transaction policy for creating the Blueprint asset. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flow Courier")
 	FFlowMCPMutationOptions Mutation;
 };
@@ -847,9 +864,8 @@ struct FLOWGRAPHCOURIER_API FFlowMCPCreateFlowNodeBlueprintResult
 	FString AssetPath;
 
 	/**
-	 * The asset class actually created, derived from the parent rather than supplied. Assert on this
-	 * rather than on success alone - a plain "/Script/Engine.Blueprint" here is the exact defect this
-	 * op exists to make impossible.
+	 * The asset class created from the parent. Check that it is a Flow node or addon Blueprint class;
+	 * a plain "/Script/Engine.Blueprint" is not discoverable through the Flow catalog.
 	 */
 	UPROPERTY(BlueprintReadOnly, Category = "Flow Courier")
 	FString AssetClassPath;
@@ -886,6 +902,7 @@ struct FLOWGRAPHCOURIER_API FFlowMCPAutoFormatFlowGraphRequest
 {
 	GENERATED_BODY()
 
+	/** Full object path of the FlowAsset whose editor nodes will be arranged. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flow Courier")
 	FString TargetAssetPath;
 
@@ -893,6 +910,7 @@ struct FLOWGRAPHCOURIER_API FFlowMCPAutoFormatFlowGraphRequest
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flow Courier")
 	TArray<FString> SelectionGuids;
 
+	/** Preview, save, and transaction policy for the layout change. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flow Courier")
 	FFlowMCPMutationOptions Mutation;
 };
@@ -929,6 +947,7 @@ struct FLOWGRAPHCOURIER_API FFlowMCPReconstructFlowGraphRequest
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flow Courier")
 	FString TargetAssetPath;
 
+	/** Preview, save, and transaction policy for rebuilding the editor graph. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flow Courier")
 	FFlowMCPMutationOptions Mutation;
 };
@@ -963,6 +982,7 @@ struct FLOWGRAPHCOURIER_API FFlowMCPExportFlowCatalogRequest
 {
 	GENERATED_BODY()
 
+	/** Absolute path of the UTF-8 JSON file to write. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flow Courier")
 	FString OutputFilePath;
 
@@ -1201,30 +1221,40 @@ struct FLOWGRAPHCOURIER_API FFlowMCPReplaceFlowNodeClassRequest
 {
 	GENERATED_BODY()
 
+	/** Full object path of the FlowAsset containing the node. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flow Courier")
 	FString AssetPath;
 
+	/** GUID of the node to replace; the replacement retains this identity. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flow Courier")
 	FString NodeGuid;
 
+	/** Full class path of the replacement Flow node. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flow Courier")
 	FString NewNodeClass;
 
+	/** Source property name to replacement property name. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flow Courier")
 	TMap<FString, FString> PropertyMappings;
 
+	/** Source pin name to replacement pin name for affected connections. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flow Courier")
 	TMap<FString, FString> PinMappings;
 
+	/** Addon GUID string to replacement addon class path. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flow Courier")
 	TMap<FString, FString> AddOnClassMappings;
 
+	/** "AddonGuid.SourceProperty" to replacement addon property name. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flow Courier")
 	TMap<FString, FString> AddOnPropertyMappings;
 
+	/** Permit a save to remint duplicate addon GUIDs elsewhere in the asset. Duplicates on the
+	 * target node still block replacement. Use only when those identity changes are accepted. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flow Courier")
 	bool bAllowDuplicateAddonGuidRepair = false;
 
+	/** Preview, save, and transaction policy for the class replacement. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flow Courier")
 	FFlowMCPMutationOptions Mutation;
 };
@@ -1275,6 +1305,7 @@ struct FLOWGRAPHCOURIER_API FFlowMCPApplyFlowPatchRequest
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flow Courier")
 	FString MutationText;
 
+	/** Preview, save, and transaction policy for applying the patch. */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Flow Courier")
 	FFlowMCPMutationOptions Mutation;
 };

@@ -50,10 +50,8 @@ static TSet<FGuid> BuildPostPlanNodeSet(
 	return PostPlanGuids;
 }
 
-// Courier v2's converter fully resolves every alias/GUID reference up front (the whole document
-// is in memory at once, unlike the old streaming text grammar), so FFlowGraphParsedConnection's
-// SourceAlias/TargetAlias are never set by FFlowCourierConverter::ConvertToParsedGraph - there is
-// no deferred resolution step left to do here.
+// The Courier converter resolves every alias and GUID in the complete document before producing
+// parsed connections. Reconciliation consumes resolved endpoints only.
 
 // Appends every Courier converter issue (JSON parse/structural problems) as a validation finding,
 // so a malformed document is reported the same way a semantic validation problem is - as data in
@@ -785,8 +783,7 @@ TSharedPtr<FFlowReconcileExecutionPlan> FFlowGraphReconciler::ComputeReconcilePl
 	ClassifyParsedNodes(Plan->AllParsedNodes, EffectiveScopedNodeGuids, CurrentNodes,
 		Plan->NodesToAdd, Plan->NodesToUpdate, Plan->NodesToDelete, Plan->AliasMap);
 
-	// The converter's alias map is authoritative - it covers addon aliases too, which
-	// ClassifyParsedNodes (a node-only helper kept unchanged from v1) does not track.
+	// The converter's alias map is authoritative because ClassifyParsedNodes tracks node aliases only.
 	Plan->AliasMap = AliasMap;
 
 	Plan->Plan.NodesDeleted = Plan->NodesToDelete;

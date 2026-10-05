@@ -76,4 +76,4 @@ logic just because it's *possible* to - that adds an asset to navigate without a
 
 ## See also
 
-- $KB:kb:guide:master-index
+- $KB:flow:guide:flowgraph-index

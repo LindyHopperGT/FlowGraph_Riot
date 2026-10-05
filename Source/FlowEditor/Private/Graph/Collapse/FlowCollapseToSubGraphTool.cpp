@@ -122,4 +122,3 @@ void FFlowCollapseToSubGraphTool::Execute(SFlowGraphEditor& GraphEditor)
 }
 
 #undef LOCTEXT_NAMESPACE
-// </MKT>

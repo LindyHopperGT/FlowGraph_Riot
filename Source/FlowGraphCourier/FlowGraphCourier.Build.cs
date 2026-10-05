@@ -13,7 +13,8 @@ public class FlowGraphCourier : ModuleRules
 				"CoreUObject",
 				"Engine",
 				"Flow",
-				"FlowEditor"
+				"FlowEditor",
+				"ToolsetRegistry"
 			}
 		);
 
@@ -25,7 +26,6 @@ public class FlowGraphCourier : ModuleRules
 				"Json",
 				"JsonUtilities",
 				"Projects",
-				"ToolsetRegistry",
 				"SourceControl"
 			}
 		);

@@ -575,7 +575,7 @@ UFlowAsset* UFlowGraphRegrapher::ImportAndRegraphFromDocument(
 
 	if (!FlowAsset)
 	{
-		UE_LOG(LogFlow, Error, TEXT("UFlowGraphRegrapher::ImportAndRegraphFromDocument: Import failed: %s"), *ErrorMessage);
+		UE_LOG(LogFlow, Warning, TEXT("UFlowGraphRegrapher::ImportAndRegraphFromDocument: Import failed: %s"), *ErrorMessage);
 		return nullptr;
 	}
 
@@ -1090,11 +1090,8 @@ namespace FlowGraphRegrapherDetail
 			// Wire up exec output pin connections (stored on source node). Exec output pins are
 			// one-target-only at runtime (UFlowNode::Connections is keyed by source pin name) - the
 			// editor graph must match exactly, so any stale link left over from a previous regraph is
-			// broken before (re-)establishing the correct one (or none, if the runtime connection was
-			// removed/retargeted). Without this, HarvestNodeConnections() below harvests the stale
-			// EdGraph link straight back into the runtime map, silently reverting a just-applied
-			// add/retarget/delete - found 2026-07-13 via live apply_flow_patch testing (retargeting an
-			// exec connection to a new target left the old target wired in the runtime Connections map).
+			// broken before establishing the runtime connection (or leaving the pin disconnected).
+			// Otherwise HarvestNodeConnections() can copy the stale editor link into the runtime map.
 			const TArray<FFlowPin> OutputPins = CollectRequiredEditorPins(
 				SourceRuntimeNode->GetOutputPins(), SourceRuntimeNode->GetContextOutputs());
 			for (const FFlowPin& OutputPin : OutputPins)
@@ -1113,15 +1110,15 @@ namespace FlowGraphRegrapherDetail
 
 				const FConnectedPin Connection = SourceRuntimeNode->GetConnection(OutputPin.PinName);
 				// Break an existing editor link only when the runtime connection is genuinely gone
-				// (an invalid guid = the connection was removed or retargeted away - the case the
-				// 2026-07-13 fix below needs). A *valid* guid that fails to resolve to a node is a
+				// (an invalid GUID means the connection was removed or retargeted). A valid GUID
+				// that fails to resolve to a node is a
 				// dangling/stale reference, not a removal: AssetTools duplication regenerates node
 				// guids but copies UFlowNode::Connections verbatim, so a freshly-cloned asset carries
 				// connection targets pointing at the pre-duplication guids. In that case the editor
 				// link (whose pointers duplication *did* remap correctly) is the trustworthy record -
 				// leaving it intact lets HarvestNodeConnections() rebuild the runtime map from it and
-				// repoint the stale guid. Breaking it instead silently dropped ~half the connections
-				// of every cloned flow (found 2026-08-14 cloning ActFlow_Spell_ShockOrb: 9 -> 5).
+				// repoint the stale GUID. Breaking it would discard a connection that the editor
+				// still knows how to restore.
 				if (!Connection.NodeGuid.IsValid())
 				{
 					BreakPinLinksWithoutNotification(*SourcePin);

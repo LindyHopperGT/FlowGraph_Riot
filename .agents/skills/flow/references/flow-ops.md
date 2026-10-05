@@ -1,16 +1,15 @@
-# Flow Skill - Ops Layer (calling the live Flow MCP ops)
+# Flow Courier operations
 
-Live-editor layer of the `flow` skill (see `../SKILL.md` for the agnostic core): how to call the Flow
-tools on the `unreal-mcp` server's `FlowGraphCourier.FlowMCPToolset` (backed by `UFlowMCPToolset`,
-registered via Epic's `ToolsetRegistry`). Load only when you need a running Unreal Editor *and*
-already know which op - otherwise read `workflows.md` first.
+Live-editor layer of the `flow` skill (see `../SKILL.md` for the core model). These operations are
+`UFlowMCPToolset` functions registered with Unreal's `ToolsetRegistry`. An MCP host can expose them
+through its own transport. Read `workflows.md` first when choosing an operation.
 
 ## Calling convention
 
-Call ops via the `unreal-mcp` server's `call_tool`, with `toolset_name: "FlowGraphCourier.FlowMCPToolset"`
-and `tool_name` set to the PascalCase op name (e.g. `"ExportFlowAsset"`, no toolset prefix). Wrap
-arguments in a top-level `request` object; field names are camelCase (auto-generated from the
-underlying UPROPERTY names), e.g.:
+Ask the connected MCP host to discover `FlowGraphCourier.FlowMCPToolset` and describe its reflected
+operations before calling one. Host method names vary. The Epic Toolset request shape has one
+`request` argument with camelCase fields derived from UPROPERTY names. For example, a host that
+accepts `toolset_name`, `tool_name`, and `arguments` would receive:
 
 ```json
 {
@@ -20,17 +19,13 @@ underlying UPROPERTY names), e.g.:
 }
 ```
 
-`list_toolsets` confirms the toolset is registered; `describe_toolset` (with
-`toolset_name: "FlowGraphCourier.FlowMCPToolset"`) returns the exact current input/output JSON
-schema for every op - reflected live from the C++ structs, so it wins over this doc on any
-disagreement.
+Use the host's Toolset discovery and description calls to obtain the current input/output JSON
+schema. The schema reflected from the C++ structs is authoritative if it differs from this guide.
 
 Every mutating op takes a `mutation` object. `bDryRun` (like every other dry-run/transaction flag)
 must be nested under `mutation` - `{ "mutation": { "bDryRun": true } }` - never at the top level of
-`request`. The bridge validates arguments against the tool's input schema before dispatch and
-rejects an unknown or misplaced key with a suggestion (e.g. a top-level `bDryRun` is rejected with
-a pointer to `mutation.bDryRun`) rather than silently dropping it, so a rejected call is safe to
-retry after fixing the path - it never applied. A dry run has two further preconditions and both
+`request`. Validate the request against the host's schema before dispatch, especially the nesting
+of `mutation.bDryRun`. A dry run has two further preconditions and both
 fail the call rather than quietly applying anyway: `bUseTransaction` must be true, because rollback
 is how a dry run undoes itself, and no editor transaction may already be open around the call.
 
@@ -45,12 +40,12 @@ document; never use it to edit an existing asset. Editing calls the ops below in
   line by line. Reserve for whole-graph review; when the request already names or implies specific
   nodes of interest, prefer `ExportFlowSubgraph` scoped to those nodes - it returns a much smaller,
   independently re-importable document instead of the entire asset.
-- **`ImportAndRegraphFlowAsset`** - parses a Courier document (in `flowGraphText`) and rebuilds the
-  editor graph. **Full-graph replace, not the GUID-keyed reconciler**: every node is destroyed and
-  recreated as a new `UObject`, even untouched ones - no identity/position/addon preservation. It
-  always creates and fails if something already exists at the path, so it is not an editing op. No
-  dry-run support. Reserve for genuinely new assets or a deliberate full rewrite; use
-  `ApplyFlowPatch` to edit.
+- **`ImportAndRegraphFlowAsset`** - creates a new FlowAsset from a full Courier document in
+  `flowGraphText` and builds its editor graph. It rejects an occupied asset path and does not
+  support dry runs. Use `ApplyFlowPatch` for an existing asset.
+- **`DescribeCourierGrammar`** - returns the legal Courier v2 op kinds and the required, optional,
+  and forbidden fields for each kind, plus document-level field rules. Call it before constructing
+  a document when field legality is uncertain.
 - **`ApplyFlowPatch`** (`targetAssetPath`, `mutationText`, `mutation: { bDryRun }`) - GUID-keyed
   reconciler: applies only what `mutationText` names; everything else (identity, position, untouched
   addons) is preserved. `mutationText` carries a Courier **JSON** document despite the field name.
@@ -65,8 +60,8 @@ document; never use it to edit an existing asset. Editing calls the ops below in
   `validationFindings` for why - branch on `code` (a stable identifier) rather than matching
   `message` text. Adding `A.Out -> C.In` when `A.Out -> B.In` exists retargets an **exec** pin
   without a delete op (plan reports both); a data output pin may legally feed several inputs and is
-  not retargeted. Mutating ops check out the target file themselves and fail if checkout fails -
-  there is no manual source-control step to perform first.
+  not retargeted. Saving mutations check out the target file and fail if checkout fails; with
+  `mutation.bSave: false`, the asset remains dirty in memory without a checkout.
 - **`AutoFormatFlowGraph`** (`targetAssetPath`, `selectionGuids[]`, `mutation: { bDryRun }`) -
   deterministic layered left-to-right format; unlike `ApplyFlowPatch`'s placement (new nodes only),
   this recomputes and overwrites position for every targeted node. Empty `selectionGuids` formats
@@ -81,9 +76,8 @@ document; never use it to edit an existing asset. Editing calls the ops below in
   bidirectional pattern/concept linkage and stem-collision checks. Not a live-editing op and not
   useful for a normal research/edit loop - reach for `FindFlowNodeTypes` for that. Returns
   `outputFilePath`, `bSucceeded`.
-- **Duplicating a FlowAsset** is `AssetTools.duplicate(path, new_path)` on the `editor_toolset`
-  server's asset toolset, not a `FlowGraphCourier.FlowMCPToolset` op. Follow it with
-  `ReconstructFlowGraph` on the new path before exporting or patching it.
+- **Duplicating a FlowAsset** uses the editor's asset duplication API, outside FlowGraphCourier.
+  Follow it with `ReconstructFlowGraph` on the new path before exporting or patching it.
 - **`DiffFlowAsset`** (`old`, `new`) - structured diff of two Flow graphs, no editor UI. Either arg
   is an asset path or a raw Courier document. Returns
   `bHasDifferences`, `addedNodes[]`, `removedNodes[]`, `changedNodes[]{nodeGuid,
@@ -94,9 +88,9 @@ document; never use it to edit an existing asset. Editing calls the ops below in
   summaries (`nodeGuid`, `title`, `classPath`, `bIsEntryPoint`) filtered by title substring, class,
   and/or entry-point status. Prefer over a full `ExportFlowAsset` to locate nodes on a large graph.
 - **`ExportFlowSubgraph`** (`assetPath`, `startNodeGuid`) - exports just the connected region
-  (undirected, exec and data edges) reachable from a start node: a bounded, independently
-  re-importable Courier document for reading a large graph in pieces. Because reachability is
-  undirected it also picks up nodes that only reach the start point upstream through a data pin.
+  (undirected, exec and data edges) reachable from a start node as an independently re-importable
+  Courier document. A connected component can span the entire asset, so check its size before
+  returning the raw document through a response-limited host.
 - **`PlanFlowSubgraphFromSelection`** (`targetAssetPath`, `selectionGuids[]`, `newAssetName`) -
   read-only preflight for the editor's exact "create sub-graph from selection" operation. The
   selection is a list of top-level node GUIDs, not a connected-component query. It returns
@@ -114,6 +108,14 @@ document; never use it to edit an existing asset. Editing calls the ops below in
 - **`FindOrCreateFlowNode`** (`targetAssetPath`, `nodeType`, `matchProperties{}`,
   `mutation: { bDryRun }`) - finds a single `nodeType` node whose properties exactly match
   `matchProperties`, else creates one. Returns `bCreated` and the matched/created `nodeGuid`.
+- **`CreateFlowNodeBlueprint`** (`packagePath`, `assetName`, `parentClass`, optional `displayName`
+  and `description`, `mutation`) - creates a node or addon Blueprint with the asset class Flow's
+  palette and catalog expect. The parent must derive from `UFlowNode` or `UFlowNodeAddOn`; inspect
+  `assetClassPath`, `generatedClassPath`, compile status, and catalog resolution in the result.
+- **`ReplaceFlowNodeClass`** (`assetPath`, `nodeGuid`, `newNodeClass`, optional property, pin, and
+  addon mappings, `mutation`) - previews or applies a class replacement while retaining the node
+  GUID. Inspect `bCanReplace` and `findings` after a dry run, then `bReplaced` and the mutation
+  report after applying. Saving uses the editor's active source-control provider when enabled.
 - **`SearchFlowAssets`** (`query`, `flags`, `scope`, `maxDepth?`, `contextAssetPath?`,
   `pinDirection?`, `pinConnection?`) - free-text search across one or all Flow assets, over titles,
   comments, class names, property names and values. `flags` is a bitfield selecting which surfaces
@@ -123,16 +125,14 @@ document; never use it to edit an existing asset. Editing calls the ops below in
   `pinConnection` (`any`/`connected`/`unconnected`) to qualify pin-name matches. Results include
   `matchedPins[]{pinName, direction, bConnected}`. Reach for this when looking for a **string**
   rather than a structure - use `FindFlowNodes`/`FindFlowNodeTypes` for structure.
-- **`find_assets`** / **`get_asset_summary`** / **`diff_asset`** - general asset discovery and
-  diffing, and separate `unreal-mcp` toolsets rather than part of
-  `FlowGraphCourier.FlowMCPToolset`. For a known or partial asset name prefer `find_assets` over a
-  codebase-search subagent - it resolves a named lookup in one call; reserve codebase search for
-  open-ended "how does X work" questions.
+- General asset discovery and Blueprint introspection come from the connected editor or MCP host.
+  They are not FlowGraphCourier operations. Use them when a task needs asset paths or Blueprint CDO
+  variables that Courier's class catalog does not expose.
 - **`CheckAddonAttachmentEligibility`** (`parentClassName`, `addonClassName`) - whether an AddOn can
   attach, via the same two-sided handshake the editor uses (parent and child each get a say).
   Accepts short or full class names. Returns `bEligible`, `result`
-  (`TentativeAccept`/`Reject`/`Undetermined`), `reason`. Only `TentativeAccept` is eligible -
-  `Undetermined` counts as ineligible. Editor-only (`WITH_EDITOR`).
+  (`TentativeAccept`/`Reject`/`Undetermined`), `reason`. Only an explicit `Reject` blocks attachment;
+  `Undetermined` and `TentativeAccept` are eligible. Editor-only (`WITH_EDITOR`).
 - **`ListFlowAssetTypes`** (no params) - the cold-start entry point: one row per concrete
   `FlowAsset` subclass with `className`, `classPath`, `description`, `keywords`,
   `allowedNodeCount`, `allowedAddonCount`. Counts only, never the member name arrays - call
@@ -181,8 +181,8 @@ document; never use it to edit an existing asset. Editing calls the ops below in
     - **Scope limit:** for a Blueprint-authored node (`_C` class path),
       `properties` reports only the flow-pin-oriented surface, not the Blueprint's own CDO member
       variables. If a node's behavior implies a property this op doesn't list, call
-      `get_asset_summary(asset_path=<path without _C>)` and check `variables[]` before concluding it
-      doesn't exist.
+      the host's Blueprint inspection operation on the asset path without `_C` and check its
+      variables before concluding a member does not exist.
   - Returns `nodes[]`/`addons[]` (split by kind), `nodeCount`/`addonCount`, `totalNodeCount`/
     `totalAddonCount` (pre-paging), `truncated`, `effectiveSections` (echoed back), `shape{}` (only
     when requested), `unresolvedClassNames[]`/`ambiguousClassNames[]` (never silently dropped/guessed).
@@ -192,11 +192,8 @@ document; never use it to edit an existing asset. Editing calls the ops below in
   - **Avoid re-fetching an already-known class:** once a `names`/`shape` discovery query has given
     you the `classPath`, go straight to a `classNames[]` lookup for the sections you still need
     rather than re-running the broad filter with more sections turned on.
-  - **The emitted schema marks every field `required`, but this op does not enforce that.** The
-    bridge deliberately accepts omitted keys and falls back to their defaults - see the comment in
-    `RGIUnrealMCPEpicBridgeModule.cpp` near `CollectUnknownArgumentKeys`. A partial request such as
-    `{"classNames": [...], "sections": "names"}` is normal, supported usage, not an error waiting to
-    happen; do not pad a call with every declared field just because the schema lists them all.
+  - `FindFlowNodeTypes` supplies defaults for optional filters. An MCP host may serialize its schema
+    differently, so follow that host's parameter rules when sending a partial request.
 - **`SetFlowAgentDoc`** (`className`, `guidance?`, `tags[]?`, `articles[]?`,
   `mutation:{bDryRun,bSave,...}`) - writes the hand-authored documentation layer onto one class.
   **Origin decides what actually happens:** a Blueprint (`_C`) class is checked out and saved for
@@ -214,9 +211,5 @@ document; never use it to edit an existing asset. Editing calls the ops below in
 Mining corpus usage examples for KB articles is a KB-*authoring* concern, not a live-editing one -
 that recipe lives in a project's own domain skill, not here.
 
-**Not yet available:** spawn-summary ops, planned as a project-specific domain-skill layer if needed
-(`FindOrCreateFlowNode` already covers the generic create-node case).
-
-**Tool placement:** these ops live in `FlowGraphCourier`'s `UFlowMCPToolset` (the
-`FlowGraphCourier.FlowMCPToolset` toolset on the `unreal-mcp` server). Update this file if that
-transport migrates.
+**Tool placement:** these operations live in `FlowGraphCourier`'s `UFlowMCPToolset` and are
+registered under `FlowGraphCourier.FlowMCPToolset`.

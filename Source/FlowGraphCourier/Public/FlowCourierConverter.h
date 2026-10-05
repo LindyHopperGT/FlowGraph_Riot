@@ -13,8 +13,8 @@ struct FFlowGraphParsedConnection;
 
 /**
  * Parses Courier v2 JSON text into FFlowCourierDocument and converts a structurally-valid
- * document into the FFlowGraphParsedNode/FFlowGraphParsedConnection representation the existing
- * reconciler/importer pipeline consumes. Spec: FLOW_COURIER_V2_SPEC.md.
+ * document into the FFlowGraphParsedNode/FFlowGraphParsedConnection representation consumed by
+ * the reconciler and importer. Format guide: agent-docs/CourierTextFormat.md.
  *
  * Two-step contract, mirroring FFlowGraphValidation::ValidateDocument's "issues reported, caller
  * checks severity" pattern rather than early-out exceptions:
@@ -24,8 +24,7 @@ struct FFlowGraphParsedConnection;
  *  2. ConvertToParsedGraph - only call once ParseDocument's OutIssues contains no Error-severity
  *     entries. Resolves every alias, flattens addon ops into the nested FFlowGraphParsedNodeAddOn
  *     shape CreateAddOnsRecursive/ReconcileNodeAddOns expect, and fully resolves connection
- *     endpoints (no deferred SourceAlias/TargetAlias - the whole document is in memory up front,
- *     unlike the old streaming text grammar).
+ *     endpoints from the complete in-memory document.
  *
  * Plain static-method class, not a UObject: it has no UFUNCTIONs and is never instantiated.
  */
@@ -61,8 +60,8 @@ private:
 	static FString GetJsonKeyForProperty(const FProperty* Property);
 
 	// Structural validation pass 1: for every op, checks the identity/parent-identity field
-	// combination (exactly one of a pair set) and per-Kind field legality (FLOW_COURIER_V2_SPEC.md
-	// Section 5), and parses every literal GUID string. Does not resolve aliases (that needs every
+	// combination (exactly one of a pair set) and per-Kind field legality, and parses every
+	// literal GUID string. Does not resolve aliases (that needs every
 	// NewAlias to have been seen first) - see ResolveIdentities.
 	static void ValidateOpStructure(const FFlowCourierDocument& Document, TArray<FFlowCourierIssue>& OutIssues);
 

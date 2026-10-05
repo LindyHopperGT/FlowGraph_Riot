@@ -25,7 +25,7 @@ protected:
 
 	/** Actors still tracked by this node, exposed through the SpawnedActors data output. */
 	UPROPERTY(Transient, meta = (SourceForOutputFlowPin, FlowPinType = "Object"))
-	TArray<AActor*> SpawnedActors;
+	TArray<TObjectPtr<AActor>> SpawnedActors;
 
 public:
 	UFlowNode_SpawnActorsBase();

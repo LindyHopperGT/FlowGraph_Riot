@@ -5,12 +5,14 @@
 #include "Misc/AutomationTest.h"
 
 #include "AddOns/FlowNodeAddOn.h"
+#include "Engine/DataTable.h"
 #include "Find/FindInFlowEnums.h"
 #include "FlowAsset.h"
 #include "FlowCourierDocument.h"
 #include "FlowMCPToolset.h"
 #include "Graph/Nodes/FlowGraphNode.h"
 #include "Kismet/KismetSystemLibrary.h"
+#include "Misc/PackageName.h"
 #include "Nodes/FlowNode.h"
 #include "Tests/FlowNodeClassReplacementTestTypes.h"
 #include "ToolsetRegistry/ToolCallExceptionHandler.h"
@@ -344,6 +346,84 @@ void FFlowMCPToolsetSpec::Define()
 			TestTrue(
 				TEXT("An unsaved import does not check out a package"),
 				Result.Mutation.CheckedOutPackages.IsEmpty());
+
+			FFlowMCPExportFlowAssetRequest ExportRequest;
+			ExportRequest.AssetPath = Result.AssetPath;
+			const FString Before = UFlowMCPToolset::ExportFlowAsset(ExportRequest).ExportedText;
+			FFlowMCPImportAndRegraphFlowAssetRequest DuplicateRequest = Request;
+			DuplicateRequest.FlowGraphText = TEXT("{\"formatVersion\":2,\"mode\":\"Full\",\"ops\":[]}");
+			ExceptionHandler->CaptureErrorsIn([&DuplicateRequest]()
+			{
+				UFlowMCPToolset::ImportAndRegraphFlowAsset(DuplicateRequest);
+			});
+			ExpectExceptionContains(TEXT("already exists at AssetPath"));
+			TestEqual(TEXT("A rejected import preserves the existing graph"),
+				UFlowMCPToolset::ExportFlowAsset(ExportRequest).ExportedText, Before);
+		});
+
+		It(TEXT("Rejects a path occupied by another asset class"), [this]()
+		{
+			const FString AssetPath = MakeTestAssetPath();
+			const FString PackageName = FPackageName::ObjectPathToPackageName(AssetPath);
+			UPackage* Package = CreatePackage(*PackageName);
+			UDataTable* Occupant = NewObject<UDataTable>(Package, *FPackageName::GetShortName(PackageName));
+			if (!TestNotNull(TEXT("Existing object"), Occupant))
+			{
+				return;
+			}
+
+			FFlowMCPImportAndRegraphFlowAssetRequest Request;
+			Request.FlowGraphText = ValidFlowGraphText;
+			Request.AssetPath = AssetPath;
+			Request.Mutation.bSave = false;
+			ExceptionHandler->CaptureErrorsIn([&Request]()
+			{
+				UFlowMCPToolset::ImportAndRegraphFlowAsset(Request);
+			});
+			ExpectExceptionContains(TEXT("already exists at AssetPath"));
+			TestTrue(TEXT("The existing object is preserved"),
+				FindObject<UObject>(Package, *FPackageName::GetShortName(PackageName)) == Occupant);
+		});
+
+		It(TEXT("Releases the asset path after an import failure"), [this]()
+		{
+			FFlowMCPImportAndRegraphFlowAssetRequest Request;
+			Request.AssetPath = MakeTestAssetPath();
+			Request.FlowGraphText = ValidFlowGraphText.Replace(
+				TEXT("/Script/Flow.FlowNode_Start"), TEXT("/Script/Flow.MissingNode"));
+			Request.Mutation.bSave = false;
+			ExceptionHandler->CaptureErrorsIn([&Request]()
+			{
+				UFlowMCPToolset::ImportAndRegraphFlowAsset(Request);
+			});
+			ExpectExceptionContains(TEXT("Failed to import and rebuild FlowAsset"));
+
+			Request.FlowGraphText = ValidFlowGraphText;
+			ExceptionHandler = MakeUnique<UE::ToolsetRegistry::FToolCallExceptionHandler>();
+			FFlowMCPImportAndRegraphFlowAssetResult Result;
+			ExceptionHandler->CaptureErrorsIn([&Request, &Result]()
+			{
+				Result = UFlowMCPToolset::ImportAndRegraphFlowAsset(Request);
+			});
+			ExpectNoException();
+			TestTrue(TEXT("The corrected import can use the same path"), Result.NodeCount >= 2);
+		});
+
+		It(TEXT("Rejects an unresolved asset class instead of creating a base FlowAsset"), [this]()
+		{
+			FFlowMCPImportAndRegraphFlowAssetRequest Request;
+			Request.AssetPath = MakeTestAssetPath();
+			Request.FlowGraphText = ValidFlowGraphText.Replace(
+				TEXT("/Script/Flow.FlowAsset"), TEXT("/Script/Flow.MissingAsset"));
+			Request.Mutation.bSave = false;
+			ExceptionHandler->CaptureErrorsIn([&Request]()
+			{
+				UFlowMCPToolset::ImportAndRegraphFlowAsset(Request);
+			});
+			ExpectExceptionContains(TEXT("AssetClass is not a resolvable FlowAsset class"));
+			UPackage* Package = FindPackage(nullptr, *FPackageName::ObjectPathToPackageName(Request.AssetPath));
+			TestNull(TEXT("No base FlowAsset occupies the requested path"),
+				Package ? FindObject<UFlowAsset>(Package, *FPackageName::GetShortName(Request.AssetPath)) : nullptr);
 		});
 	});
 
@@ -1332,9 +1412,8 @@ void FFlowMCPToolsetSpec::Define()
 
 		It(TEXT("SetFlowAgentDoc hands a script class AngelScript, not C++"), [this]()
 		{
-			// A script class has no header, so the C++ GetAgentDoc() override this used to return was
-			// unusable advice for all 8 of them. The EDITOR guard is load-bearing: assigning the
-			// editor-only AgentDoc outside it fails the whole script module's compile.
+			// Script classes receive an editor-only source snippet rather than a C++ override.
+			// The EDITOR guard keeps AgentDoc out of runtime script compilation.
 			FFlowMCPFindFlowNodeTypesRequest FindRequest;
 			FindRequest.Kind = EFlowCatalogKind::Any;
 			FindRequest.Sections = TEXT("names,origin");

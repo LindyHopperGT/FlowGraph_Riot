@@ -1415,11 +1415,6 @@ void UFlowNode::TriggerInput(const FName& PinName, const EFlowPinActivationType 
 		TArray<FPinRecord>& Records = InputRecords.FindOrAdd(PinName);
 		Records.Add(FPinRecord(FApp::GetCurrentTime(), ActivationType));
 
-		if (const UFlowAsset* FlowAssetTemplate = GetFlowAsset()->GetTemplateAsset())
-		{
-			(void)FlowAssetTemplate->OnPinTriggered.ExecuteIfBound(this, PinName);
-		}
-
 		// Halt here if a breakpoint covers this pin.
 		// In the case of an Abort while breaking we'll early-out of this function.
 		// We may eventually want to surface an Abort out of this function and early-out of callers as well.
@@ -1488,11 +1483,6 @@ void UFlowNode::TriggerOutput(const FName PinName, const bool bFinish /*= false*
 		// record for debugging, even if nothing is connected to this pin
 		TArray<FPinRecord>& Records = OutputRecords.FindOrAdd(PinName);
 		Records.Add(FPinRecord(FApp::GetCurrentTime(), ActivationType));
-
-		if (const UFlowAsset* FlowAssetTemplate = GetFlowAsset()->GetTemplateAsset())
-		{
-			FlowAssetTemplate->OnPinTriggered.ExecuteIfBound(this, PinName);
-		}
 
 		// Halt here if a breakpoint covers this pin.
 		// In the case of an Abort while breaking we'll early-out of this function.

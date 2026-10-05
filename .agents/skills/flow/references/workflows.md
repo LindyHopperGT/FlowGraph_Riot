@@ -9,16 +9,14 @@ subclass, and most domain-specific requests decompose into one or more of them.
 Work from cheap and broad to expensive and narrow. Each step should cut the search space before the
 next one runs.
 
-**A shipped encounter's full `ExportFlowAsset` can exceed the response size limit and be refused
-outright.** Run the export *inside* a ToolScript and return a digest - one line per node/addon/
-connection - instead of the raw document:
+**A large asset's full `ExportFlowAsset` can exceed the host's response size limit.** If the host
+supports running a script beside the editor, export there and return a compact digest of the
+nodes, addons, and connections. Keep the complete Courier JSON available for the subsequent edit:
 
 ```python
 import json
-def run():
-    r = epic_tool("FlowGraphCourier.FlowMCPToolset.ExportFlowAsset",
-                  request={"assetPath": "..."})
-    doc = json.loads(r["returnValue"]["exportedText"])
+def summarize_export(exported_text: str) -> list[str]:
+    doc = json.loads(exported_text)
     lines = []
     for op in doc["ops"]:
         if op["kind"] == "UpsertNode":
@@ -28,11 +26,10 @@ def run():
         elif op["kind"] == "AddConnection":
             lines.append(f'C {op["source"]["nodeGuid"][:8]}.{op["source"]["pin"]} -> '
                          f'{op["target"]["nodeGuid"][:8]}.{op["target"]["pin"]}')
-    return {"lines": lines}
+    return lines
 ```
 
-Two ToolScript quirks: `run()` must return a dict, not a list; and the sandbox dict rejects
-`.get(key, default)` - use direct indexing.
+How the host invokes the export and returns the digest depends on its MCP adapter.
 
 1. `ListFlowAssetTypes` when you do not yet know which `FlowAsset` subclass the request concerns.
 2. `FindFlowNodeTypes` with `assetClassName` set and the default `shape` sections, to see the
@@ -200,8 +197,8 @@ legitimately feed several.
 
 ## Archetype: attach an addon
 
-Check eligibility first with `CheckAddonAttachmentEligibility`, and proceed only on
-`TentativeAccept`. Then one `UpsertAddon` op naming the owner through `parentGuid` and the addon
+Check eligibility first with `CheckAddonAttachmentEligibility`, and proceed when `bEligible` is
+true. Then one `UpsertAddon` op naming the owner through `parentGuid` and the addon
 through `newAlias`, with its `type` and properties. To nest an addon under another addon, give the
 child a `parentAlias` pointing at the parent's alias in the same document; depth is expressed by
 parentage, never by ordering or nesting.
@@ -216,42 +213,28 @@ an exec output pin with two targets, a connection referencing a node that no lon
 sitting somewhere the eligibility handshake would reject, a property whose value is not what the
 description implies.
 
-Describe the finding in plain terms before proposing a fix, propose the fix, dry-run it, and get
-agreement before applying. A symptom with no established cause is the case where a fix should be
-agreed rather than assumed.
+Describe the finding in plain terms, then dry-run a focused fix and verify the resulting graph.
+When the cause or intended behavior is unclear, ask the graph owner before changing it.
 
 ## Limits worth knowing before you promise an outcome
 
-**Cloning copies whatever classes the reference used, deprecated or not.** A reference graph found
-by pattern match or by grep is not guaranteed to be current - it may predate a node's replacement.
-Before treating a clone as done, spot-check its node classes with `FindFlowNodeTypes`
-(`classNames[]`, `sections: "deprecation"`); if one comes back `deprecated: true`, prefer a
-different reference that already uses `replacedBy`, or say the graph needs the swap rather than
-shipping it as-is - remember a class cannot be changed in place on an existing node (below).
-
-**A node's class cannot be changed in place.** Preserving a GUID while swapping the class behind it
-is not something the reconciler can do. Supplying a `type` that differs from the existing object's
-class is a hard error, so this fails loudly rather than reporting success - but it still fails.
-Rebuilding the node under a new GUID and rewiring it is the only route, and that loses whatever was
-attached to the old one. Surface this rather than working around it silently.
+**Cloning preserves the classes in the source graph, including deprecated classes.** Check classes
+with `FindFlowNodeTypes` (`sections: "deprecation"`) before treating a clone as finished. Use
+`ReplaceFlowNodeClass` when a node needs a successor class: preview it with `mutation.bDryRun`,
+provide explicit property, pin, and addon mappings where needed, then apply and diff. A Courier
+`UpsertNode` cannot change an existing node's class; `ReplaceFlowNodeClass` is the dedicated path
+that preserves its GUID.
 
 **A freshly duplicated asset exports dangling connections until its graph is reconstructed.**
 Duplicating a `FlowAsset` regenerates every node GUID, but leaves some connection targets pointing at
 the *source* asset's GUIDs, so the duplicate exports references to nodes it does not contain. Call
 `ReconstructFlowGraph` on the duplicate once to repoint them at the duplicate's own nodes.
 
-Always call `ReconstructFlowGraph` on a duplicate before exporting it or building a patch from its
-GUIDs. Verified by duplicating assets of two different `FlowAsset` subclasses and diffing the export
-before and after reconstructing: connection targets change, node counts do not. It does not affect
-every asset, and reconstructing is harmless when it was not needed. Skipping this no longer corrupts
-the graph silently - the stale targets now fail validation naming the missing node - but it still
-fails.
+Call `ReconstructFlowGraph` on a duplicate before exporting it or building a patch from its GUIDs.
+Check `graphIntegrityIssues[]` afterward; a nonempty list needs investigation before editing.
 
-**`ReconstructFlowGraph` also repairs pre-existing ghost nodes.** It prunes any editor node whose
-runtime counterpart is gone before it rewires anything, so running it on an asset that already has
-a stale editor node (for example, one left behind by a delete performed before this pruning
-existed) removes the ghost rather than preserving it. Check `graphIntegrityIssues[]` on the result
-to confirm nothing is left disagreeing.
+**`ReconstructFlowGraph` also removes ghost editor nodes.** It prunes editor nodes without runtime
+counterparts before rewiring. Check `graphIntegrityIssues[]` on the result for remaining mismatches.
 
 **Inline object properties can survive a copy still pointing at their old owner.** An instanced or
 inline object property copied between assets can keep referencing the source asset's private
@@ -259,13 +242,8 @@ subobject. This does not surface as an apply error; it surfaces later as a save 
 about an illegal reference to a private object. If a patch touches an inline object property,
 confirm the destination asset still saves before calling the task done.
 
-**A clean `ApplyFlowPatch` result is not proof the connection is actually there - re-read to confirm.**
-See "Do not declare the edit done" in the edit loop above: a reported success is the reconciler's own
-account of what it did, not an independent observation. If shipped content or a later session shows a
-node left unconnected that an earlier apply's plan claimed to have wired, do not assume the earlier
-agent simply forgot to send the op - re-check whether the connection ever reached the saved asset, and
-say so to the user as a possible patch/reconciler defect if it did not, rather than quietly re-adding
-it and moving on.
+**Verify connections after applying.** Read a fresh export or diff and compare it with the plan. If
+a reported connection is absent, report the mismatch with the request and resulting evidence.
 
 **Do not duplicate a FlowAsset into a path a rename just vacated.** A rename can leave a redirector
 at the old path rather than truly freeing it; duplicating over that path can pick up a hidden

@@ -23,7 +23,7 @@
 #include "Nodes/Route/FlowNode_Branch.h"
 #include "Nodes/Route/FlowNode_Reroute.h"
 
-namespace MKTFlowGraphPasteTests
+namespace FlowGraphPasteTests
 {
 using FAssetClasses = TArray<TSubclassOf<UFlowAsset>>;
 
@@ -95,14 +95,14 @@ struct FTestGraph
 };
 }
 
-BEGIN_DEFINE_SPEC(FMKTFlowGraphPasteSpec, "FlowEditor.Paste",
+BEGIN_DEFINE_SPEC(FFlowGraphPasteSpec, "FlowEditor.Paste",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 	FString OriginalClipboard;
-END_DEFINE_SPEC(FMKTFlowGraphPasteSpec)
+END_DEFINE_SPEC(FFlowGraphPasteSpec)
 
-void FMKTFlowGraphPasteSpec::Define()
+void FFlowGraphPasteSpec::Define()
 {
-	using namespace MKTFlowGraphPasteTests;
+	using namespace FlowGraphPasteTests;
 
 	BeforeEach([this]() { FPlatformApplicationMisc::ClipboardPaste(OriginalClipboard); });
 	AfterEach([this]() { FPlatformApplicationMisc::ClipboardCopy(*OriginalClipboard); });

@@ -55,8 +55,8 @@ inline const TCHAR* GLayoutJson_AddIsolatedNode = TEXT(R"JSON(
 }
 )JSON");
 
-// Adds a new Timer node via newAlias "timer" with an explicit position - regression test for
-// alias/GUID identity consistency between the plan's minted GUID and the position lookup.
+// Adds a Timer node through alias "timer" with an explicit position. The position must
+// resolve to the GUID minted for that alias.
 inline const TCHAR* GLayoutJson_AddTimerWithExplicitPos = TEXT(R"JSON(
 {
 	"formatVersion": 2,

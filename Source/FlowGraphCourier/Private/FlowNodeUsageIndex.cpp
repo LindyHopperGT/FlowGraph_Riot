@@ -74,8 +74,7 @@ void FFlowNodeUsageIndex::OnPackageSaved(const FString& PackageFileName, UPackag
 		return;
 	}
 
-	// Re-index just the saved asset. A full rebuild on every save would make the index cost more than
-	// the re-harvest it replaced.
+	// Re-index only the saved asset to keep save-time work proportional to that package.
 	TArray<UObject*> Objects;
 	GetObjectsWithOuter(Package, Objects, /*bIncludeNestedObjects=*/false);
 	for (UObject* Object : Objects)

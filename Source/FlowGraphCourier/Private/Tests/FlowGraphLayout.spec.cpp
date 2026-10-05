@@ -234,16 +234,9 @@ void FFlowGraphLayoutSpec::Define()
 			});
 		});
 
-		It("honors an explicit Pos: on a new:<alias> node (regression: ParseNodePositions double-parse GUID mismatch)", [this]()
+		It("honors an explicit position on a node created through an alias", [this]()
 		{
-			// Before the fix: the reconciler called ParseNodePositions(MutationText) as a second,
-			// independent parse pass to extract positions. ParseNodes mints a fresh FGuid::NewGuid()
-			// for any "Node: new:<alias>" line each time it runs - so the second pass produced a
-			// different GUID than the one already committed to NodesToAdd/AliasMap from the first
-			// pass. The explicit Pos: was keyed to that mismatched GUID and silently dropped; the
-			// new node fell through to auto-placement instead.
-			// After the fix: positions are extracted from the already-parsed ParsedNodes list so
-			// NodeGuid is identical to what NodesToAdd uses, and the explicit Pos: is honored exactly.
+			// The explicit position and alias resolve to the same newly allocated node GUID.
 			const FString AssetPath = TEXT("/Game/Test/TestLayoutAliasPosRegression");
 			const FString GuidA = TEXT("00000000-0000-0000-0000-0000000000A7");
 
@@ -352,11 +345,7 @@ void FFlowGraphLayoutSpec::Define()
 					TSet<FIntPoint>({ *PosA, *PosB, *PosC, *PosD }).Num(), 4);
 			});
 
-			// Phase 10 (P10.1/P10.3) regression: before the fix, ComputeAutoFormatPositions always
-			// anchored a partial-selection result at the graph-absolute (0,0), regardless of where
-			// the selected nodes actually lived - so re-formatting a subset stacked it directly on
-			// top of whatever unselected nodes already occupied that area (repro: user screenshots
-			// showing a formatted node cluster landing on top of an untouched OnExecute chain).
+			// A partial selection keeps its original area and does not overlap unselected nodes.
 			It("auto-formatting a selection does not overlap unselected nodes", [this]()
 			{
 				const FString AssetPath = TEXT("/Game/Test/TestLayoutSelectionNoOverlap");
@@ -398,9 +387,7 @@ void FFlowGraphLayoutSpec::Define()
 					return;
 				}
 
-				// Before the fix, PosX would be exactly (0,0) - directly on top of U's live
-				// position - since a partial-selection format always reset to the graph-absolute
-				// origin. The fix anchors to the selection's own pre-format bounding box instead.
+				// The formatted selection anchors to its own original bounding box.
 				TestNotEqual("Selected node X must not land on unselected node U's position (0,0)", *PosX, FIntPoint::ZeroValue);
 				TestEqual("Selected node X should anchor at the selection's own bounding-box origin", *PosX, FIntPoint(2000, 500));
 				TestTrue("Selected node Y should be right of X, same row", PosY->X > PosX->X && PosY->Y == PosX->Y);
@@ -451,21 +438,15 @@ void FFlowGraphLayoutSpec::Define()
 					return;
 				}
 
-				// Before the fix, this whole cluster would have been re-anchored at the
-				// graph-absolute (0,0) - nowhere near its original (5000,1000)-ish location.
+				// The formatted cluster remains near its original (5000, 1000) location.
 				const int32 MinX = FMath::Min3(PosA->X, PosB->X, PosC->X);
 				const int32 MinY = FMath::Min3(PosA->Y, PosB->Y, PosC->Y);
 				TestEqual("The reformatted selection's bounding-box origin X should match its pre-format origin", MinX, 5000);
 				TestEqual("The reformatted selection's bounding-box origin Y should match its pre-format origin", MinY, 1000);
 			});
 
-			// Phase 10 (P10.2) regression: before the fix, same-rank siblings sharing a single
-			// multi-pin predecessor were ordered by an arbitrary GUID-string tiebreak whenever
-			// their plain order-in-rank signal was identical - unrelated to the predecessor's
-			// actual pin order (repro: a node's DeathTrigger/Spawn output pins feeding two
-			// children that visually crossed because the crossing-minimization pass had no
-			// pin-order awareness). Deliberately picks GUIDs where alphabetical order disagrees
-			// with pin declaration order, so a lucky GUID sort can't accidentally pass this test.
+			// Siblings from one predecessor follow its pin order. The fixture's GUID order
+			// deliberately differs from pin declaration order.
 			It("auto-format orders same-rank siblings by their shared predecessor's pin order, not GUID", [this]()
 			{
 				const FString AssetPath = TEXT("/Game/Test/TestLayoutPinOrderTiebreak");

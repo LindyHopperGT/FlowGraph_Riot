@@ -133,9 +133,10 @@ the value is known at design time; reserve a pin for a value another node comput
 
 ## Fan-out
 
-**An exec output pin drives one target. A data output pin may feed several.** Giving an exec output
-pin a second distinct target is a blocking error. Data fan-out is legal, is used by shipped content,
-and does not warn.
+**An exec output pin drives one target. A data output pin may feed several.** `ApplyFlowPatch`
+retargets an existing exec connection when asked to add a different target from the same output;
+the plan reports the old connection as removed. A final graph with two distinct targets from one
+exec output is invalid. Data fan-out is legal and does not warn.
 
 To fan exec flow out, route it through a node built for it. `FlowNode_ExecutionSequence` has exactly
 two output pins, `0` and `1`, fixed by its class defaults; chain a second one into `1` for a third
@@ -143,12 +144,13 @@ branch.
 
 ## When something is wrong
 
-Failures come back as data, never as an exception, because an exception would discard the payload
-that says what went wrong. Each issue carries a severity, a stable `Code`, a `Path` pointing at the
-offending field, and a message.
+Pre-commit validation findings are returned as structured data. Each finding carries a severity,
+a stable code, the offending location, and a message. A malformed document or an execution failure
+can instead raise a tool error, depending on the MCP host.
 
-An `Error` blocks the whole apply and leaves the asset untouched. The call still returns normally, so
-read the result rather than treating the absence of an exception as proof that something happened.
+An `Error` validation finding blocks the whole apply and leaves the asset untouched. Check
+`bApplySucceeded` and the findings rather than treating a successful transport call as proof that
+the graph changed.
 
 Codes cover the shapes worth naming: an unknown field, a bad format version, an ambiguous or missing
 identity or parent, a field illegal for its op kind, a missing required field, an unparseable GUID,
@@ -210,13 +212,14 @@ Connect to them like any other exec pin.
 
 Set `EventName` with `"properties": { "EventName": "<name>" }` on that node's `UpsertNode` op - this
 works despite `EventName` being absent from both `FindFlowNodeTypes`' `properties` section and
-`ExportFlowAsset`'s exported `properties` bag for these two classes. Verified: writing it through
-`ApplyFlowPatch` changes the node's title (e.g. `"<name> Input"`), so the write path is real even
-though nothing on the read side surfaces the field or its current value. Do not conclude from an
+`ExportFlowAsset`'s exported `properties` bag for these two classes. Applying it changes the node's
+title (e.g. `"<name> Input"`), although neither read operation exposes the field itself. Do not
+conclude from an
 empty `properties` object that `EventName` is unset or unreachable - it means the read side can't
 show it, not that the node has no name. To find a `FlowNode_CustomInput`/`FlowNode_CustomOutput` by
 its `EventName` without already knowing its GUID, use `FindFlowNodes` and read `title`, not
 `ExportFlowAsset`'s `properties`.
 
 ## See also
-- $KB:kb:guide:master-index
+
+- $KB:flow:guide:flowgraph-index

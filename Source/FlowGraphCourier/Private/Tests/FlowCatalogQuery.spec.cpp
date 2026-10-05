@@ -172,8 +172,7 @@ void FFlowCatalogQuerySpec::Define()
 
 		It("shape should cap each facet list and account for the tail it omits", [this]()
 		{
-			// Regression: an uncapped shape listed all ~98 categories and ~76 keywords, costing more than
-			// twice the budget for the call that is supposed to be the cheapest way to orient.
+			// Shape caps each facet list so an unfiltered query stays compact.
 			FFlowCatalogQueryParams Params;
 			Params.Sections = EFlowCatalogSection::Shape;
 			Params.bIncludeDeprecated = true;
@@ -201,8 +200,7 @@ void FFlowCatalogQuerySpec::Define()
 
 		It("shape keyword facets should not contain punctuation-only tokens", [this]()
 		{
-			// Regression: splitting Keywords metadata on spaces alone surfaced "&" and "|" as keywords,
-			// which also made them accepted values for the keyword filter.
+			// Punctuation separators do not become keyword facets or filter values.
 			FFlowCatalogQueryParams Params;
 			Params.Sections = EFlowCatalogSection::Shape;
 			Params.bIncludeDeprecated = true;
@@ -327,10 +325,8 @@ void FFlowCatalogQuerySpec::Define()
 
 	Describe("Addon reporting", [this]()
 	{
-		// Regression: the category was previously blanked for every addon on the way out, so an addon
-		// that declared one was reported as having none. Asserting *zero* blanks would be wrong - a few
-		// classes genuinely declare no category, and blank is the honest answer for those. What must
-		// hold is that an addon's category survives at all, and is never a fabricated placeholder.
+		// An addon category is reported when declared; an empty category remains valid for
+		// classes that do not declare one.
 		It("should report an addon's own category instead of blanking it", [this]()
 		{
 			TArray<UClass*> AddOnClasses;
@@ -362,8 +358,7 @@ void FFlowCatalogQuerySpec::Define()
 	{
 		It("should tag every returned row - own or inherited - with the class that actually declares it", [this]()
 		{
-			// Replaces the old own-vs-inherited-count split: GatherProperties now walks the full
-			// ancestor chain into one array, so the contract to verify is that every row's
+			// GatherProperties walks the full ancestor chain. Every row's
 			// DeclaringClass matches the property's real FProperty::GetOwnerClass(), whether that's
 			// the queried class itself or an ancestor - never a merged dump with no attribution.
 			UClass* StartClass = UFlowCatalogQuery::FindFlowNodeOrAddOnClassByName(TEXT("FlowNode_Start"));
@@ -390,11 +385,8 @@ void FFlowCatalogQuerySpec::Define()
 			}
 		});
 
-		// Regression: a property flagged both EditAnywhere and BlueprintReadOnly - editable in the
-		// Details panel, just not writable from Blueprint script, a common and legitimate combination -
-		// was previously discarded outright by an unconditional CPF_BlueprintReadOnly skip that ran
-		// after the editable check had already said yes. UFlowNodeAddOn::InputPins is declared exactly
-		// this way and is universal to every addon, so any concrete addon class demonstrates the fix.
+		// EditAnywhere properties remain visible in the catalog even when BlueprintReadOnly also
+		// applies. UFlowNodeAddOn::InputPins provides an example on every addon.
 		It("should include an EditAnywhere+BlueprintReadOnly property instead of discarding it", [this]()
 		{
 			TArray<UClass*> AddOnClasses;
@@ -561,8 +553,7 @@ void FFlowCatalogQuerySpec::Define()
 	{
 		It("should read pins through the class default object's catalog-pin hook", [this]()
 		{
-			// Regression: reading a node's serialized pin arrays directly reports nothing for any class
-			// that generates its pins procedurally, which is what made most of the catalog look pinless.
+			// The catalog hook includes procedurally generated pins, not just serialized arrays.
 			TArray<UClass*> NodeClasses;
 			UFlowCatalogQuery::GatherAllNodeClasses(NodeClasses);
 			TestTrue("At least one node class found", NodeClasses.Num() > 0);
@@ -582,10 +573,8 @@ void FFlowCatalogQuerySpec::Define()
 			TestTrue("Most node classes report at least one pin", ClassesWithPins * 2 > NodeClasses.Num());
 		});
 
-		// Regression: gathering pins must never ask a class default object for something only a live
-		// instance can answer. FlowNodeAddOn_SwitchCase builds a context pin from its owning FlowNode
-		// and asserts when there is none, which crashed the editor mid-query. Addons were the blind
-		// spot - a node-only sweep passes while the catalog still cannot be exported.
+		// A class default object has no live owner. Pin gathering must avoid owner-dependent
+		// context hooks on addons such as FlowNodeAddOn_SwitchCase.
 		It("should gather pins for every addon class without asking a class default object about its owner", [this]()
 		{
 			TArray<UClass*> AddOnClasses;
@@ -632,7 +621,7 @@ void FFlowCatalogQuerySpec::Define()
 				NoMatchResult.Nodes.ContainsByPredicate([](const FFlowCatalogClassRow& Row) { return Row.ClassName == TEXT("FlowNode_Timer"); }));
 		});
 
-		// Regression: FlowNode_Reroute's In/Out pins are Wildcard on the class default object and only
+		// FlowNode_Reroute's In/Out pins are Wildcard on the class default object and only
 		// take on a real type (e.g. Vector) dynamically at edit time - the filter must never resolve
 		// that potential runtime type, only the declared static one.
 		It("never matches a type a node's pins could only take on dynamically at edit time", [this]()
@@ -653,7 +642,7 @@ void FFlowCatalogQuerySpec::Define()
 				UFlowCatalogQuery::ClassHasPinOfAnyType(RerouteClass, { TEXT("Vector") }));
 		});
 
-		// Regression: an auto-generated data pin's Type is the bare FlowPinType, matching the pin a
+		// An auto-generated data pin's Type is the bare FlowPinType, matching the pin a
 		// caller sees on the graph - not decorated with the backing property's name, which is only
 		// visible in properties[] and would otherwise dangle if that property isn't listed there.
 		It("an auto-generated data pin's Type is the bare FlowPinType", [this]()

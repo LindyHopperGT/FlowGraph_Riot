@@ -35,7 +35,6 @@ class UFlowAssetParams;
 
 #if !UE_BUILD_SHIPPING
 DECLARE_DELEGATE(FFlowGraphEvent);
-DECLARE_DELEGATE_TwoParams(FFlowSignalEvent, UFlowNode* /*FlowNode*/, const FName& /*PinName*/);
 #endif
 
 /**
@@ -483,12 +482,6 @@ public:
 	void EnsurePreloadPolicyInitialized();
 	const FFlowPreloadPolicy& GetPreloadPolicy() const;
 
-//////////////////////////////////////////////////////////////////////////
-// Trigger Input
-#if !UE_BUILD_SHIPPING
-public:
-	FFlowSignalEvent OnPinTriggered;
-#endif
 protected:
 	/* Stack of active deferred transition scopes (innermost = top).
 	 * Stored as TSharedPtr so callers can safely cache a reference to a specific scope

@@ -36,13 +36,11 @@ struct FLOWGRAPHCOURIER_API FFlowSubgraphNodeSummary
 };
 
 /**
- * Targeted, bounded reads over a UFlowAsset - the Phase 11 "subgraph read" gap (design doc
- * FLOW_COURIER_PATCH_PIPELINE_DESIGN.md Section 17.4, checklist Phase 11 P11.1). Lets an agent
- * locate one region of a large graph (FindNodes) and pull just that region's independently
- * re-importable text (ExportSubgraph) instead of dumping the whole asset via export_flow_asset.
+ * Targeted reads over a UFlowAsset. FindNodes locates instances by title, class, or entry-point
+ * status; ExportSubgraph exports the connected region around a node as a Courier document.
  *
  * Reachability (ExportSubgraph) is the full UNDIRECTED connected component containing the start
- * node - both outgoing and incoming edges, both exec and data pins (RS12). AddOns are never
+ * node - both outgoing and incoming edges, both exec and data pins. AddOns are never
  * traversed independently; every AddOn attached to an included node is serialized as part of that
  * node's own block by the reused exporter (UFlowGraphExporter::ExportFlowGraphSubsetToString).
  *
@@ -73,7 +71,7 @@ public:
 		FString& OutErrorMessage);
 
 	/**
-	 * Computes the undirected connected component containing StartNodeGuid (RS12: both exec and
+	 * Computes the undirected connected component containing StartNodeGuid (both exec and
 	 * data edges, both directions) and re-exports exactly that node/connection subset via
 	 * UFlowGraphExporter::ExportFlowGraphSubsetToString - same Flow Courier grammar as a
 	 * full export, so the result is independently re-importable. Returns false if Asset is null or

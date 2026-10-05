@@ -67,9 +67,7 @@ namespace
 	// rather than leaving the file in the default changelist: a caller who asked for a specific
 	// changelist and silently got the default would have no way to notice.
 	//
-	// NOTE: intentionally duplicated verbatim in RGIMutationContext.cpp. FlowGraphCourier
-	// is a third-party plugin that cannot depend on RGIUnrealToolsets, so a shared helper
-	// would require a new intermediate module. Keep both copies in sync if the logic changes.
+	// Uses the active Unreal source-control provider; a target changelist is optional.
 	bool MoveToTargetChangelist(
 		const FString& PackageFilename, const FString& TargetChangelist, FString& OutError)
 	{
@@ -411,6 +409,21 @@ void FFlowMCPMutationContext::Abort()
 		DryRunRollback = nullptr;
 	}
 
+	bBegun = false;
+}
+
+void FFlowMCPMutationContext::CancelUnmodified()
+{
+	if (!bBegun)
+	{
+		return;
+	}
+
+	if (bOwnsTransaction && Transaction.IsValid())
+	{
+		Transaction->Cancel();
+		Transaction.Reset();
+	}
 	bBegun = false;
 }
 

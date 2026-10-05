@@ -516,10 +516,8 @@ void FFlowGraphImporterSpec::Define()
 			{
 				// U/UL/V are plain floats on UBillboardComponent; the point here is not the values
 				// themselves but that a value block containing a parenthesized sub-value with its
-				// own comma - as ObjectiveNameTag=(TagName="...") does on the real Meerkat fixture
-				// this feature was built for - is not mistaken for two top-level fields split at
-				// the inner comma. FVector2D exercises the same top-level-comma hazard using a type
-				// already available in this module, without depending on Meerkat-side classes.
+				// own comma is not mistaken for two top-level fields. FVector2D exercises this
+				// delimiter case using an engine type available in this module.
 				TestImportText = TEXT(
 					"{\"formatVersion\":2,\"mode\":\"Full\",\"bWorldBound\":false,"
 					"\"ops\":[{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000001\",\"type\":\"/Script/Flow.FlowNode_ExecuteComponent\","
@@ -554,16 +552,10 @@ void FFlowGraphImporterSpec::Define()
 				TestEqual("Nested struct field Z should apply despite its own inner comma", Billboard->GetRelativeScale3D().Z, 3.0);
 			});
 
-			It("should still fail a bare unresolvable object path exactly as before this feature (regression)", [this]()
+			It("rejects an unresolvable bare object path", [this]()
 			{
-				// ComponentTemplate is Instanced, so this specifically proves the new class-plus-
-				// fields parser correctly declines a value with no trailing ")" and falls through to
-				// the original LoadObject call, rather than the presence of the new branch changing
-				// behavior for the pre-existing shape. "None" is not a real object path, so the
-				// original LoadObject call was always expected to fail here - the two things this
-				// test can actually observe are that it still fails (not silently succeeds or
-				// crashes) and that the error message names the original LoadObject failure text,
-				// not an instanced-construction error.
+				// A bare value without class-and-fields syntax resolves as an object path. "None"
+				// has no object to load, so import reports the load failure.
 				TestImportText = TEXT(
 					"{\"formatVersion\":2,\"mode\":\"Full\",\"bWorldBound\":false,"
 					"\"ops\":[{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000001\",\"type\":\"/Script/Flow.FlowNode_ExecuteComponent\","
@@ -573,20 +565,16 @@ void FFlowGraphImporterSpec::Define()
 				AddExpectedError(TEXT("Failed to load object"), EAutomationExpectedErrorFlags::Contains, 1);
 
 				FString ErrorMessage;
-				TestFlowAsset = ImportFromExportedJson(TEXT("/Game/Test/TestInstancedBarePathRegression"), TestImportText, ErrorMessage);
-				TestNull("A bare unresolvable path should still fail import, same as before this feature", TestFlowAsset);
-				TestTrue("The error should be the original LoadObject failure message, not an instanced-construction error",
+				TestFlowAsset = ImportFromExportedJson(TEXT("/Game/Test/TestInstancedBarePath"), TestImportText, ErrorMessage);
+				TestNull("A bare unresolvable path fails import", TestFlowAsset);
+				TestTrue("The error describes the object load failure",
 					ErrorMessage.Contains(TEXT("Failed to load object")));
 			});
 
-			It("should still resolve a bare path to a real object for a non-instanced property (regression)", [this]()
+			It("resolves a bare class path for a non-instanced property", [this]()
 			{
-				// FlowNode_ExecuteComponent's ComponentClass is TSubclassOf<UActorComponent> - a
-				// FClassProperty, not FObjectProperty, so IsInstancedObjectProperty's rejection branch
-				// does not run for it and it cannot demonstrate that rejection. What it can and does
-				// demonstrate: a bare class path on a property this feature does not touch at all
-				// keeps resolving exactly as before. UBillboardComponent's own class path is a
-				// real, always-loadable object (the UClass itself), so this needs no project content.
+				// ComponentClass is a TSubclassOf<UActorComponent> property. Its bare class path
+				// resolves to the engine's UBillboardComponent class.
 				TestImportText = TEXT(
 					"{\"formatVersion\":2,\"mode\":\"Full\",\"bWorldBound\":false,"
 					"\"ops\":[{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000001\",\"type\":\"/Script/Flow.FlowNode_ExecuteComponent\","
@@ -594,7 +582,7 @@ void FFlowGraphImporterSpec::Define()
 				);
 
 				FString ErrorMessage;
-				TestFlowAsset = ImportFromExportedJson(TEXT("/Game/Test/TestNonInstancedClassPropertyRegression"), TestImportText, ErrorMessage);
+				TestFlowAsset = ImportFromExportedJson(TEXT("/Game/Test/TestNonInstancedClassProperty"), TestImportText, ErrorMessage);
 				TestNotNull("Imported asset should not be null", TestFlowAsset);
 				if (!TestFlowAsset)
 				{
@@ -636,9 +624,8 @@ void FFlowGraphImporterSpec::Define()
 
 			It("should export an owned subobject as ClassPath(Fields) and re-import it into a second asset", [this]()
 			{
-				// The bare-path form a subobject serialized as before this feature pointed inside its
-				// owning asset - re-importable into that same asset by accident at best, and never
-				// into a different one, which is what a real export/import round trip requires.
+				// An owned subobject is serialized by class and fields so it can be reconstructed
+				// under a different asset owner.
 				TestImportText = TEXT(
 					"{\"formatVersion\":2,\"mode\":\"Full\",\"bWorldBound\":false,"
 					"\"ops\":[{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000001\",\"type\":\"/Script/Flow.FlowNode_ExecuteComponent\","
@@ -1548,9 +1535,8 @@ void FFlowGraphImporterSpec::Define()
 		{
 			It("should wire declared [Exec] output pins beyond CDO defaults as exec connections", [this]()
 			{
-				// Regression: ExecutionSequence pin 2+ was absent from GetOutputPins() on the CDO
-				// (only 0 and 1 exist by default) and fell back to wildcard/data, causing the
-				// connection to be stored on the wrong node and silently dropped on export.
+				// ExecutionSequence declares pins beyond the CDO's default 0 and 1. They retain
+				// their Exec type so connections are stored on the source node.
 				TestImportText = TEXT(
 					"{\"formatVersion\":2,\"mode\":\"Full\",\"bWorldBound\":true,"
 					"\"ops\":["
@@ -1614,8 +1600,8 @@ void FFlowGraphImporterSpec::Define()
 			});
 		});
 
-		// P7.2/P7.4 - Declared pin reconstruction and pin type round-trip
-		Describe("Declared pin reconstruction (P7.4)", [this]()
+		// Declared pins retain their names and types through import.
+		Describe("Declared pin reconstruction", [this]()
 		{
 			It("ParsePinDecl parses name, type, and sub-category path correctly", [this]()
 			{
@@ -1631,7 +1617,7 @@ void FFlowGraphImporterSpec::Define()
 				TestEqual("type is Exec", Type, FString("Exec"));
 				TestTrue("no sub-category for Exec", SubCat.IsEmpty());
 
-				// P7.3 sub-category form
+				// A typed struct pin carries a sub-category path.
 				TestTrue("'Pos [Struct:/Script/CoreUObject.Vector]' parses", UFlowGraphImporter::ParsePinDecl(TEXT("Pos [Struct:/Script/CoreUObject.Vector]"), Name, Type, SubCat));
 				TestEqual("name is Pos", Name, FName("Pos"));
 				TestEqual("type is Struct", Type, FString("Struct"));
@@ -1647,8 +1633,7 @@ void FFlowGraphImporterSpec::Define()
 
 			It("declared unconnected data pin is reconstructed on import", [this]()
 			{
-				// A node that declares a data output pin but has no connection using it.
-				// Before P7.4 fix, this pin was silently lost after import.
+				// An unconnected declared data output remains on the imported node.
 				TestImportText = TEXT(
 					"{\"formatVersion\":2,\"mode\":\"Full\",\"assetClass\":\"/Script/Flow.FlowAsset\",\"bWorldBound\":true,"
 					"\"ops\":["
@@ -1712,8 +1697,7 @@ void FFlowGraphImporterSpec::Define()
 
 			It("connected data pin retains declared type (not wildcard)", [this]()
 			{
-				// A node that declares a typed data pin AND has a connection using it.
-				// Before P7.2 fix, the connected pin was created as wildcard by the connection fallback.
+				// A connected declared data pin retains its type.
 				TestImportText = TEXT(
 					"{\"formatVersion\":2,\"mode\":\"Full\",\"assetClass\":\"/Script/Flow.FlowAsset\",\"bWorldBound\":true,"
 					"\"ops\":["
@@ -1758,12 +1742,7 @@ void FFlowGraphImporterSpec::Define()
 				TestEqual("Start.Score pin type must be Float (not wildcard)", ScoreTypeName, FName("Float"));
 			});
 
-			// Regression test for the 2026-07-23 investigation: ApplyDeclaredPins used to skip every
-			// declared Exec pin on the assumption that the node's own CDO already provides it. That's
-			// true for a static-pin class like FlowNode_Start/Finish, but not for a dynamic-pin class
-			// (e.g. a project-specific node whose exec pins come from reflection-driven metadata,
-			// not a literal CDO array) - declaring an Exec pin the CDO doesn't already have exercises
-			// that same shape without any cross-project dependency.
+			// A declared exec pin is created even when the node CDO does not declare it.
 			It("declared exec pin absent from the node's own CDO is reconstructed on import", [this]()
 			{
 				TestImportText = TEXT(
@@ -1803,10 +1782,7 @@ void FFlowGraphImporterSpec::Define()
 				TestEqual("Start.Trigger pin type must be Exec", TriggerTypeName, FName("Exec"));
 			});
 
-			// Regression test for the 2026-07-23 investigation: ParseConnectionLine and ParsePinDecl
-			// used to blanket-trim source/target/pin-name tokens, which collapses a pin name that is
-			// itself pure whitespace (e.g. a project-specific node's intentionally-blank single-space
-			// exec pin) down to NAME_None - the connection then silently failed to resolve.
+			// Pure whitespace is a valid pin name and must survive connection parsing.
 			It("a connection to/from a pure-whitespace pin name round-trips instead of collapsing to None", [this]()
 			{
 				TestImportText = TEXT(
@@ -1854,8 +1830,8 @@ void FFlowGraphImporterSpec::Define()
 			});
 		});
 
-		// P7.5 - Subgraph interface CustomInputs/CustomOutputs round-trip
-		Describe("Subgraph interface round-trip (P7.5)", [this]()
+		// Subgraph interface names survive import.
+		Describe("Subgraph interface round-trip", [this]()
 		{
 			It("CustomInputs and CustomOutputs are populated after importing a subgraph asset", [this]()
 			{
@@ -1894,8 +1870,8 @@ void FFlowGraphImporterSpec::Define()
 			});
 		});
 
-		// P7.6 - DefaultForInputFlowPin value round-trip
-		Describe("DefaultForInputFlowPin value round-trip (P7.6)", [this]()
+		// DefaultForInputFlowPin values are reflected node properties.
+		Describe("DefaultForInputFlowPin value round-trip", [this]()
 		{
 			It("FText DefaultForInputFlowPin property value survives import via Properties block", [this]()
 			{
@@ -1936,12 +1912,8 @@ void FFlowGraphImporterSpec::Define()
 			});
 		});
 
-		// P7.7's node comment round-trip is still exercised via the document path's "comment" op
-		// field (FlowCourierFormat.spec.cpp's Node Position tests, and FlowSearch.spec.cpp's
-		// SingleNodeDoc fixture, both regraph a commented node and read back UEdGraphNode::NodeComment).
-		// The unit test that lived here targeted UFlowGraphImporter::ParseNodeComments directly - a
-		// v1-only text-grammar parser deleted per FLOW_COURIER_V2_SPEC.md section 10 - so it has no
-		// document-based equivalent and is removed rather than converted.
+		// Comment round-trip is covered by the Courier format and search fixtures, which read
+		// UEdGraphNode::NodeComment after regraphing a commented node.
 	});
 }
 

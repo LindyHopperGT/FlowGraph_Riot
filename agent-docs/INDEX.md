@@ -4,17 +4,18 @@ $KB:flow:guide:flowgraph-index
 
 ## What this is
 
-The agent-facing knowledge base for the **generic, upstream Flow Graph plugin** (`CoreSDK/Plugins/Runtime/ThirdParty/FlowGraph/`) - node/addon reference articles for classes that are not tied to any consuming project. This folder is a **sibling** to `FlowGraph/docs/` (the upstream Jekyll documentation website); do not confuse the two or nest content inside `docs/`.
-
-## Master index
-
-See the KB master index for the federated layout across all three roots: $KB:kb:guide:master-index
+This plugin's agent-facing knowledge base covers Flow Graph behavior shared by consuming projects.
+It lives beside `docs/`, the published website. Start here for concepts and authoring guidance;
+query `FindFlowNodeTypes` for facts about a particular node or addon class.
 
 ## Placement rule
 
-A node/addon's article lives here **only if it is generic** (owned by this plugin, no consuming-project dependency). A consuming project's own project-specific nodes/addons are documented in that project's own KB root instead - see $KB:kb:guide:master-index.
+Shared concepts and authoring guides live here when their behavior is part of this plugin. A
+particular class's guidance lives in its `FFlowAgentDoc`, not in a separate article. An extension
+plugin or consuming project keeps its own domain-specific documentation beside its code.
 
-**Any non-C++/Blueprint authoring language a consuming project's engine fork adds is that project's own addition, not part of upstream CoreSDK/ThirdParty Flow** - authoring guidance for it (generic or project-specific) belongs in the owning project's own KB root instead, never here. This plugin's `Authoring/` guide covers C++ and Blueprint only.
+The `Authoring/` guide covers C++ and Blueprint. Other authoring languages belong to the plugin or
+project that provides them.
 
 ## Layout
 
@@ -25,7 +26,16 @@ A node/addon's article lives here **only if it is generic** (owned by this plugi
 
 ## Conventions
 
-Article template, cross-link tag scheme (`$KB:<domain>:<kind>:<id>`), and locked-block markup are defined once, KB-wide, in this repo's own KB conventions doc (see $KB:kb:guide:master-index for its location) - a consuming project adopting the `$KB:` protocol supplies its own copy. This index does not restate them.
+Each article declares one `$KB:<domain>:<kind>:<id>` tag on its own line near the top. Use `flow`
+for this plugin's domain and `concept`, `pattern`, or `guide` for the kind. Resolve a reference by
+searching the exact tag across installed `agent-docs/` roots. The tag id matches the filename after
+case, hyphen, and underscore normalization; `INDEX.md` is exempt. Link to the tag rather than to a
+section number so links survive file moves.
+
+Keep one concept or pattern per article. Put class-specific guidance in `FFlowAgentDoc`, where the
+catalog serves it beside reflected pins and properties. A class's `Articles` entries use
+`concept:<id>` or `pattern:<id>` to connect it to shared articles. Mark content that agents may
+change only on explicit instruction with `<!-- KB-LOCK -->` and `<!-- /KB-LOCK -->`.
 
 ## Available guides
 
@@ -38,8 +48,8 @@ Article template, cross-link tag scheme (`$KB:<domain>:<kind>:<id>`), and locked
 
 - `kb_lint.py` - generic KB consistency checker (dangling `$KB:` references, filename/tag
   mismatches, orphan articles) across any set of `agent-docs/` roots. Pure Python, no Unreal/MCP
-  dependency. Ships with this plugin rather than a project-specific skill since it operates
-  generically on whatever roots are passed to it.
+  dependency. Run it on this root alone for a standalone check, or pass extension and project roots
+  together when their articles link across roots.
 
 ## Concepts (`Concepts/`)
 
@@ -55,13 +65,14 @@ Generic ecosystem semantics that don't belong to any single node/addon class.
 ## Authoring (`Authoring/`)
 
 How to create new **generic** Flow nodes/addons (no consuming-project dependency). Project-specific
-authoring lives in the owning project's root instead - see $KB:kb:guide:master-index.
+authoring lives with the owning plugin or project.
 
 - $KB:flow:guide:authoring-a-node - node vs addon, C++ vs Blueprint, the creation workflow for each
   (incl. the Flow-Blueprint-asset-type trap), and AddOn attachment eligibility (the two-sided
   accept/reject handshake).
 - $KB:flow:concept:declaring-pins - the full pin surface: exec, static, data, auto-generated, and context pins.
 
-## See also
-- $KB:flow:guide:aiflowgraph-index
-- $KB:kb:guide:master-index
+## Extensions
+
+An installed extension can add another `agent-docs/` root. Read its index for the behavior it owns;
+this index is sufficient for Flow Graph itself.

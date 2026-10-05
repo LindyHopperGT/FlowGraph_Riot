@@ -6,9 +6,8 @@
 #include "FlowGraphValidation.h"
 #include "FlowCourierDocument.generated.h"
 
-// Courier v2 JSON document model. Spec: Projects/Meerkat/agent-docs/process/FLOW_COURIER_V2_SPEC.md.
-// Replaces the FlowCourier text grammar for both full-graph exports and mutation patches - one
-// document type serves both; a full dump is a document whose ops happen to cover every node.
+// Courier v2 JSON document model. See agent-docs/CourierTextFormat.md for format semantics.
+// One document type supports complete graph exports and scoped mutation patches.
 
 UENUM()
 enum class EFlowCourierMode : uint8
@@ -30,7 +29,7 @@ enum class EFlowCourierOpKind : uint8
 
 // A single pin declaration. Name is carried verbatim and never trimmed or special-cased - some
 // nodes deliberately use a whitespace-only name to render a blank pin label, and JSON quoting
-// makes that unambiguous without any parser-side hack.
+// makes that unambiguous to the parser.
 USTRUCT()
 struct FLOWGRAPHCOURIER_API FFlowCourierPin
 {
@@ -78,8 +77,7 @@ struct FLOWGRAPHCOURIER_API FFlowCourierOp
 
 	// Identity of the node/addon this op targets. Exactly one of Guid/NewAlias must be set on any
 	// op that targets an object (Upsert*/Delete*). NewAlias names an object being created in this
-	// document; Guid names one that already exists. There is no single field or sentinel that
-	// means both - that ambiguity is exactly what Courier v2 removes.
+	// document; Guid names one that already exists.
 	UPROPERTY()
 	FString Guid;
 

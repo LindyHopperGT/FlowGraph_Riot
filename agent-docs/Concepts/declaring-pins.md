@@ -131,9 +131,8 @@ force-load referenced assets.
 
 ## Project-layer note
 
-A project's Flow layer may add its own dynamic-pin surface on top of this (extra typed input/output
-arrays and generation-override hooks). Those surfaces are documented in the owning project's root -
-see $KB:kb:guide:master-index.
+An extension plugin or consuming project may add dynamic pin sources beyond those described here.
+Read its own authoring guide for those declarations and generation hooks.
 
 ## See also
 

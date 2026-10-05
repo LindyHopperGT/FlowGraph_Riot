@@ -33,7 +33,7 @@ END_DEFINE_SPEC(FFlowGraphSubgraphQuerySpec)
 
 void FFlowGraphSubgraphQuerySpec::Define()
 {
-	Describe("FlowGraphSubgraphQuery (P11.1)", [this]()
+	Describe("FlowGraphSubgraphQuery", [this]()
 	{
 		BeforeEach([this]()
 		{
@@ -253,11 +253,8 @@ void FFlowGraphSubgraphQuerySpec::Define()
 				TestFalse("Error message should not be empty", ErrorMessage.IsEmpty());
 			});
 
-			// RS12 regression: the undirected BFS must also cross data-pin edges, not just exec
-			// edges, and pick up a node that is only reachable *upstream* of where traversal started.
-			// Reuses the same FlowNode_FormatText "Formatted Text" [Text] -> "FormatText" [Text] data
-			// pin pair as the proven data-pin fixture in FlowGraphReconciler.spec.cpp - these two
-			// FormatText nodes declare no exec pins at all, so they are connected purely by a data edge.
+			// Undirected traversal includes upstream data dependencies. These FormatText nodes
+			// have no exec pins, so their only connection is the data edge.
 			It("includes a node reached only via an upstream data-pin dependency, and excludes a genuinely disconnected node", [this]()
 			{
 				const FString AssetPath = TEXT("/Game/Test/TestSubgraphQuery_DataPinReachability");

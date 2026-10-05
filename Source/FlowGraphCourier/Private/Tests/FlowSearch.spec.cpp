@@ -19,10 +19,8 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
-// Exercises FFlowSearch (P8.1's headless extraction of SFindInFlow's algorithm) directly,
-// without any Slate/editor-widget dependency. Covers the Phase 8 checklist's planned test
-// list: token AND-matching, per-flag category matching, scope, subgraph recursion + cycle
-// detection, and max-depth cutoff.
+// Exercises FFlowSearch without a Slate widget: token AND-matching, per-flag categories,
+// search scope, subgraph recursion and cycle detection, and the maximum depth cutoff.
 BEGIN_DEFINE_SPEC(FFlowSearchSpec, "FlowGraphCourier.EditorGame.Search", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 	TArray<UFlowAsset*> TestAssets;
 

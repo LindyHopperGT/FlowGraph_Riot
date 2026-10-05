@@ -166,10 +166,8 @@ inline const TCHAR* GValidationJson_CompatibleDataConnection = TEXT(R"JSON(
 }
 )JSON");
 
-// F3 regression: one Text output (C4) driving two Text inputs (D4, E4). Fan-out from a *data* pin
-// is legal and shipped content relies on it - only exec pins are one-target-per-pin. Before the fix
-// ValidateConnectionFanOut had no access to pin types and raised ExecFanOut for any repeated source
-// pin, which blocked patches against real assets.
+// One Text output (C4) drives two Text inputs (D4, E4). Data outputs may fan out;
+// only exec outputs are limited to one target.
 inline const TCHAR* GValidationJson_DataFanOutIsLegal = TEXT(R"JSON(
 {
 	"formatVersion": 2,

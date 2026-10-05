@@ -146,8 +146,8 @@ parent-local state, or add an asset hop without making the behavior easier to un
 
 ## Ecosystem links
 
-- $KB:flow:guide:courier-text-format (Subgraph Interface section - the exact Flow Courier text shape)
+- $KB:flow:guide:courier-text-format (Subgraph Interface section - Courier JSON fields)
 
 ## See also
 
-- $KB:kb:guide:master-index
+- $KB:flow:guide:flowgraph-index

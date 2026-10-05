@@ -216,11 +216,8 @@ void FFlowGraphReconcilerSpec::Define()
 			});
 		});
 
-		// Regression test for the 5b investigation: ApplyDeclaredPins (P7.4) is called from CreateFlowNodes
-		// for new nodes, but was never called for existing nodes going through the reconciler's update path -
-		// so a pin re-declared on an already-existing node (the same shape as a project-specific node's
-		// NamedProperties-driven dynamic pins) never got applied, and any connection referencing it would
-		// fall through to ResolveSourcePin's mistyped wildcard fallback instead.
+		// Updating an existing node applies newly declared pins with their real types before
+		// connections to those pins are resolved.
 		Describe("Reconcile Applies Declared Pins To Updated Node", [this, MakeThreeNodeText, GuidA, GuidB, GuidC]()
 		{
 			It("adds a newly-declared output pin with its real type when updating an existing node", [this, MakeThreeNodeText, GuidA, GuidB, GuidC]()
@@ -423,8 +420,7 @@ void FFlowGraphReconcilerSpec::Define()
 				FGuid NodeGuidB;
 				FGuid::Parse(GuidB, NodeGuidB);
 
-				// Unregister the runtime node without touching the editor graph - exactly the state
-				// a runtime-only delete used to leave behind.
+				// Unregister only the runtime node to create an orphaned editor node.
 				TestFlowAsset->UnregisterNode(NodeGuidB);
 				TestEqual("The orphaned editor node should still be present", CountTopLevelFlowGraphNodes(TestFlowAsset), 3);
 
@@ -1026,13 +1022,8 @@ void FFlowGraphReconcilerSpec::Define()
 			});
 		});
 
-		// Regression coverage for the fan-out-vs-existing-asset bug found 2026-07-13 via live
-		// apply_flow_patch testing: adding a connection from an exec output pin that already
-		// points elsewhere used to be silently reverted by the next regraph
-		// (FlowGraphRegrapher.cpp's CreateEditorPinConnections never broke the stale editor pin
-		// link, so HarvestNodeConnections() harvested it straight back). Fixed alongside honest
-		// plan reporting in FlowGraphReconciler.cpp (a superseded connection is now also reported
-		// in ConnectionsRemoved).
+		// Retargeting an exec output updates both runtime and editor connections, and the plan
+		// reports the superseded connection under ConnectionsRemoved.
 		Describe("Connection Retarget", [this, MakeThreeNodeText, GuidA, GuidB, GuidC]()
 		{
 			It("retargeting an exec output pin actually changes the runtime connection, not just the plan", [this, MakeThreeNodeText, GuidA, GuidB, GuidC]()
@@ -1055,8 +1046,7 @@ void FFlowGraphReconcilerSpec::Define()
 
 				// ConnectionLabel is built from FGuid::ToString(), which defaults to the
 				// non-hyphenated Digits format - do not compare against the hyphenated literals
-				// used in the mutation text itself (same gotcha documented in Phase 0's
-				// FlowCourierFormat.spec.cpp notes).
+				// used in the mutation text.
 				FGuid NodeGuidA;
 				FGuid::Parse(GuidA, NodeGuidA);
 				FGuid NodeGuidB;
@@ -1122,15 +1112,8 @@ void FFlowGraphReconcilerSpec::Define()
 				FGuid::Parse(GuidB, NodeGuidB);
 				TestNull("The old endpoint B should be deleted", TestFlowAsset->GetNode(NodeGuidB));
 			});
-// Regression coverage for a related bug found the same day: the reconciler's
-			// bAlreadyPresent/idempotency check always queried SourceNode keyed by SourcePinName,
-			// which is only correct for exec connections - a data connection's map entry actually
-			// lives on the *target* node keyed by the *target* pin name (see
-			// UFlowGraphImporter::WriteConnectionToNode). Querying the wrong node/key meant a data
-			// connection add always looked "new", breaking idempotency. Uses two
-			// UFlowNode_FormatText instances (native, agnostic) wired via the same "Formatted Text"
-			// (Text output) -> "FormatText" (Text input) data pin pair used to rebuild the
-			// standalone data-pin round-trip fixtures in FlowGraphImporter.spec.cpp.
+			// A data connection is stored on its target node under the target pin name. Reapplying
+			// the same connection must recognize that entry and remain idempotent.
 			It("applying the same data-connection-add mutation twice reports nothing further added on the second apply", [this]()
 			{
 				const FString AssetPath = TEXT("/Game/Test/TestReconcileDataConnectionIdempotent");
@@ -1299,10 +1282,8 @@ void FFlowGraphReconcilerSpec::Define()
 				TestNotNull("Asset should now exist and be loadable", TestFlowAsset);
 			});
 
-			// Regression test for W10.17: creating a new asset in one mode:"Full" patch never went
-			// through the reconciler's diff path (ExecutionPlan.ConnectionsToAdd stays empty on a
-			// create), so ConnectionsAdded came back empty with zero findings regardless of whether
-			// the connections actually landed. Asserts the create path is now verified the same way.
+			// A Full document that creates an asset reports its requested connections after
+			// verifying that they landed.
 			It("reports added connections when creating a new asset with connections in one Full-mode patch", [this, MakeThreeNodeText, GuidA, GuidB, GuidC]()
 			{
 				const FString AssetPath = TEXT("/Game/Test/TestReconcileCreatePathWithConnections");
@@ -1327,8 +1308,8 @@ void FFlowGraphReconcilerSpec::Define()
 			});
 		});
 
-		// Phase 11 P11.2: idempotent find-or-create node helper.
-		Describe("FindOrCreateNode (P11.2)", [this, MakeThreeNodeText]()
+		// FindOrCreateNode returns the same node for repeated exact-match requests.
+		Describe("FindOrCreateNode", [this, MakeThreeNodeText]()
 		{
 			It("finds an existing node whose properties match exactly, without creating anything", [this, MakeThreeNodeText]()
 			{

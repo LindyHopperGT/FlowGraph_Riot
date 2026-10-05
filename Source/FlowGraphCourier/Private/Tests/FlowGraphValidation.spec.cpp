@@ -349,7 +349,7 @@ void FFlowGraphValidationSpec::Define()
 			TestTrue("Should have no Error-severity findings", FFlowGraphValidation::HasNoErrors(Result.ValidationFindings));
 		});
 
-		// P7.9 - Pin type-compatibility validation.
+		// Pin type compatibility blocks invalid connections before mutation.
 		It("rejects an exec-to-data cross connection as an Error and does not mutate the asset", [this, GuidA, GuidB]()
 		{
 			const FString AssetPath = TEXT("/Game/Test/TestValidationExecDataCross");
@@ -408,12 +408,8 @@ void FFlowGraphValidationSpec::Define()
 			TestEqual("Rejected patch does not add nodes", TestFlowAsset->GetNodes().Num(), NodeCountBefore);
 		});
 
-		// F3 regression. The fan-out rule is exec-only: an exec output pin may drive one target, but
-		// a data output pin may legally feed several inputs and shipped content does exactly that.
-		// ValidateConnectionFanOut originally had no access to pin types and flagged any repeated
-		// source pin, so this document was rejected outright. The exec case is covered by the
-		// "rejects connection fan-out" test above, whose source pin is Exec - keep both, since the
-		// pair is what pins the rule to exec-ness rather than to repetition.
+		// Fan-out depends on pin type: an exec output drives one target, while a data output may
+		// feed several inputs. The exec case is covered by the separate fan-out rejection test.
 		It("allows fan-out from a data output pin to several data inputs", [this, GuidA, GuidB]()
 		{
 			const FString AssetPath = TEXT("/Game/Test/TestValidationDataFanOut");

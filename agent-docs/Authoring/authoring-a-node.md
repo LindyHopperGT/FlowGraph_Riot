@@ -117,10 +117,10 @@ pasted, not just the one instance in front of it.
 
 ## Project-layer note
 
-Project-specific base-class choices, and any project-specific dynamic-pin surface, are documented in
-the owning project's root, not here - see $KB:kb:guide:master-index.
+An extension plugin or consuming project documents its own base classes and dynamic pin behavior
+beside the code that defines them.
 
 ## See also
 
 - $KB:flow:concept:declaring-pins
-- $KB:kb:guide:master-index
+- $KB:flow:guide:flowgraph-index
