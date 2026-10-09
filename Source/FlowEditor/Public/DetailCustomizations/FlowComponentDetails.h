@@ -4,6 +4,8 @@
 #include "IDetailCustomization.h"
 #include "PropertyHandle.h"
 
+class IPropertyHandle;
+
 class FFlowComponentDetails : public IDetailCustomization
 {
 public:

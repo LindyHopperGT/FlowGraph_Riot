@@ -6,13 +6,15 @@
 #include "IPropertyTypeCustomization.h"
 #include "PropertyHandle.h"
 #include "Widgets/Input/SCheckBox.h"
+#include "StructUtils/InstancedStruct.h"
+#include "Styling/SlateTypes.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/SCompoundWidget.h"
 
 #include "FlowComponent.h"
 #include "Types/FlowIdentity.h"
 
-#include "StructUtils/InstancedStruct.h"
+class IDetailsView;
 
 /**
  * Flow Identity Tag Selector

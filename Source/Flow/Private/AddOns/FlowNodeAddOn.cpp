@@ -31,7 +31,6 @@ void UFlowNodeAddOn::PostDuplicate(bool bDuplicateForPIE)
 		// The constructor can record a CDO identity before serialized properties are copied.
 		// At this hook, NodeGuid is the source identity that the copied graph pins actually use.
 		ClearPreviousGuidForPinRemapping();
-
 		SetGuid(FGuid::NewGuid());
 	}
 }
@@ -42,7 +41,6 @@ void UFlowNodeAddOn::PostEditImport()
 
 	// Discard constructor history and remap from the imported, serialized identity.
 	ClearPreviousGuidForPinRemapping();
-
 	SetGuid(FGuid::NewGuid());
 }
 #endif

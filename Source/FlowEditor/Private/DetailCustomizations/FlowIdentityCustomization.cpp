@@ -24,6 +24,8 @@
 #include "SGameplayTagChip.h"
 #include "SLevelViewport.h"
 #include "Styling/SlateStyleRegistry.h"
+#include "Widgets/Docking/SDockTab.h"
+#include "Widgets/Input/SComboButton.h"
 #include "Widgets/Input/SSpinBox.h"
 
 #define LOCTEXT_NAMESPACE "FlowIdentityCustomization"

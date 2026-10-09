@@ -28,9 +28,11 @@
 
 #if WITH_EDITOR
 #include "Nodes/Graph/FlowNode_SetGraphOutput.h"
+
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetToolsModule.h"
 #include "ContentBrowserModule.h"
+#include "Misc/DataValidation.h"
 #include "IContentBrowserSingleton.h"
 #include "Editor.h"
 #include "Editor/EditorEngine.h"
@@ -146,102 +148,7 @@ void UFlowAsset::PostLoad()
 void UFlowAsset::PreSaveRoot(FObjectPreSaveRootContext ObjectSaveContext)
 {
 	ReconcileBaseAssetParams(FDateTime::Now());
-
-	RepairDuplicateAddOnGuids();
-}
-
-int32 UFlowAsset::RepairDuplicateAddOnGuids()
-{
-	TSet<FGuid> SeenAddOnGuids;
-	int32 NumRepaired = 0;
-
-	TFunction<void(UFlowNodeAddOn&)> RepairAddOnTree = [this, &SeenAddOnGuids, &NumRepaired, &RepairAddOnTree](UFlowNodeAddOn& AddOn)
-	{
-		bool bAlreadyInSet = false;
-		SeenAddOnGuids.Add(AddOn.GetGuid(), &bAlreadyInSet);
-
-		if (bAlreadyInSet)
-		{
-			const FGuid OldGuid = AddOn.GetGuid();
-			const FGuid NewGuid = FGuid::NewGuid();
-			AddOn.SetGuid(NewGuid);
-			SeenAddOnGuids.Add(NewGuid);
-			++NumRepaired;
-
-			UE_LOG(LogFlow, Log, TEXT("RepairDuplicateAddOnGuids: %s AddOn %s had duplicate Guid %s, re-minted to %s"),
-				*GetPathName(), *AddOn.GetName(), *OldGuid.ToString(), *NewGuid.ToString());
-		}
-
-		for (UFlowNodeAddOn* Child : AddOn.GetFlowNodeAddOnChildren())
-		{
-			if (IsValid(Child))
-			{
-				RepairAddOnTree(*Child);
-			}
-		}
-	};
-
-	for (const TPair<FGuid, UFlowNode*>& Node : ObjectPtrDecay(Nodes))
-	{
-		if (!IsValid(Node.Value))
-		{
-			continue;
-		}
-
-		for (UFlowNodeAddOn* AddOn : Node.Value->GetFlowNodeAddOnChildren())
-		{
-			if (IsValid(AddOn))
-			{
-				RepairAddOnTree(*AddOn);
-			}
-		}
-	}
-
-	return NumRepaired;
-}
-
-EDataValidationResult UFlowAsset::ValidateAsset(FFlowMessageLog& MessageLog)
-{
-	// validate nodes
-	for (const TPair<FGuid, UFlowNode*>& Node : ObjectPtrDecay(Nodes))
-	{
-		if (IsValid(Node.Value))
-		{
-			FText FailureReason;
-			if (!IsNodeOrAddOnClassAllowed(Node.Value->GetClass(), &FailureReason))
-			{
-				const FString ErrorMsg =
-					FailureReason.IsEmpty()
-						? FString::Format(*ValidationError_NodeClassNotAllowed, {*Node.Value->GetClass()->GetName()})
-						: FailureReason.ToString();
-
-				MessageLog.Error(*ErrorMsg, Node.Value);
-			}
-
-			Node.Value->ValidationLog.Messages.Empty();
-			Node.Value->ValidateNode();
-			MessageLog.Messages.Append(Node.Value->ValidationLog.Messages);
-
-			ValidateAddOnChildren(*Node.Value, MessageLog);
-		}
-		else
-		{
-			const FString ErrorMsg = FString::Format(*ValidationError_NullNodeInstance, {*Node.Key.ToString()});
-			MessageLog.Error(*ErrorMsg, this);
-		}
-	}
-
-	// if at least one error has been logged : mark the asset as invalid
-	for (const TSharedRef<FTokenizedMessage>& Msg : MessageLog.Messages)
-	{
-		if (Msg->GetSeverity() == EMessageSeverity::Error)
-		{
-			return EDataValidationResult::Invalid;
-		}
-	}
-
-	// otherwise, the asset is considered valid (even with warnings or notes)
-	return EDataValidationResult::Valid;
+	(void)RepairDuplicateAddOnGuids();
 }
 
 bool UFlowAsset::IsNodeOrAddOnClassAllowed(const UClass* FlowNodeOrAddOnClass, FText* OutOptionalFailureReason) const
@@ -409,7 +316,67 @@ bool UFlowAsset::IsFlowNodeClassInDeniedClasses(const UClass& FlowNodeClass) con
 	return false;
 }
 
-void UFlowAsset::ValidateAddOnTree(UFlowNodeAddOn& AddOn, FFlowMessageLog& MessageLog)
+EDataValidationResult UFlowAsset::IsDataValid(FDataValidationContext& Context) const
+{
+	FFlowMessageLog LogResults;
+	const EDataValidationResult Result = ValidateAsset(LogResults);
+
+	for (const TSharedRef<FTokenizedMessage>& Message : LogResults.Messages)
+	{
+		Context.AddMessage(Message);
+	}
+
+	return Result;
+}
+
+EDataValidationResult UFlowAsset::ValidateAsset(FFlowMessageLog& MessageLog) const
+{
+	// validate runtime nodes
+	for (const TPair<FGuid, UFlowNode*>& Node : ObjectPtrDecay(Nodes))
+	{
+		if (IsValid(Node.Value))
+		{
+			FText FailureReason;
+			if (!IsNodeOrAddOnClassAllowed(Node.Value->GetClass(), &FailureReason))
+			{
+				const FString ErrorMsg =
+					FailureReason.IsEmpty()
+						? FString::Format(*ValidationError_NodeClassNotAllowed, {*Node.Value->GetClass()->GetName()})
+						: FailureReason.ToString();
+
+				MessageLog.Error(*ErrorMsg, Node.Value);
+			}
+
+			Node.Value->ValidationLog.Messages.Empty();
+			Node.Value->ValidateNode();
+			MessageLog.Messages.Append(Node.Value->ValidationLog.Messages);
+
+			ValidateAddOnChildren(*Node.Value, MessageLog);
+		}
+		else
+		{
+			const FString ErrorMsg = FString::Format(*ValidationError_NullNodeInstance, {*Node.Key.ToString()});
+			MessageLog.Error(*ErrorMsg, this);
+		}
+	}
+
+	// validate editor's graph
+	OnValidateGraph.ExecuteIfBound(MessageLog);
+
+	// if at least one error has been logged : mark the asset as invalid
+	for (const TSharedRef<FTokenizedMessage>& Msg : MessageLog.Messages)
+	{
+		if (Msg->GetSeverity() == EMessageSeverity::Error)
+		{
+			return EDataValidationResult::Invalid;
+		}
+	}
+
+	// otherwise, the asset is considered valid (even with warnings or notes)
+	return EDataValidationResult::Valid;
+}
+
+void UFlowAsset::ValidateAddOnTree(UFlowNodeAddOn& AddOn, FFlowMessageLog& MessageLog) const
 {
 	// Filter unauthorized addon nodes
 	FText FailureReason;
@@ -431,7 +398,7 @@ void UFlowAsset::ValidateAddOnTree(UFlowNodeAddOn& AddOn, FFlowMessageLog& Messa
 	ValidateAddOnChildren(AddOn, MessageLog);
 }
 
-void UFlowAsset::ValidateAddOnChildren(UFlowNodeBase& OwnerNode, FFlowMessageLog& MessageLog)
+void UFlowAsset::ValidateAddOnChildren(UFlowNodeBase& OwnerNode, FFlowMessageLog& MessageLog) const
 {
 	const TArray<UFlowNodeAddOn*>& Children = OwnerNode.GetFlowNodeAddOnChildren();
 	for (UFlowNodeAddOn* Child : Children)
@@ -687,6 +654,56 @@ UFlowNode* UFlowAsset::GetDefaultEntryNode() const
 
 	// If none of the found start nodes have connections, fallback to the first start node we found
 	return FirstStartNode;
+}
+
+int32 UFlowAsset::RepairDuplicateAddOnGuids() const
+{
+	TSet<FGuid> SeenAddOnGuids;
+	int32 NumRepaired = 0;
+
+	TFunction<void(UFlowNodeAddOn&)> RepairAddOnTree = [this, &SeenAddOnGuids, &NumRepaired, &RepairAddOnTree](UFlowNodeAddOn& AddOn)
+	{
+		bool bAlreadyInSet = false;
+		SeenAddOnGuids.Add(AddOn.GetGuid(), &bAlreadyInSet);
+
+		if (bAlreadyInSet)
+		{
+			const FGuid OldGuid = AddOn.GetGuid();
+			const FGuid NewGuid = FGuid::NewGuid();
+			AddOn.SetGuid(NewGuid);
+			SeenAddOnGuids.Add(NewGuid);
+			++NumRepaired;
+
+			UE_LOG(LogFlow, Log, TEXT("RepairDuplicateAddOnGuids: %s AddOn %s had duplicate Guid %s, re-minted to %s"),
+				*GetPathName(), *AddOn.GetName(), *OldGuid.ToString(), *NewGuid.ToString());
+		}
+
+		for (UFlowNodeAddOn* Child : AddOn.GetFlowNodeAddOnChildren())
+		{
+			if (IsValid(Child))
+			{
+				RepairAddOnTree(*Child);
+			}
+		}
+	};
+
+	for (const TPair<FGuid, UFlowNode*>& Node : ObjectPtrDecay(Nodes))
+	{
+		if (!IsValid(Node.Value))
+		{
+			continue;
+		}
+
+		for (UFlowNodeAddOn* AddOn : Node.Value->GetFlowNodeAddOnChildren())
+		{
+			if (IsValid(AddOn))
+			{
+				RepairAddOnTree(*AddOn);
+			}
+		}
+	}
+
+	return NumRepaired;
 }
 
 TArray<UFlowNode*> UFlowAsset::GatherNodesConnectedToAllInputs() const

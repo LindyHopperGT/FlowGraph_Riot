@@ -17,8 +17,8 @@
 #include "ISinglePropertyView.h"
 #include "Modules/ModuleManager.h"
 #include "PropertyEditorModule.h"
-#include "ScopedTransaction.h"
 #include "SGameplayTagPicker.h"
+#include "ScopedTransaction.h"
 
 #define LOCTEXT_NAMESPACE "FlowDetails"
 

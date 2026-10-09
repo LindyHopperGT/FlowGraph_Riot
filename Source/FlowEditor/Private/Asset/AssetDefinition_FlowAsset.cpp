@@ -10,6 +10,8 @@
 
 #include "FlowAsset.h"
 
+#include "EdGraph/EdGraph.h"
+
 #include UE_INLINE_GENERATED_CPP_BY_NAME(AssetDefinition_FlowAsset)
 
 #define LOCTEXT_NAMESPACE "AssetDefinition_FlowAsset"
