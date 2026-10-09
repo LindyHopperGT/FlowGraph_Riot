@@ -322,7 +322,8 @@ void UFlowGraphNode::ReconstructNode()
 		FlowNode->SetupForEditing(*this);
 	}
 
-	const bool bAnyPinsUpdated = TryUpdateNodePins(); // Updates all pins of the Flow Node (native pins, meta auto pins, and context pins which include data pins for now)
+	TMap<FName, FName> AutoDataPinNameRemap;
+	const bool bAnyPinsUpdated = TryUpdateNodePins(AutoDataPinNameRemap); // Updates all pins of the Flow Node (native pins, meta auto pins, and context pins which include data pins for now)
 	const bool bAreGraphPinsMismatched = !CheckGraphPinsMatchNodePins(); // This must be called last since it checks the existing graph node against the cleaned up Flow Node instance
 
 	// Does Graph Node requires reconstruction?
@@ -337,7 +338,7 @@ void UFlowGraphNode::ReconstructNode()
 		OutputPins.Reset();
 
 		AllocateDefaultPins();
-		RewireOldPinsToNewPins(OldPins);
+		RewireOldPinsToNewPins(OldPins, AutoDataPinNameRemap);
 
 		// Destroy old pins
 		for (UEdGraphPin* OldPin : OldPins)
@@ -379,7 +380,7 @@ void UFlowGraphNode::AllocateDefaultPins()
 	}
 }
 
-void UFlowGraphNode::RewireOldPinsToNewPins(TArray<UEdGraphPin*>& InOldPins)
+void UFlowGraphNode::RewireOldPinsToNewPins(TArray<UEdGraphPin*>& InOldPins, const TMap<FName, FName>& PinNameRemap)
 {
 	TArray<UEdGraphPin*> OrphanedOldPins;
 	TArray<bool> NewPinMatched; // Tracks whether a NewPin has already been matched to an OldPin
@@ -398,6 +399,19 @@ void UFlowGraphNode::RewireOldPinsToNewPins(TArray<UEdGraphPin*>& InOldPins)
 	for (int32 OldPinIndex = InOldPins.Num() - 1; OldPinIndex >= 0; --OldPinIndex)
 	{
 		UEdGraphPin* OldPin = InOldPins[OldPinIndex];
+		FName OldPinNameForMatch = OldPin->PinName;
+		const bool bExactNameStillExists = Pins.ContainsByPredicate([OldPin](const UEdGraphPin* Pin)
+		{
+			return Pin->Direction == OldPin->Direction && Pin->PinName == OldPin->PinName;
+		});
+
+		if (OldPin->Direction == EGPD_Input && !bExactNameStillExists)
+		{
+			if (const FName* RemappedPinName = PinNameRemap.Find(OldPin->PinName))
+			{
+				OldPinNameForMatch = *RemappedPinName;
+			}
+		}
 
 		// common case is for InOldPins and Pins to match, so we start searching from the current index:
 		bool bMatched = false;
@@ -410,7 +424,7 @@ void UFlowGraphNode::RewireOldPinsToNewPins(TArray<UEdGraphPin*>& InOldPins)
 			{
 				UEdGraphPin* NewPin = Pins[NewPinIndex];
 
-				if (NewPin->PinName == OldPin->PinName)
+				if (NewPin->PinName == OldPinNameForMatch)
 				{
 					ReconstructSinglePin(NewPin, OldPin);
 
@@ -1913,8 +1927,10 @@ bool CheckPinsMatch(const TArray<UEdGraphPin*>& GraphPins, const TArray<FFlowPin
 	return true;
 }
 
-bool UFlowGraphNode::TryUpdateNodePins() const
+bool UFlowGraphNode::TryUpdateNodePins(TMap<FName, FName>& OutAutoDataPinNameRemap) const
 {
+	OutAutoDataPinNameRemap.Reset();
+
 	UFlowNode* FlowNodeInstance = Cast<UFlowNode>(NodeInstance);
 	if (!IsValid(FlowNodeInstance))
 	{
@@ -1928,6 +1944,45 @@ bool UFlowGraphNode::TryUpdateNodePins() const
 	// Attempt to update auto-generated pins
 	// This must be called first, it updates the underlying data for data pins of the Flow Node 
 	const bool bAutoDataPinsChanged = FlowNodeInstance->TryUpdateAutoDataPins();
+
+	// Array indices locate current providers only. They must never infer identity across a reorder or insertion.
+	FFlowDataPinValueOwnerCollection ValueOwners;
+	FlowNodeInstance->GatherDataPinValueOwnerCollection(ValueOwners);
+	for (const FFlowPin& CurrentPin : FlowNodeInstance->AutoInputDataPins)
+	{
+		const FFlowPinPropertySource* Source = FlowNodeInstance->MapDataPinNameToPropertySource.Find(CurrentPin.PinName);
+		if (!Source || !ValueOwners.GetValueOwners().IsValidIndex(Source->ValueOwnerIndex))
+		{
+			continue;
+		}
+
+		const UFlowNodeBase* Provider = Cast<UFlowNodeBase>(
+			ValueOwners.GetValueOwners()[Source->ValueOwnerIndex].GetValueOwnerAsObject());
+		if (!Provider || !Provider->GetPreviousGuidForPinRemapping().IsValid()
+			|| CurrentPin.PinName != FFlowAutoDataPinsWorkingData::MakeDistinctInputPinName(
+				Provider->GetGuid(), Source->PropertyName))
+		{
+			continue;
+		}
+
+		const FName PreviousPinName = FFlowAutoDataPinsWorkingData::MakeDistinctInputPinName(
+			Provider->GetPreviousGuidForPinRemapping(), Source->PropertyName);
+
+		// RegisterNode can refresh runtime pins before reconstruction; the graph still holds the copied names.
+		if (FindPin(PreviousPinName, EGPD_Input)
+			&& !UFlowNodeBase::FindFlowPinByName(PreviousPinName, FlowNodeInstance->AutoInputDataPins))
+		{
+			OutAutoDataPinNameRemap.Add(PreviousPinName, CurrentPin.PinName);
+		}
+	}
+
+	for (FFlowDataPinValueOwner& ValueOwner : ValueOwners.GetValueOwners())
+	{
+		if (UFlowNodeBase* Provider = Cast<UFlowNodeBase>(ValueOwner.GetValueOwnerAsObject()))
+		{
+			Provider->ClearPreviousGuidForPinRemapping();
+		}
+	}
 
 	// these check would be all ignored if a full reconstruction has been requested
 	if (!bNeedsFullReconstruction)

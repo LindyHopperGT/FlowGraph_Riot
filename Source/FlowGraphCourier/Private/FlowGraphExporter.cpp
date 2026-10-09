@@ -1,6 +1,7 @@
 // Copyright https://github.com/MothCocoon/FlowGraph/graphs/contributors
 
 #include "FlowGraphExporter.h"
+#include "FlowAssetPropertyPolicy.h"
 #include "FlowLogChannels.h"
 #include "FlowAsset.h"
 #include "Nodes/FlowNode.h"
@@ -78,6 +79,21 @@ void UFlowGraphExporter::BuildDocumentHeader(const UFlowAsset* FlowAsset, FFlowC
 
 	const UClass* ExpectedOwnerClass = FlowAsset->GetExpectedOwnerClass();
 	OutDocument.ExpectedOwnerClass = ExpectedOwnerClass ? ExpectedOwnerClass->GetName() : FString();
+
+	TArray<FName> AssetPropertyNames;
+	FFlowAssetPropertyPolicy::GetRegisteredObjectReferenceProperties(FlowAsset->GetClass(), AssetPropertyNames);
+	for (const FName PropertyName : AssetPropertyNames)
+	{
+		const FObjectPropertyBase* const ObjectProperty = CastField<FObjectPropertyBase>(
+			FlowAsset->GetClass()->FindPropertyByName(PropertyName));
+		if (!ObjectProperty)
+		{
+			continue;
+		}
+		const UObject* const ObjectValue = ObjectProperty->GetObjectPropertyValue_InContainer(FlowAsset);
+		OutDocument.AssetProperties.Add(
+			PropertyName.ToString(), IsValid(ObjectValue) ? ObjectValue->GetPathName() : TEXT("None"));
+	}
 }
 
 void UFlowGraphExporter::BuildDocumentNodes(const UFlowAsset* FlowAsset, FFlowCourierDocument& OutDocument, const TSet<FGuid>* NodeGuidFilter)

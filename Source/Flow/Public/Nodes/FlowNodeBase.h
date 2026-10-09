@@ -2,6 +2,7 @@
 #pragma once
 
 #include "Runtime/Engine/Public/DrawDebugHelpers.h"
+#include "Layout/Margin.h"
 #include "Templates/SubclassOf.h"
 
 #include "Interfaces/FlowCoreExecutableInterface.h"
@@ -139,9 +140,6 @@ public:
 	UFUNCTION(BlueprintPure, Category = "FlowNode")
 	virtual int32 GetRandomSeed() const PURE_VIRTUAL(GetRandomSeed, return 0;);
 
-	/* Returns the owning top-level Flow node. */
-	virtual const UFlowNode* GetParentNode() const PURE_VIRTUAL(GetParentNode, return nullptr;);
-
 	/* Stable identity persisted across saves. For UFlowNode, inherits from graph node; for
 	 * UFlowNodeAddOn, auto-minted in constructor. Used by Flow Courier to upsert/delete individual
 	 * addons. Name-keyed serialization means no CoreRedirect needed. */
@@ -150,10 +148,30 @@ public:
 
 public:
 	UFUNCTION(BlueprintCallable, Category = "FlowNode")
-	void SetGuid(const FGuid& NewGuid) { NodeGuid = NewGuid; }
+	void SetGuid(const FGuid& NewGuid)
+	{
+#if WITH_EDITOR
+		if (NodeGuid.IsValid() && NodeGuid != NewGuid && !PreviousGuidForPinRemapping.IsValid())
+		{
+			PreviousGuidForPinRemapping = NodeGuid;
+		}
+#endif
+		NodeGuid = NewGuid;
+	}
 
 	UFUNCTION(BlueprintPure, Category = "FlowNode")
 	const FGuid& GetGuid() const { return NodeGuid; }
+
+#if WITH_EDITOR
+	/** Original provider identity before editor duplication/import changed it, until pins are rebuilt. */
+	const FGuid& GetPreviousGuidForPinRemapping() const { return PreviousGuidForPinRemapping; }
+	void ClearPreviousGuidForPinRemapping() { PreviousGuidForPinRemapping.Invalidate(); }
+
+private:
+	// Deliberately not serialized or copied: each duplication records its own source identity in SetGuid.
+	FGuid PreviousGuidForPinRemapping;
+#endif
+
 //////////////////////////////////////////////////////////////////////////
 // Pins	
 
@@ -414,8 +432,13 @@ protected:
 	UPROPERTY(EditDefaultsOnly, Category = "FlowNode")
 	TSubclassOf<UFlowNode> ReplacedBy;
 
+	// AddOn callbacks can request reconstruction after each property change. Courier batches the
+	// complete AddOn tree before rebuilding the parent graph.
 	FFlowNodeEvent OnReconstructionRequested;
 	FFlowNodeEvent OnAddOnRequestedParentReconstruction;
+
+	// The scoped helper preserves and restores both bindings while a caller batches property callbacks.
+	friend class FScopedFlowNodeReconstructionRequestDeferral;
 #endif // WITH_EDITORONLY_DATA
 
 #if WITH_EDITOR
@@ -511,6 +534,18 @@ public:
 	 * @return Returns true if the Node wants to display an icon in the top-right corner.
 	 */
 	virtual bool GetCornerIcon(FName& OutBrushName, FName& OutStyleSetName) const { return false; }
+
+	/** The title border padding SFlowGraphNode applies to a node that does not override it.
+	 * The Right value is deliberately generous: it makes the title color spill stretch well past the title text.
+	 */
+	static FMargin GetDefaultTitleBorderMargin() { return FMargin(10.0f, 5.0f, 30.0f, 3.0f); }
+
+	/**
+	 * Returns the padding SFlowGraphNode applies to this node instance's title border.
+	 * Can override in a sub-class to produce a different margin.
+	 * This can be particularly useful for Nodes that want to draw several overlay icons in the title bar.
+	 */
+	virtual FMargin GetTitleBorderMargin() const { return GetDefaultTitleBorderMargin(); }
 
 	/**
 	 * Agent-facing documentation for this class. The single read seam, so a class is free to store

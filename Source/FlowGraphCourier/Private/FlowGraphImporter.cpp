@@ -6,6 +6,7 @@
 #include "Nodes/FlowNode.h"
 #include "AddOns/FlowNodeAddOn.h"
 #include "Nodes/FlowNodeBase.h"
+#include "Nodes/FlowNodeReconstructionRequestDeferral.h"
 #include "Nodes/FlowNodeBlueprint.h"
 #include "Nodes/FlowNodeAddOnBlueprint.h"
 #include "Engine/Blueprint.h"
@@ -15,6 +16,10 @@
 #include "UObject/UObjectGlobals.h"
 #include "UObject/UnrealType.h"
 #include "UObject/TextProperty.h"
+#include "UObject/PropertyPathFunctions.h"
+#include "UObject/PropertyPathName.h"
+#include "Templates/Function.h"
+#include "Templates/UniquePtr.h"
 #include "Misc/PackageName.h"
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Graph/FlowGraph.h"
@@ -25,10 +30,15 @@ UFlowAsset* UFlowGraphImporter::ImportFlowGraphFromDocument(
 	bool bWorldBound,
 	const TArray<FFlowGraphParsedNode>& ParsedNodes,
 	const TArray<FFlowGraphParsedConnection>& ParsedConnections,
-	FString& OutErrorMessage)
+	FString& OutErrorMessage,
+	const FFlowProjectedPinSchema* ProjectedPinSchema,
+	const TMap<FName, FFlowStagedAssetProperty>* StagedAssetProperties)
 {
 	OutErrorMessage.Empty();
 
+	// Import now refreshes AddOn-owned cached pins and verifies the planned active schema
+	// before it installs connections that name generated pins.
+	// Resolve the target package and concrete asset type before allocating any graph objects.
 	FString PackageName = FPackageName::ObjectPathToPackageName(TargetAssetPath);
 	// GetShortName only splits on '/', so it must run on the already-dot-stripped PackageName -
 	// running it directly on TargetAssetPath leaves a literal ".ObjectName" suffix on the FName
@@ -65,12 +75,28 @@ UFlowAsset* UFlowGraphImporter::ImportFlowGraphFromDocument(
 		OutErrorMessage = FString::Printf(TEXT("Failed to create FlowAsset: %s"), *AssetName);
 		return nullptr;
 	}
+	FlowAsset->SetFlags(RF_Transactional);
+	FlowAsset->Modify();
 
 	FlowAsset->AssetGuid = FGuid::NewGuid();
 	FlowAsset->bWorldBound = bWorldBound;
+	if (StagedAssetProperties)
+	{
+		TArray<FName> PropertyNames;
+		StagedAssetProperties->GenerateKeyArray(PropertyNames);
+		PropertyNames.Sort(FNameLexicalLess());
+		for (const FName PropertyName : PropertyNames)
+		{
+			const FFlowStagedAssetProperty& StagedProperty = StagedAssetProperties->FindChecked(PropertyName);
+			if (StagedProperty.bChanged && !FFlowAssetPropertyPolicy::SetStagedObjectReference(
+				FlowAsset, StagedProperty, /*bSendEditNotifications=*/true, OutErrorMessage))
+			{
+				return nullptr;
+			}
+		}
+	}
 
-	FAssetRegistryModule::AssetCreated(FlowAsset);
-
+	// Create runtime nodes and their complete AddOn trees before dispatching property callbacks.
 	TMap<FGuid, UFlowNode*> NodeMap;
 	if (!CreateFlowNodes(FlowAsset, ParsedNodes, NodeMap, OutErrorMessage))
 	{
@@ -83,8 +109,7 @@ UFlowAsset* UFlowGraphImporter::ImportFlowGraphFromDocument(
 	}
 
 #if WITH_EDITOR
-	// Auto data pins depend on a node's addons, so CreateFlowNodes' set above is stale for a node
-	// that just got one. Regenerate before SetupConnections wires against them below.
+	// Refresh node auto data pins after AddOn callbacks have rebuilt their own cached pin arrays.
 	for (const TPair<FGuid, UFlowNode*>& NodeEntry : NodeMap)
 	{
 		if (UFlowNode* Node = NodeEntry.Value)
@@ -93,7 +118,14 @@ UFlowAsset* UFlowGraphImporter::ImportFlowGraphFromDocument(
 		}
 	}
 #endif
+	// Refuse to wire if execution produced a schema different from the schema accepted by planning.
+	if (ProjectedPinSchema && !FFlowGraphValidation::DoesRuntimePinSchemaMatchProjected(
+		FlowAsset, *ProjectedPinSchema, OutErrorMessage))
+	{
+		return nullptr;
+	}
 
+	// Resolve connections only after both AddOn and parent runtime pins match the preview.
 	if (!SetupConnections(FlowAsset, NodeMap, ParsedConnections, ParsedNodes, OutErrorMessage))
 	{
 		return nullptr;
@@ -104,6 +136,7 @@ UFlowAsset* UFlowGraphImporter::ImportFlowGraphFromDocument(
 	FlowAsset->RebuildCustomInterfaceLists();
 #endif
 
+	FAssetRegistryModule::AssetCreated(FlowAsset);
 	Package->MarkPackageDirty();
 
 	return FlowAsset;
@@ -122,6 +155,12 @@ bool UFlowGraphImporter::PopulateFlowAssetFromDocument(
 	{
 		OutErrorMessage = TEXT("TargetAsset is null");
 		return false;
+	}
+	if (!TargetAsset->HasAnyFlags(RF_Transient))
+	{
+		// Capture the existing runtime asset before reflected properties or graph connections change.
+		TargetAsset->SetFlags(RF_Transactional);
+		TargetAsset->Modify();
 	}
 
 	if (UFlowGraph* FlowGraph = Cast<UFlowGraph>(TargetAsset->GetGraph()))
@@ -382,6 +421,17 @@ FFlowGraphDeclaredOutputPinTypes UFlowGraphImporter::BuildDeclaredOutputPinTypes
 
 bool UFlowGraphImporter::ResolveSourcePin(UFlowNode* SourceNode, FName SourcePinName, const FFlowGraphDeclaredOutputPinTypes& DeclaredOutputPinTypes, bool& bOutIsExecPin)
 {
+	// Context pins can be present in OutputPins with stale metadata from an earlier import.
+	// The AddOn is the authority for a pin it currently supplies.
+	for (const FFlowPin& Pin : SourceNode->GetContextOutputs())
+	{
+		if (Pin.PinName == SourcePinName)
+		{
+			bOutIsExecPin = Pin.IsExecPin();
+			return true;
+		}
+	}
+
 	for (const FFlowPin& Pin : SourceNode->GetOutputPins())
 	{
 		if (Pin.PinName == SourcePinName)
@@ -444,6 +494,14 @@ bool UFlowGraphImporter::ResolveSourcePin(UFlowNode* SourceNode, FName SourcePin
 
 bool UFlowGraphImporter::EnsureTargetDataPinExists(UFlowNode* TargetNode, FName TargetPinName)
 {
+	for (const FFlowPin& Pin : TargetNode->GetContextInputs())
+	{
+		if (Pin.PinName == TargetPinName)
+		{
+			return true;
+		}
+	}
+
 	for (const FFlowPin& Pin : TargetNode->GetInputPins())
 	{
 		if (Pin.PinName == TargetPinName)
@@ -476,6 +534,13 @@ bool UFlowGraphImporter::EnsureTargetDataPinExists(UFlowNode* TargetNode, FName 
 
 bool UFlowGraphImporter::WriteConnectionToNode(UFlowNode* NodeToModify, FName KeyName, const FConnectedPin& ConnectedPin, FMapProperty* ConnectionsProperty)
 {
+	if (IsValid(NodeToModify) && !NodeToModify->HasAnyFlags(RF_Transient))
+	{
+		// Connection maps are owned by the runtime node, so capture that node in the active undo scope.
+		NodeToModify->SetFlags(RF_Transactional);
+		NodeToModify->Modify();
+	}
+
 	void* ConnectionsPtr = ConnectionsProperty->ContainerPtrToValuePtr<void>(NodeToModify);
 	FScriptMapHelper MapHelper(ConnectionsProperty, ConnectionsPtr);
 
@@ -607,8 +672,34 @@ UClass* UFlowGraphImporter::ResolveNodeClass(const FString& NodeType)
 	return NodeClass;
 }
 
-bool UFlowGraphImporter::CreateNodeAddOns(const TMap<FGuid, UFlowNode*>& NodeMap, const TArray<FFlowGraphParsedNode>& ParsedNodes, FString& OutErrorMessage)
+bool UFlowGraphImporter::CreateNodeAddOns(
+	const TMap<FGuid, UFlowNode*>& NodeMap,
+	const TArray<FFlowGraphParsedNode>& ParsedNodes,
+	FString& OutErrorMessage)
 {
+	// Preserve the convenience entry point while collecting every callback until all node trees exist.
+	FFlowPendingAddOnPropertyChanges PendingPropertyChanges;
+	if (!CreateNodeAddOns(NodeMap, ParsedNodes, PendingPropertyChanges, OutErrorMessage))
+	{
+		return false;
+	}
+
+	TArray<UFlowNodeBase*> RootOwners;
+	for (const TPair<FGuid, UFlowNode*>& NodePair : NodeMap)
+	{
+		RootOwners.Add(NodePair.Value);
+	}
+	// Dispatch from the roots so nested children run before their owning AddOns.
+	return DispatchPendingAddOnPropertyChanges(RootOwners, PendingPropertyChanges, OutErrorMessage);
+}
+
+bool UFlowGraphImporter::CreateNodeAddOns(
+	const TMap<FGuid, UFlowNode*>& NodeMap,
+	const TArray<FFlowGraphParsedNode>& ParsedNodes,
+	FFlowPendingAddOnPropertyChanges& OutPendingPropertyChanges,
+	FString& OutErrorMessage)
+{
+	// Reconcile each node's whole parsed subtree into the shared pending set.
 	for (const FFlowGraphParsedNode& ParsedNode : ParsedNodes)
 	{
 		if (ParsedNode.AddOns.IsEmpty())
@@ -623,7 +714,7 @@ bool UFlowGraphImporter::CreateNodeAddOns(const TMap<FGuid, UFlowNode*>& NodeMap
 			return false;
 		}
 
-		if (!CreateAddOnsRecursive(OwnerNode, ParsedNode.AddOns, OutErrorMessage))
+		if (!CreateAddOnsRecursive(OwnerNode, ParsedNode.AddOns, OutPendingPropertyChanges, OutErrorMessage))
 		{
 			return false;
 		}
@@ -632,11 +723,38 @@ bool UFlowGraphImporter::CreateNodeAddOns(const TMap<FGuid, UFlowNode*>& NodeMap
 	return true;
 }
 
-bool UFlowGraphImporter::CreateAddOnsRecursive(UFlowNodeBase* Owner, const TArray<FFlowGraphParsedNodeAddOn>& ParsedAddOns, FString& OutErrorMessage)
+bool UFlowGraphImporter::CreateAddOnsRecursive(
+	UFlowNodeBase* Owner,
+	const TArray<FFlowGraphParsedNodeAddOn>& ParsedAddOns,
+	FString& OutErrorMessage)
+{
+	FFlowPendingAddOnPropertyChanges PendingPropertyChanges;
+	if (!CreateAddOnsRecursive(Owner, ParsedAddOns, PendingPropertyChanges, OutErrorMessage))
+	{
+		return false;
+	}
+
+	TArray<UFlowNodeBase*> RootOwners;
+	RootOwners.Add(Owner);
+	return DispatchPendingAddOnPropertyChanges(RootOwners, PendingPropertyChanges, OutErrorMessage);
+}
+
+bool UFlowGraphImporter::CreateAddOnsRecursive(
+	UFlowNodeBase* Owner,
+	const TArray<FFlowGraphParsedNodeAddOn>& ParsedAddOns,
+	FFlowPendingAddOnPropertyChanges& OutPendingPropertyChanges,
+	FString& OutErrorMessage)
 {
 	if (ParsedAddOns.IsEmpty())
 	{
 		return true;
+	}
+
+	// Capture the owner before touching its reflected AddOns array so transaction undo includes attachment.
+	if (!Owner->HasAnyFlags(RF_Transient))
+	{
+		Owner->SetFlags(RF_Transactional);
+		Owner->Modify();
 	}
 
 	FArrayProperty* AddOnsProperty = FindFProperty<FArrayProperty>(UFlowNodeBase::StaticClass(), TEXT("AddOns"));
@@ -697,19 +815,20 @@ bool UFlowGraphImporter::CreateAddOnsRecursive(UFlowNodeBase* Owner, const TArra
 
 		NewAddOn->SetGuid(ParsedAddOn.AddOnGuid.IsValid() ? ParsedAddOn.AddOnGuid : FGuid::NewGuid());
 
-		if (!SetAddOnProperties(NewAddOn, ParsedAddOn.Properties, OutErrorMessage))
+		// Apply authored fields now, but defer their callbacks until all siblings and children are attached.
+		if (!SetAddOnProperties(NewAddOn, ParsedAddOn.Properties, OutPendingPropertyChanges, OutErrorMessage))
 		{
 			return false;
 		}
 
-		// Append to Owner's AddOns array via reflection (AddOns is protected). Re-acquire the
-		// helper each iteration - a sibling append below could have reallocated the array.
+		// Attach before descending so callbacks can later query the complete owner and sibling set.
+		// Re-acquire the helper each iteration because an earlier append may have reallocated the array.
 		void* AddOnsPtr = AddOnsProperty->ContainerPtrToValuePtr<void>(Owner);
 		FScriptArrayHelper AddOnsHelper(AddOnsProperty, AddOnsPtr);
 		const int32 NewIndex = AddOnsHelper.AddValue();
 		ElemProp->SetObjectPropertyValue(AddOnsHelper.GetRawPtr(NewIndex), NewAddOn);
 
-		if (!CreateAddOnsRecursive(NewAddOn, ParsedAddOn.AddOns, OutErrorMessage))
+		if (!CreateAddOnsRecursive(NewAddOn, ParsedAddOn.AddOns, OutPendingPropertyChanges, OutErrorMessage))
 		{
 			return false;
 		}
@@ -761,52 +880,394 @@ void UFlowGraphImporter::SyncAddOnDataPinValueDirections(UFlowNodeAddOn* AddOn)
 }
 #endif
 
-bool UFlowGraphImporter::SetAddOnProperties(UFlowNodeAddOn* AddOn, const TMap<FString, FString>& Properties, FString& OutErrorMessage)
+#if WITH_EDITOR
+namespace FlowAddOnPropertyChangeDetail
 {
-	for (const TPair<FString, FString>& Pair : Properties)
+	// Find the struct to inspect after a property segment, including the element type of struct arrays.
+	const UStruct* FindNestedStruct(const FProperty* Property)
 	{
-		FProperty* Property = AddOn->GetClass()->FindPropertyByName(*Pair.Key);
-		if (!Property)
+		if (const FStructProperty* StructProperty = CastField<FStructProperty>(Property))
 		{
-			Property = FindFProperty<FProperty>(AddOn->GetClass(), *Pair.Key);
+			return StructProperty->Struct;
 		}
 
-		void* ValuePtr = nullptr;
-		if (Property)
+		if (const FArrayProperty* ArrayProperty = CastField<FArrayProperty>(Property))
 		{
-			ValuePtr = Property->ContainerPtrToValuePtr<void>(AddOn);
-		}
-		else if (Pair.Key.Contains(TEXT(".")))
-		{
-			FString PathError;
-			if (!ResolvePropertyPath(AddOn->GetClass(), AddOn, Pair.Key, Property, ValuePtr, PathError))
+			if (const FStructProperty* InnerStructProperty = CastField<FStructProperty>(ArrayProperty->Inner))
 			{
-				OutErrorMessage = FString::Printf(TEXT("Failed to resolve dotted property path '%s' on addon %s: %s"),
-					*Pair.Key, *AddOn->GetClass()->GetName(), *PathError);
-				UE_LOG(LogFlow, Error, TEXT("%s"), *OutErrorMessage);
-
-				return false;
+				return InnerStructProperty->Struct;
 			}
 		}
-		else
-		{
-			OutErrorMessage = FString::Printf(TEXT("SetAddOnProperties: Could not find property %s on %s"), *Pair.Key, *AddOn->GetClass()->GetName());
-			UE_LOG(LogFlow, Error, TEXT("%s"), *OutErrorMessage);
 
+		return nullptr;
+	}
+
+	bool BuildTypedPropertyPath(
+		UFlowNodeAddOn* AddOn,
+		const FString& ChangedPath,
+		TArray<FString>& OutPathSegments,
+		UE::FPropertyPathName& OutPropertyPath,
+		FString& OutErrorMessage)
+	{
+		// Resolve Courier names to typed reflected segments so CoreUObject can construct the
+		// callback event used to refresh AddOn pin caches during preview and commit.
+		ChangedPath.ParseIntoArray(OutPathSegments, TEXT("."), true);
+		if (OutPathSegments.IsEmpty())
+		{
+			OutErrorMessage = FString::Printf(TEXT("Property path '%s' is empty"), *ChangedPath);
 			return false;
 		}
 
-		FString InnerError;
-		if (!SetPropertyFromString(Property, ValuePtr, Pair.Value, InnerError, AddOn))
+		const UStruct* CurrentStruct = AddOn->GetClass();
+		FProperty* PreviousProperty = nullptr;
+		bool bPreviousPropertyNeedsArrayIndex = false;
+		for (const FString& PathSegment : OutPathSegments)
 		{
-			OutErrorMessage = FString::Printf(TEXT("Failed to set property '%s' on addon %s (GUID %s): %s"),
-				*Pair.Key, *AddOn->GetClass()->GetName(), *AddOn->GetGuid().ToString(), *InnerError);
+			if (PathSegment.IsNumeric())
+			{
+				if (!PreviousProperty || !bPreviousPropertyNeedsArrayIndex)
+				{
+					OutErrorMessage = FString::Printf(
+						TEXT("Unexpected array index '%s' in property path '%s'"), *PathSegment, *ChangedPath);
+					return false;
+				}
+
+				OutPropertyPath.SetIndex(FCString::Atoi(*PathSegment));
+				CurrentStruct = FindNestedStruct(PreviousProperty);
+				bPreviousPropertyNeedsArrayIndex = false;
+				continue;
+			}
+
+			if (!CurrentStruct || bPreviousPropertyNeedsArrayIndex)
+			{
+				OutErrorMessage = FString::Printf(
+					TEXT("Cannot resolve property '%s' in path '%s'"), *PathSegment, *ChangedPath);
+				return false;
+			}
+
+			FProperty* Property = FindFProperty<FProperty>(CurrentStruct, *PathSegment);
+			if (!Property)
+			{
+				OutErrorMessage = FString::Printf(
+					TEXT("Could not find property '%s' in path '%s'"), *PathSegment, *ChangedPath);
+				return false;
+			}
+
+			UE::FPropertyPathNameSegment PropertySegment;
+			PropertySegment.Name = Property->GetFName();
+			PropertySegment.Type = UE::FPropertyTypeName(Property);
+			OutPropertyPath.Push(PropertySegment);
+
+			PreviousProperty = Property;
+			CurrentStruct = FindNestedStruct(Property);
+			bPreviousPropertyNeedsArrayIndex =
+				CastField<FArrayProperty>(Property) != nullptr || Property->ArrayDim > 1;
+		}
+
+		return true;
+	}
+
+	bool ActivatePropertyChangeChain(
+		UFlowNodeAddOn* AddOn,
+		const FString& ChangedPath,
+		const TArray<FString>& PathSegments,
+		FProperty* ActiveProperty,
+		FEditPropertyChain& PropertyChain,
+		TSharedPtr<FPropertyChangedChainEvent>& OutChangeEvent,
+		FString& OutErrorMessage)
+	{
+		// Mark the leaf and root member active so callbacks see the same edit context as Details edits.
+		FProperty* ActiveMemberProperty = FindFProperty<FProperty>(AddOn->GetClass(), *PathSegments[0]);
+		if (!ActiveMemberProperty || !PropertyChain.SetActivePropertyNode(ActiveProperty) ||
+			!PropertyChain.SetActiveMemberPropertyNode(ActiveMemberProperty))
+		{
+			OutErrorMessage = FString::Printf(
+				TEXT("Could not activate the property-change chain for '%s' on AddOn %s"),
+				*ChangedPath, *AddOn->GetClass()->GetName());
+			return false;
+		}
+
+		OutChangeEvent->SetActiveMemberProperty(ActiveMemberProperty);
+		return true;
+	}
+
+	bool BuildPropertyChangeEvent(
+		UFlowNodeAddOn* AddOn,
+		const FString& ChangedPath,
+		FEditPropertyChain& OutPropertyChain,
+		TSharedPtr<FPropertyChangedChainEvent>& OutChangeEvent,
+		FString& OutErrorMessage)
+	{
+		TArray<FString> PathSegments;
+		UE::FPropertyPathName PropertyPath;
+		if (!BuildTypedPropertyPath(AddOn, ChangedPath, PathSegments, PropertyPath, OutErrorMessage))
+		{
+			return false;
+		}
+
+		const UE::FPropertyValueInContainer ResolvedValue = UE::TryResolvePropertyPathForChangeEvent(
+			PropertyPath, AddOn, EPropertyChangeType::ValueSet, OutChangeEvent, OutPropertyChain);
+		if (!ResolvedValue || !OutChangeEvent.IsValid())
+		{
+			OutErrorMessage = FString::Printf(
+				TEXT("Could not construct a property-change event for '%s' on AddOn %s"),
+				*ChangedPath, *AddOn->GetClass()->GetName());
+			return false;
+		}
+
+		return ActivatePropertyChangeChain(
+			AddOn, ChangedPath, PathSegments, const_cast<FProperty*>(ResolvedValue.Property),
+			OutPropertyChain, OutChangeEvent, OutErrorMessage);
+	}
+
+	bool DispatchChangedPropertyPaths(
+		UFlowNodeAddOn* AddOn,
+		const TArray<FString>& ChangedPaths,
+		FString& OutErrorMessage)
+	{
+		// Stable order and exact de-duplication preserve distinct leaf callbacks under one root member.
+		TArray<FString> SortedUniquePaths = ChangedPaths;
+		SortedUniquePaths.Sort();
+		for (int32 PathIndex = SortedUniquePaths.Num() - 1; PathIndex > 0; --PathIndex)
+		{
+			if (SortedUniquePaths[PathIndex] == SortedUniquePaths[PathIndex - 1])
+			{
+				SortedUniquePaths.RemoveAt(PathIndex);
+			}
+		}
+
+		for (const FString& ChangedPath : SortedUniquePaths)
+		{
+			// Unreal's chain event borrows this chain, so keep it alive through callback dispatch.
+			FEditPropertyChain PropertyChain;
+			TSharedPtr<FPropertyChangedChainEvent> ChangeEvent;
+			if (!BuildPropertyChangeEvent(AddOn, ChangedPath, PropertyChain, ChangeEvent, OutErrorMessage))
+			{
+				return false;
+			}
+			if (ChangeEvent.IsValid())
+			{
+				AddOn->PostEditChangeChainProperty(*ChangeEvent);
+			}
+		}
+
+		return true;
+	}
+
+	bool DispatchAddOnTree(
+		UFlowNodeBase* Owner,
+		UFlowNode* OwningFlowNode,
+		const FFlowPendingAddOnPropertyChanges& PendingPropertyChanges,
+		TSet<UFlowNodeAddOn*>& VisitedAddOns,
+		FString& OutErrorMessage)
+	{
+		if (!IsValid(Owner))
+		{
+			return true;
+		}
+
+		// Refresh children before their parent so parent context queries observe final child pin caches.
+		for (UFlowNodeAddOn* AddOn : Owner->GetFlowNodeAddOnChildren())
+		{
+			if (!IsValid(AddOn) || VisitedAddOns.Contains(AddOn))
+			{
+				continue;
+			}
+
+			VisitedAddOns.Add(AddOn);
+			AddOn->SetFlowNodeForEditor(OwningFlowNode);
+			if (!DispatchAddOnTree(AddOn, OwningFlowNode, PendingPropertyChanges, VisitedAddOns, OutErrorMessage))
+			{
+				return false;
+			}
+
+			if (const TArray<FString>* ChangedPaths = PendingPropertyChanges.Find(AddOn))
+			{
+				if (!DispatchChangedPropertyPaths(AddOn, *ChangedPaths, OutErrorMessage))
+				{
+					return false;
+				}
+			}
+		}
+
+		return true;
+	}
+}
+#endif // WITH_EDITOR
+
+bool UFlowGraphImporter::DispatchPendingAddOnPropertyChanges(
+	const TArray<UFlowNodeBase*>& RootOwners,
+	const FFlowPendingAddOnPropertyChanges& PendingPropertyChanges,
+	FString& OutErrorMessage)
+{
+#if WITH_EDITOR
+	OutErrorMessage.Reset();
+
+	// Keep one scope per changed AddOn alive while callbacks dispatch across the completed trees.
+	// This suppresses intermediate editor rebuilds and restores bindings before the caller performs
+	// the final parent reconstruction.
+	TArray<TUniquePtr<FScopedFlowNodeReconstructionRequestDeferral>> ReconstructionDeferrals;
+	ReconstructionDeferrals.Reserve(PendingPropertyChanges.Num());
+	for (const TPair<UFlowNodeAddOn*, TArray<FString>>& Pair : PendingPropertyChanges)
+	{
+		if (IsValid(Pair.Key))
+		{
+			ReconstructionDeferrals.Add(MakeUnique<FScopedFlowNodeReconstructionRequestDeferral>(*Pair.Key));
+		}
+	}
+
+	// Traverse each root depth-first so child pin caches are current before parent callbacks run.
+	TSet<UFlowNodeAddOn*> VisitedAddOns;
+	for (UFlowNodeBase* RootOwner : RootOwners)
+	{
+		if (UFlowNode* FlowNode = Cast<UFlowNode>(RootOwner))
+		{
+			if (!FlowAddOnPropertyChangeDetail::DispatchAddOnTree(
+				RootOwner, FlowNode, PendingPropertyChanges, VisitedAddOns, OutErrorMessage))
+			{
+				return false;
+			}
+		}
+		else if (UFlowNodeAddOn* RootAddOn = Cast<UFlowNodeAddOn>(RootOwner))
+		{
+			if (!FlowAddOnPropertyChangeDetail::DispatchAddOnTree(
+				RootAddOn, RootAddOn->FindOwningFlowNode(), PendingPropertyChanges, VisitedAddOns, OutErrorMessage))
+			{
+				return false;
+			}
+		}
+	}
+	return true;
+#else
+	(void)RootOwners;
+	(void)PendingPropertyChanges;
+	(void)OutErrorMessage;
+	return true;
+#endif // WITH_EDITOR
+}
+
+bool UFlowGraphImporter::SetAddOnProperty(
+	UFlowNodeAddOn* AddOn,
+	const TPair<FString, FString>& PropertyChange,
+	FFlowPendingAddOnPropertyChanges& OutPendingPropertyChanges,
+	FString& OutErrorMessage)
+{
+	// Resolve the root member for editor change tracking and the leaf value for the actual write.
+	FString RootPropertyName = PropertyChange.Key;
+	int32 PathSeparatorIndex = INDEX_NONE;
+	if (PropertyChange.Key.FindChar(TEXT('.'), PathSeparatorIndex))
+	{
+		RootPropertyName = PropertyChange.Key.Left(PathSeparatorIndex);
+	}
+	FProperty* MemberProperty = FindFProperty<FProperty>(AddOn->GetClass(), *RootPropertyName);
+	if (!MemberProperty)
+	{
+		OutErrorMessage = FString::Printf(TEXT("SetAddOnProperties: Could not find member property %s on %s"),
+			*RootPropertyName, *AddOn->GetClass()->GetName());
+		UE_LOG(LogFlow, Error, TEXT("%s"), *OutErrorMessage);
+		return false;
+	}
+
+	FProperty* Property = AddOn->GetClass()->FindPropertyByName(*PropertyChange.Key);
+	if (!Property)
+	{
+		Property = FindFProperty<FProperty>(AddOn->GetClass(), *PropertyChange.Key);
+	}
+
+	void* ValuePtr = nullptr;
+	if (Property)
+	{
+		ValuePtr = Property->ContainerPtrToValuePtr<void>(AddOn);
+	}
+	else if (PropertyChange.Key.Contains(TEXT(".")))
+	{
+		FString PathError;
+		if (!UFlowGraphImporter::ResolvePropertyPath(
+			AddOn->GetClass(), AddOn, PropertyChange.Key, Property, ValuePtr, PathError))
+		{
+			OutErrorMessage = FString::Printf(TEXT("Failed to resolve dotted property path '%s' on addon %s: %s"),
+				*PropertyChange.Key, *AddOn->GetClass()->GetName(), *PathError);
 			UE_LOG(LogFlow, Error, TEXT("%s"), *OutErrorMessage);
+			return false;
+		}
+	}
+	else
+	{
+		OutErrorMessage = FString::Printf(TEXT("SetAddOnProperties: Could not find property %s on %s"),
+			*PropertyChange.Key, *AddOn->GetClass()->GetName());
+		UE_LOG(LogFlow, Error, TEXT("%s"), *OutErrorMessage);
+		return false;
+	}
+
+	// Record the prior value so unchanged authored fields do not trigger callbacks.
+	FString PreviousValue;
+	Property->ExportText_Direct(PreviousValue, ValuePtr, ValuePtr, AddOn, PPF_None);
+	if (!AddOn->HasAnyFlags(RF_Transient))
+	{
+		AddOn->SetFlags(RF_Transactional);
+		AddOn->Modify();
+	}
+#if WITH_EDITOR
+	AddOn->PreEditChange(MemberProperty);
+#endif // WITH_EDITOR
+
+	// Write immediately but defer its callback until the complete AddOn tree has been reconciled.
+	FString InnerError;
+	if (!UFlowGraphImporter::SetPropertyFromString(
+		Property, ValuePtr, PropertyChange.Value, InnerError, AddOn))
+	{
+		OutErrorMessage = FString::Printf(TEXT("Failed to set property '%s' on addon %s (GUID %s): %s"),
+			*PropertyChange.Key, *AddOn->GetClass()->GetName(), *AddOn->GetGuid().ToString(), *InnerError);
+		UE_LOG(LogFlow, Error, TEXT("%s"), *OutErrorMessage);
+		return false;
+	}
+
+	FString UpdatedValue;
+	Property->ExportText_Direct(UpdatedValue, ValuePtr, ValuePtr, AddOn, PPF_None);
+	if (UpdatedValue != PreviousValue)
+	{
+		OutPendingPropertyChanges.FindOrAdd(AddOn).Add(PropertyChange.Key);
+	}
+
+	return true;
+}
+
+namespace
+{
+	// Stabilize reflected writes so repeated imports dispatch property callbacks in a predictable order.
+	bool IsAddOnPropertyChangeBefore(
+		const TPair<FString, FString>& Left,
+		const TPair<FString, FString>& Right)
+	{
+		return Left.Key < Right.Key;
+	}
+}
+
+bool UFlowGraphImporter::SetAddOnProperties(
+	UFlowNodeAddOn* AddOn,
+	const TMap<FString, FString>& Properties,
+	FFlowPendingAddOnPropertyChanges& OutPendingPropertyChanges,
+	FString& OutErrorMessage)
+{
+	// TMap iteration is unstable, so apply and queue changes in lexical path order.
+	TArray<TPair<FString, FString>> SortedProperties;
+	SortedProperties.Reserve(Properties.Num());
+	for (const TPair<FString, FString>& Pair : Properties)
+	{
+		SortedProperties.Add(Pair);
+	}
+	SortedProperties.Sort(&IsAddOnPropertyChangeBefore);
+
+	for (const TPair<FString, FString>& PropertyChange : SortedProperties)
+	{
+		if (!SetAddOnProperty(AddOn, PropertyChange, OutPendingPropertyChanges, OutErrorMessage))
+		{
 			return false;
 		}
 	}
 
 #if WITH_EDITORONLY_DATA
+	// Keep data-pin directions consistent with the AddOn class defaults after reflected writes.
 	SyncAddOnDataPinValueDirections(AddOn);
 #endif
 

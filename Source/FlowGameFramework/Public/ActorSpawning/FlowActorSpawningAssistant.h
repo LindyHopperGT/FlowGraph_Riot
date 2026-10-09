@@ -47,6 +47,8 @@ struct FFlowActorSpawningPassConfig
 	EFlowActorSpawnQueueMode QueueMode;
 	EFlowActorSpawningMethod Method;
 	bool bIsInitialSpawnForSpawnGroup = false;
+	/** Stop on invalid classes, record preparation, or queue rejection; the caller must clean up partial work. */
+	bool bAbortOnFailure = false;
 };
 
 /** Stack-local pass state. The caller supplies Config; collections start empty and NumPrepared starts at zero. */
@@ -59,7 +61,7 @@ struct FFlowActorSpawningPassContext
 	int32 NumPrepared = 0;
 };
 
-/** NumPrepared counts configured records; NumQueued is INDEX_NONE if the pass could not start. */
+/** NumPrepared counts configured records; NumQueued is INDEX_NONE if the pass could not start or was aborted. */
 struct FFlowActorSpawningPassResult
 {
 	int32 NumQueued = INDEX_NONE;
@@ -99,7 +101,8 @@ public:
 	virtual void OnCleanupSpawnedInstance(UFlowActorSpawnRecord&) {}
 
 	/** Start and finish a selector pass, prepare each record, and submit it to the queue.
-	 * Returns INDEX_NONE in NumQueued if the pass cannot start. */
+	 * Returns INDEX_NONE in NumQueued if the pass cannot start or bAbortOnFailure aborts it.
+	 * On abort, the caller must cancel and clean up all registered records, including any already queued. */
 	FFlowActorSpawningPassResult TryExecuteSpawningPass(const FFlowActorSpawningPassConfig& Config);
 
 	/** Find the record to reuse or append for a spawn candidate; INDEX_NONE skips a queued or non-refillable record. */

@@ -3,12 +3,28 @@
 #pragma once
 
 #include "UObject/Object.h"
+#include "Nodes/FlowPin.h"
+#include "FlowAssetPropertyPolicy.h"
 #include "FlowGraphValidation.generated.h"
 
 class UFlowAsset;
+class UClass;
 struct FFlowGraphParsedNode;
 struct FFlowGraphParsedNodeAddOn;
 struct FFlowGraphParsedConnection;
+
+// One node's active schema after the planned AddOn tree has been applied. Orphan editor
+// pins are intentionally absent because Courier must not treat them as valid connection endpoints.
+struct FFlowProjectedPinSet
+{
+	// Active runtime input pins, including the final AddOn context inputs.
+	TArray<FFlowPin> InputPins;
+	// Active runtime output pins, including the final AddOn context outputs.
+	TArray<FFlowPin> OutputPins;
+};
+
+// Maps each surviving node identity to the schema used for both dry-run and commit validation.
+using FFlowProjectedPinSchema = TMap<FGuid, FFlowProjectedPinSet>;
 
 UENUM(BlueprintType)
 enum class EFlowValidationSeverity : uint8
@@ -32,17 +48,22 @@ struct FLOWGRAPHCOURIER_API FFlowValidationFinding
 {
 	GENERATED_BODY()
 
+	// Severity controls whether a finding blocks commit or is advisory only.
 	UPROPERTY()
 	EFlowValidationSeverity Severity = EFlowValidationSeverity::Error;
 
 	// Stable machine-readable identifier, e.g. "ExecFanOut", "DanglingEndpoint". Shares one code set
 	// with FFlowCourierIssue::Code so a caller can branch on the code regardless of which system
-	// produced the finding. Deliberately no Path field: this struct addresses graph space (the GUIDs
-	// below), not document space, and a semantic finding often concerns a pre-existing graph element
-	// the document never mentions - there would be no honest JSON pointer to put here.
+	// produced the finding.
 	UPROPERTY()
 	FString Code;
 
+	// Optional source document path for findings about a supplied document field. Graph findings
+	// about pre-existing elements leave this empty and identify those elements by GUID.
+	UPROPERTY()
+	FString SourceDocumentPath;
+
+	// Human-readable explanation of the validation result.
 	UPROPERTY()
 	FString Message;
 
@@ -68,6 +89,25 @@ DECLARE_DELEGATE_FourParams(FFlowValidationHookDelegate,
 	const TArray<FFlowGraphParsedConnection>& /*ParsedConnections*/,
 	TArray<FFlowValidationFinding>& /*OutFindings*/);
 
+struct FLOWGRAPHCOURIER_API FFlowValidationContext
+{
+	const UFlowAsset* TargetAsset = nullptr;
+	const UFlowAsset* EffectiveAsset = nullptr;
+	const UClass* ResolvedAssetClass = nullptr;
+	const TMap<FName, FFlowStagedAssetProperty>* StagedAssetProperties = nullptr;
+
+	const FFlowStagedAssetProperty* FindStagedAssetProperty(FName PropertyName) const
+	{
+		return StagedAssetProperties ? StagedAssetProperties->Find(PropertyName) : nullptr;
+	}
+};
+
+DECLARE_DELEGATE_FourParams(FFlowContextValidationHookDelegate,
+	const FFlowValidationContext& /*Context*/,
+	const TArray<FFlowGraphParsedNode>& /*ParsedNodes*/,
+	const TArray<FFlowGraphParsedConnection>& /*ParsedConnections*/,
+	TArray<FFlowValidationFinding>& /*OutFindings*/);
+
 /**
  * Deterministic, pluggable pre-commit validator for a Flow Courier mutation document. Runs on the
  * parsed document and target asset and produces structured findings. Errors block a non-dry-run
@@ -89,8 +129,10 @@ DECLARE_DELEGATE_FourParams(FFlowValidationHookDelegate,
  *  - GUID integrity: no duplicate node GUIDs; addon GUIDs unique within their owner; when
  *    PostPlanNodeGuids is supplied, every connection resolves to a node that still exists.
  *
- * Hook registry: RegisterHook(AssetClass, Hook) attaches an extra read-only check that runs when
- * TargetAsset's class IsChildOf AssetClass. The agnostic core ships with an empty registry.
+ * Hook registries attach read-only checks when the resolved asset class IsChildOf their registered
+ * class. Legacy hooks receive the target asset and parsed document; context hooks also receive the
+ * effective preview asset and typed staged asset-property values. Both hook forms run when present.
+ * The agnostic core ships with empty registries.
  *
  * Plain static-method class, not a UObject: it has no UFUNCTIONs and is never instantiated.
  */
@@ -113,10 +155,19 @@ public:
 		const TArray<FFlowGraphParsedNode>& ParsedNodes,
 		const TArray<FFlowGraphParsedConnection>& ParsedConnections,
 		TArray<FFlowValidationFinding>& OutFindings,
-		const TSet<FGuid>* PostPlanNodeGuids = nullptr);
+		const TSet<FGuid>* PostPlanNodeGuids = nullptr,
+		const FFlowProjectedPinSchema* ProjectedPinSchema = nullptr,
+		const FFlowValidationContext* ValidationContext = nullptr);
 
 	// True if OutFindings contains no Error-severity entries.
 	static bool HasNoErrors(const TArray<FFlowValidationFinding>& Findings);
+
+	// Confirms that execution produced the same active runtime pins used by pre-commit validation.
+	// Retained editor orphan pins are not part of this runtime schema.
+	static bool DoesRuntimePinSchemaMatchProjected(
+		const UFlowAsset* FlowAsset,
+		const FFlowProjectedPinSchema& ProjectedPinSchema,
+		FString& OutErrorMessage);
 
 	// Registers Hook to run (in addition to the core checks) whenever ValidateDocument's TargetAsset
 	// class IsChildOf AssetClass. Call from your module's StartupModule - there is no automatic
@@ -126,6 +177,10 @@ public:
 	// Removes every hook previously registered for exactly AssetClass (not its subclasses/parents -
 	// this must match the same UClass pointer RegisterHook was called with).
 	static void UnregisterHooksForClass(TSubclassOf<UFlowAsset> AssetClass);
+
+	static void RegisterContextHook(TSubclassOf<UFlowAsset> AssetClass, FFlowContextValidationHookDelegate Hook);
+	// Removes every context hook registered for exactly AssetClass.
+	static void UnregisterContextHooksForClass(TSubclassOf<UFlowAsset> AssetClass);
 
 private:
 	// Recursively validates an addon subtree (class resolution, palette, attachment eligibility,
@@ -154,7 +209,8 @@ private:
 		const TArray<FFlowGraphParsedNode>& ParsedNodes,
 		const FGuid& NodeGuid,
 		FName PinName,
-		bool bIsOutputPin);
+		bool bIsOutputPin,
+		const FFlowProjectedPinSchema* ProjectedPinSchema);
 
 	// Resolves the declared pin type name (e.g. "Exec", "Text", "Vector") for PinName on NodeGuid,
 	// using the same resolution order as DoesNodeHavePin (document declared pins -> class CDO pins ->
@@ -165,7 +221,8 @@ private:
 		const TArray<FFlowGraphParsedNode>& ParsedNodes,
 		const FGuid& NodeGuid,
 		FName PinName,
-		bool bIsOutputPin);
+		bool bIsOutputPin,
+		const FFlowProjectedPinSchema* ProjectedPinSchema);
 
 	// Helper functions for ValidateDocument.
 
@@ -179,7 +236,8 @@ private:
 		const TArray<FFlowGraphParsedNode>& ParsedNodes,
 		const TArray<FFlowGraphParsedConnection>& ParsedConnections,
 		TArray<FFlowValidationFinding>& OutFindings,
-		const TSet<FGuid>* PostPlanNodeGuids);
+		const TSet<FGuid>* PostPlanNodeGuids,
+		const FFlowProjectedPinSchema* ProjectedPinSchema);
 
 	// Exec-only: an exec output pin may drive at most one target, but a data output pin may legally
 	// fan out to several inputs and must not be flagged. Needs TargetAsset/ParsedNodes purely to
@@ -190,23 +248,32 @@ private:
 		const TArray<FFlowGraphParsedNode>& ParsedNodes,
 		const FFlowGraphParsedConnection& Connection,
 		TMap<TPair<FGuid, FName>, FString>& OutSeenSourcePins,
-		TArray<FFlowValidationFinding>& OutFindings);
+		TArray<FFlowValidationFinding>& OutFindings,
+		const FFlowProjectedPinSchema* ProjectedPinSchema);
 
 	static void ValidateConnectionEndpoints(
 		const UFlowAsset* TargetAsset,
 		const TArray<FFlowGraphParsedNode>& ParsedNodes,
 		const FFlowGraphParsedConnection& Connection,
 		const TSet<FGuid>& PostPlanNodeGuids,
-		TArray<FFlowValidationFinding>& OutFindings);
+		TArray<FFlowValidationFinding>& OutFindings,
+		const FFlowProjectedPinSchema* ProjectedPinSchema);
 
 	static void ValidateConnectionPinTypes(
 		const UFlowAsset* TargetAsset,
 		const TArray<FFlowGraphParsedNode>& ParsedNodes,
 		const FFlowGraphParsedConnection& Connection,
-		TArray<FFlowValidationFinding>& OutFindings);
+		TArray<FFlowValidationFinding>& OutFindings,
+		const FFlowProjectedPinSchema* ProjectedPinSchema);
 
 	static void RunValidationHooks(
 		const UFlowAsset* TargetAsset,
+		const TArray<FFlowGraphParsedNode>& ParsedNodes,
+		const TArray<FFlowGraphParsedConnection>& ParsedConnections,
+		TArray<FFlowValidationFinding>& OutFindings);
+
+	static void RunContextValidationHooks(
+		const FFlowValidationContext& Context,
 		const TArray<FFlowGraphParsedNode>& ParsedNodes,
 		const TArray<FFlowGraphParsedConnection>& ParsedConnections,
 		TArray<FFlowValidationFinding>& OutFindings);

@@ -24,6 +24,7 @@
 // Tests for the agnostic-core pre-commit validator: class resolution, duplicate-GUID integrity,
 // connection fan-out, palette allowedness, and attachment eligibility. Tests run end-to-end through
 // ComputeReconcilePlan + ExecuteReconcilePlan, since validation runs on the existing-asset path.
+// Generated AddOn endpoints must validate against the projected final schema before any live mutation.
 
 BEGIN_DEFINE_SPEC(FFlowGraphValidationSpec, "FlowGraphCourier.EditorGame.Validation", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 	UFlowAsset* TestFlowAsset = nullptr;

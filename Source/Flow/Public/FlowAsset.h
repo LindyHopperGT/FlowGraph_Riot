@@ -437,6 +437,7 @@ protected:
 	void InitializeOutputDataReceiverAndValues(IFlowGraphOutputDataReceiverInterface* InOutputDataReceiver);
 
 public:
+	UE_DEPRECATED(5.6, "Method replaced with FinishFlowInstance and (if bRemoveInstance == true) separate call to DeinitializeInstance.")
 	virtual void FinishFlow(const EFlowFinishPolicy InFinishPolicy, const bool bRemoveInstance = true);
 
 protected:
@@ -444,9 +445,6 @@ protected:
 	void ResetNodes();
 
 public:
-	UE_DEPRECATED(5.6, "Method replaced with FinishFlowInstance and (if bRemoveInstance == true) separate call to DeinitializeInstance.")
-	void FinishFlow(const EFlowFinishPolicy InFinishPolicy, const bool bRemoveInstance = true);
-
 	virtual void FinishFlowInstance(const EFlowFinishPolicy InFinishPolicy);
 	virtual void DeinitializeInstance();
 

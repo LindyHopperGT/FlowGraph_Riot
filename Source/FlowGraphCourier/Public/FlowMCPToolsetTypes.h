@@ -1136,6 +1136,21 @@ struct FLOWGRAPHCOURIER_API FFlowMCPReconcileAddonEntry
 	TMap<FString, FString> Properties;
 };
 
+USTRUCT(BlueprintType)
+struct FLOWGRAPHCOURIER_API FFlowMCPReconcileAssetPropertyEntry
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly, Category = "Flow Courier")
+	FString Name;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Flow Courier")
+	FString PreviousValue;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Flow Courier")
+	FString ProposedValue;
+};
+
 // Every array here is a verified claim about post-apply state, checked against the asset after
 // applying, never populated from the request. An item requested but not achieved appears as a
 // Findings entry instead.
@@ -1169,6 +1184,9 @@ struct FLOWGRAPHCOURIER_API FFlowMCPReconcilePlan
 	TArray<FFlowMCPReconcileAddonEntry> AddonsDeleted;
 
 	UPROPERTY(BlueprintReadOnly, Category = "Flow Courier")
+	TArray<FFlowMCPReconcileAssetPropertyEntry> AssetPropertiesChanged;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Flow Courier")
 	bool bIsEmpty = true;
 };
 
@@ -1187,6 +1205,9 @@ struct FLOWGRAPHCOURIER_API FFlowMCPValidationFinding
 	 */
 	UPROPERTY(BlueprintReadOnly, Category = "Flow Courier")
 	FString Code;
+
+	UPROPERTY(BlueprintReadOnly, Category = "Flow Courier")
+	FString SourceDocumentPath;
 
 	UPROPERTY(BlueprintReadOnly, Category = "Flow Courier")
 	FString Message;

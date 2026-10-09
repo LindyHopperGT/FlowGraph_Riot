@@ -35,6 +35,13 @@ it must match.
 
 `bWorldBound` and `expectedOwnerClass` are asset header values that round-trip.
 
+`assetProperties` is an optional map of explicitly registered asset-level property changes. It merges
+in both `Patch` and `Full` mode: omitting the map or one of its keys preserves the existing setting.
+Initially, only Encounter Flow assets accept `BlackboardAsset`. Its value is a full Blackboard object
+path or the string `"None"` to clear it. Unsupported properties, conflicting header representations,
+unresolvable paths, and references of the wrong class fail preflight before graph or asset changes.
+Full exports include the registered Blackboard setting so the value round-trips.
+
 `scopeNodeGuids` belongs to `Patch` mode only. It names the nodes this document is authoritative
 over: a listed node with no `UpsertNode` op is deleted, exactly as if it had been delete-marked.
 Omitting it, or leaving it empty, means nothing is implicitly deleted. Supplying it in `Full` mode is
@@ -166,6 +173,14 @@ Change one property:
 { "formatVersion": 2, "mode": "Patch",
   "ops": [ { "kind": "UpsertNode", "guid": "77EF54AD451D28507162C089F5EDAE8D",
              "properties": { "CooldownSeconds": "4.0" } } ] }
+```
+
+Set an Encounter Flow asset's Blackboard without changing its graph:
+
+```json
+{ "formatVersion": 2, "mode": "Patch",
+  "assetProperties": { "BlackboardAsset": "/Game/Encounters/BB_Example.BB_Example" },
+  "ops": [] }
 ```
 
 Insert a node between two others:

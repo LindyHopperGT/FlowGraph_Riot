@@ -103,7 +103,7 @@ public:
 	// --
 
 	// variants of K2Node methods
-	void RewireOldPinsToNewPins(TArray<UEdGraphPin*>& InOldPins);
+	void RewireOldPinsToNewPins(TArray<UEdGraphPin*>& InOldPins, const TMap<FName, FName>& PinNameRemap);
 	static void ReconstructSinglePin(UEdGraphPin* NewPin, UEdGraphPin* OldPin);
 	// --
 
@@ -172,7 +172,7 @@ public:
 protected:
 	bool CanReconstructNode() const;
 
-	bool TryUpdateNodePins() const;
+	bool TryUpdateNodePins(TMap<FName, FName>& OutAutoDataPinNameRemap) const;
 	bool CheckGraphPinsMatchNodePins() const;
 
 //////////////////////////////////////////////////////////////////////////

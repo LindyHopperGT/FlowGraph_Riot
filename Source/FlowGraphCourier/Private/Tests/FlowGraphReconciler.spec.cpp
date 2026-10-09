@@ -24,6 +24,7 @@
 #include "Components/BillboardComponent.h"
 #include "Components/ArrowComponent.h"
 
+// Reconcile coverage exercises AddOn property callbacks before parent pins are regraphed and wired.
 BEGIN_DEFINE_SPEC(FFlowGraphReconcilerSpec, "FlowGraphCourier.EditorGame.Reconciler", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 	UFlowAsset* TestFlowAsset = nullptr;
 	FString TestImportText;

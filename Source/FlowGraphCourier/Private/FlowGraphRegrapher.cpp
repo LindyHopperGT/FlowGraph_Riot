@@ -482,7 +482,20 @@ namespace FlowGraphRegrapherDetail
 		return true;
 	}
 
-	bool ReconcileEditorAddOnTrees(UFlowAsset& FlowAsset, UFlowGraph& FlowGraph)
+	void FinalizeParentNodePins(const TSet<UFlowGraphNode*>& ParentNodes)
+	{
+		for (UFlowGraphNode* const ParentGraphNode : ParentNodes)
+		{
+			if (IsValid(ParentGraphNode))
+			{
+				ParentGraphNode->MarkNeedsFullReconstruction();
+				ParentGraphNode->ReconstructNode();
+			}
+		}
+	}
+
+	bool ReconcileEditorAddOnTrees(UFlowAsset& FlowAsset, UFlowGraph& FlowGraph,
+		TSet<UFlowGraphNode*>& OutParentNodesToReconstruct)
 	{
 		TArray<UFlowGraphNode*> ExistingWrappers;
 		TSet<UFlowGraphNode*> VisitedWrappers;
@@ -490,6 +503,12 @@ namespace FlowGraphRegrapherDetail
 		{
 			if (UFlowGraphNode* const FlowGraphNode = Cast<UFlowGraphNode>(EditorNode))
 			{
+				// Remember old parents so removing their last AddOn still refreshes their pins.
+				if (!FlowGraphNode->GetParentNode() && !FlowGraphNode->SubNodes.IsEmpty())
+				{
+					OutParentNodesToReconstruct.Add(FlowGraphNode);
+				}
+
 				CollectEditorAddOnWrappers(*FlowGraphNode, ExistingWrappers, VisitedWrappers);
 			}
 		}
@@ -515,8 +534,16 @@ namespace FlowGraphRegrapherDetail
 			{
 				UE_LOG(LogFlow, Error, TEXT("UFlowGraphRegrapher::RegraphFlowAsset: Runtime node '%s' has no editor node while reconciling AddOns in asset '%s'"),
 					*NodePair.Value->GetPathName(), *FlowAsset.GetPathName());
+
 				return false;
 			}
+
+			if (!NodePair.Value->GetFlowNodeAddOnChildren().IsEmpty())
+			{
+				// Include parents whose AddOns are being created or changed in this regraph.
+				OutParentNodesToReconstruct.Add(ParentGraphNode);
+			}
+
 			if (!ReconcileRuntimeAddOnChildren(FlowGraph, *ParentGraphNode, *NodePair.Value,
 				ExistingWrapperByAddOn, RetainedWrappers, ActiveAddOns))
 			{
@@ -532,6 +559,7 @@ namespace FlowGraphRegrapherDetail
 				DiscardEditorAddOnWrapper(ExistingWrapper, DiscardedWrappers);
 			}
 		}
+
 		return true;
 	}
 
@@ -687,7 +715,8 @@ bool UFlowGraphRegrapher::RegraphFlowAsset(UFlowAsset* FlowAsset, const TMap<FGu
 	{
 		return FlowGraphRegrapherDetail::AbortLockedRegraph(*FlowGraph);
 	}
-	if (!FlowGraphRegrapherDetail::ReconcileEditorAddOnTrees(*FlowAsset, *FlowGraph))
+	TSet<UFlowGraphNode*> ParentNodesToReconstruct;
+	if (!FlowGraphRegrapherDetail::ReconcileEditorAddOnTrees(*FlowAsset, *FlowGraph, ParentNodesToReconstruct))
 	{
 		return FlowGraphRegrapherDetail::AbortLockedRegraph(*FlowGraph);
 	}
@@ -701,6 +730,10 @@ bool UFlowGraphRegrapher::RegraphFlowAsset(UFlowAsset* FlowAsset, const TMap<FGu
 	}
 
 	FlowGraph->UnlockUpdatesWithoutReconcile();
+	// ReconcileEditorAddOnTrees changes the context pins supplied by AddOns, but the owning nodes'
+	// pin arrays can still reflect their previous AddOns. Reconstruct after unlocking so runtime and
+	// editor pins agree before NotifyGraphChanged harvests their connections.
+	FlowGraphRegrapherDetail::FinalizeParentNodePins(ParentNodesToReconstruct);
 	FlowGraph->NotifyGraphChanged();
 	return true;
 }

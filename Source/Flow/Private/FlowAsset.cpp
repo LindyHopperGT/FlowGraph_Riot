@@ -251,6 +251,21 @@ bool UFlowAsset::IsNodeOrAddOnClassAllowed(const UClass* FlowNodeOrAddOnClass, F
 		return false;
 	}
 
+	// Reject classes whose nodes would be omitted when saving, leaving broken references in the graph.
+	// Nodes hidden from the palette with bNodeDeprecated can still be saved and used by existing graphs.
+	if (FlowNodeOrAddOnClass->HasAnyClassFlags(CLASS_Abstract | CLASS_Deprecated | CLASS_NewerVersionExists))
+	{
+		if (OutOptionalFailureReason)
+		{
+			*OutOptionalFailureReason = FText::Format(
+				NSLOCTEXT("FlowAsset", "UnsaveableNodeClass",
+					"Class '{0}' cannot be saved because it is abstract, deprecated, or superseded. "
+					"Replace this node or add-on before cooking; its saved reference would be null."),
+				FText::FromString(FlowNodeOrAddOnClass->GetPathName()));
+		}
+		return false;
+	}
+
 	if (!CanFlowNodeClassBeUsedByFlowAsset(*FlowNodeOrAddOnClass))
 	{
 		return false;
@@ -1128,7 +1143,7 @@ AActor* UFlowAsset::TryFindActorOwner() const
 
 void UFlowAsset::FinishFlowAndDeinitializeInstance(const EFlowFinishPolicy InFinishPolicy)
 {
-	FinishFlow(InFinishPolicy, false);
+	FinishFlowInstance(InFinishPolicy);
 	DeinitializeInstance();
 }
 

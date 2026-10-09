@@ -28,6 +28,10 @@ void UFlowNodeAddOn::PostDuplicate(bool bDuplicateForPIE)
 
 	if (!bDuplicateForPIE)
 	{
+		// The constructor can record a CDO identity before serialized properties are copied.
+		// At this hook, NodeGuid is the source identity that the copied graph pins actually use.
+		ClearPreviousGuidForPinRemapping();
+
 		SetGuid(FGuid::NewGuid());
 	}
 }
@@ -35,6 +39,9 @@ void UFlowNodeAddOn::PostDuplicate(bool bDuplicateForPIE)
 void UFlowNodeAddOn::PostEditImport()
 {
 	Super::PostEditImport();
+
+	// Discard constructor history and remap from the imported, serialized identity.
+	ClearPreviousGuidForPinRemapping();
 
 	SetGuid(FGuid::NewGuid());
 }
@@ -157,9 +164,14 @@ void UFlowNodeAddOn::CacheFlowNode()
 }
 
 #if WITH_EDITOR
-TArray<FFlowPin> UFlowNodeAddOn::GetPinsForContext(const TArray<FFlowPin>& Context) const
+// Build an AddOn's context from the inherited context of the same direction before adding
+// its own pins. This keeps nested input and output contributions separate during Courier previews
+// and the later parent reconstruction.
+TArray<FFlowPin> UFlowNodeAddOn::GetPinsForContext(
+	const TArray<FFlowPin>& Context,
+	const TArray<FFlowPin>& BaseContext) const
 {
-	TArray<FFlowPin> ContextPins = Super::GetContextInputs();
+	TArray<FFlowPin> ContextPins = BaseContext;
 
 	ContextPins.Reserve(ContextPins.Num() + Context.Num());
 
@@ -180,12 +192,12 @@ TArray<FFlowPin> UFlowNodeAddOn::GetPinsForContext(const TArray<FFlowPin>& Conte
 
 TArray<FFlowPin> UFlowNodeAddOn::GetContextInputs() const
 {
-	return GetPinsForContext(InputPins);
+	return GetPinsForContext(InputPins, Super::GetContextInputs());
 }
 
 TArray<FFlowPin> UFlowNodeAddOn::GetContextOutputs() const
 {
-	return GetPinsForContext(OutputPins);
+	return GetPinsForContext(OutputPins, Super::GetContextOutputs());
 }
 
 void UFlowNodeAddOn::RequestReconstructionOnOwningFlowNode() const

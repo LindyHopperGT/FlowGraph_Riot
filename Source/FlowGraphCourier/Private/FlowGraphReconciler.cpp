@@ -10,17 +10,24 @@
 #include "FlowLogChannels.h"
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
+#include "EdGraph/EdGraph.h"
+#include "EdGraph/EdGraphPin.h"
 #include "Serialization/JsonWriter.h"
 #include "Serialization/JsonSerializer.h"
 #include "FlowAsset.h"
+#include "Graph/Nodes/FlowGraphNode.h"
 #include "Nodes/FlowNode.h"
 #include "Nodes/FlowNodeBase.h"
 #include "Nodes/FlowPin.h"
 #include "AddOns/FlowNodeAddOn.h"
 #include "UObject/UnrealType.h"
+#include "UObject/UObjectGlobals.h"
+#include "UObject/StrongObjectPtr.h"
 #include "UObject/Package.h"
 #include "Misc/PackageName.h"
+#include "Templates/UniquePtr.h"
 #include "Editor.h"
+#include "Editor/Transactor.h"
 #include "ScopedTransaction.h"
 
 // Builds the set of node GUIDs that will exist after the plan applies:
@@ -56,9 +63,7 @@ static TSet<FGuid> BuildPostPlanNodeSet(
 // Appends every Courier converter issue (JSON parse/structural problems) as a validation finding,
 // so a malformed document is reported the same way a semantic validation problem is - as data in
 // ValidationFindings, never by raising. Code carries across directly: both types share one code set.
-// Path is folded into Message instead, because FFlowValidationFinding deliberately has no path field -
-// it addresses graph space (node/addon/pin), while a converter issue addresses document space, and a
-// caller that wants the JSON pointer for a parse-time issue should read FFlowCourierIssue itself.
+// Document paths are preserved as optional provenance alongside graph-space GUIDs.
 static void AppendCourierIssuesAsFindings(const TArray<FFlowCourierIssue>& Issues, TArray<FFlowValidationFinding>& OutFindings)
 {
 	for (const FFlowCourierIssue& Issue : Issues)
@@ -66,7 +71,56 @@ static void AppendCourierIssuesAsFindings(const TArray<FFlowCourierIssue>& Issue
 		FFlowValidationFinding& Finding = OutFindings.AddDefaulted_GetRef();
 		Finding.Severity = Issue.Severity;
 		Finding.Code = Issue.Code;
+		Finding.SourceDocumentPath = Issue.Path;
 		Finding.Message = FString::Printf(TEXT("[%s] %s: %s"), *Issue.Code, *Issue.Path, *Issue.Message);
+	}
+}
+
+static void StageAssetProperties(
+	const TMap<FString, FString>& AssetProperties,
+	UClass* AssetClass,
+	const UObject* ExistingAsset,
+	FFlowReconcileExecutionPlan& OutPlan)
+{
+	TArray<FString> PropertyNames;
+	AssetProperties.GenerateKeyArray(PropertyNames);
+	PropertyNames.Sort();
+
+	for (const FString& PropertyNameString : PropertyNames)
+	{
+		const FString* const Value = AssetProperties.Find(PropertyNameString);
+		const FName PropertyName(*PropertyNameString);
+		FFlowStagedAssetProperty StagedProperty;
+		FString Code;
+		FString ErrorMessage;
+		const bool bHeaderConflict = PropertyNameString.Equals(TEXT("AssetClass"), ESearchCase::IgnoreCase) ||
+			PropertyNameString.Equals(TEXT("bWorldBound"), ESearchCase::IgnoreCase) ||
+			PropertyNameString.Equals(TEXT("ExpectedOwnerClass"), ESearchCase::IgnoreCase);
+		if ((!bHeaderConflict && PropertyName.ToString() != PropertyNameString) || !Value ||
+			!FFlowAssetPropertyPolicy::StageObjectReferenceProperty(
+				AssetClass, ExistingAsset, PropertyName, Value ? *Value : FString(), StagedProperty, Code, ErrorMessage))
+		{
+			if (Code.IsEmpty())
+			{
+				Code = TEXT("InvalidAssetPropertyName");
+				ErrorMessage = FString::Printf(TEXT("Asset property names must use the registered property's exact spelling: '%s'."), *PropertyNameString);
+			}
+			FFlowValidationFinding& Finding = OutPlan.ValidationFindings.AddDefaulted_GetRef();
+			Finding.Severity = EFlowValidationSeverity::Error;
+			Finding.Code = Code;
+			Finding.SourceDocumentPath = TEXT("assetProperties.") + PropertyNameString;
+			Finding.Message = ErrorMessage;
+			continue;
+		}
+
+		if (StagedProperty.bChanged)
+		{
+			FFlowReconcileAssetPropertyEntry& PlanEntry = OutPlan.Plan.AssetPropertiesChanged.AddDefaulted_GetRef();
+			PlanEntry.Name = PropertyNameString;
+			PlanEntry.PreviousValue = StagedProperty.PreviousValue;
+			PlanEntry.ProposedValue = StagedProperty.ProposedValue;
+		}
+		OutPlan.StagedAssetProperties.Add(PropertyName, MoveTemp(StagedProperty));
 	}
 }
 
@@ -86,6 +140,20 @@ static UClass* ResolveAddOnClass(const FString& AddOnType, FString& OutErrorMess
 	}
 
 	return AddOnClass;
+}
+
+// Check whether a full-block document retains an existing child by its stable AddOn identity.
+static bool HasParsedAddOnGuid(const TArray<FFlowGraphParsedNodeAddOn>& ParsedAddOns, const FGuid& AddOnGuid)
+{
+	for (const FFlowGraphParsedNodeAddOn& ParsedAddOn : ParsedAddOns)
+	{
+		if (ParsedAddOn.AddOnGuid == AddOnGuid)
+		{
+			return true;
+		}
+	}
+
+	return false;
 }
 
 // Returns true when SourcePinName is an exec output pin on SourceNode. Data connections are keyed
@@ -108,6 +176,32 @@ static bool IsExecConnectionSourcePin(const UFlowNode* SourceNode, FName SourceP
 	}
 
 	return true;
+}
+
+// Break links on retained orphan pins too, or regraph harvesting can restore a removed runtime connection.
+static void BreakEditorConnectionLink(const FFlowGraphParsedConnection& ConnectionToRemove, UFlowAsset& FlowAsset)
+{
+	UFlowNode* const SourceNode = FlowAsset.GetNode(ConnectionToRemove.SourceNodeGuid);
+	UFlowNode* const TargetNode = FlowAsset.GetNode(ConnectionToRemove.TargetNodeGuid);
+	UFlowGraphNode* const SourceGraphNode = IsValid(SourceNode)
+		? Cast<UFlowGraphNode>(SourceNode->GetGraphNode())
+		: nullptr;
+	UFlowGraphNode* const TargetGraphNode = IsValid(TargetNode)
+		? Cast<UFlowGraphNode>(TargetNode->GetGraphNode())
+		: nullptr;
+	if (!IsValid(SourceGraphNode) || !IsValid(TargetGraphNode))
+	{
+		return;
+	}
+
+	UEdGraphPin* const SourcePin = SourceGraphNode->FindPin(ConnectionToRemove.SourcePinName, EGPD_Output);
+	UEdGraphPin* const TargetPin = TargetGraphNode->FindPin(ConnectionToRemove.TargetPinName, EGPD_Input);
+	if (SourcePin && TargetPin && SourcePin->LinkedTo.Contains(TargetPin))
+	{
+		SourceGraphNode->Modify();
+		TargetGraphNode->Modify();
+		SourcePin->BreakLinkTo(TargetPin);
+	}
 }
 
 // Full mode only: an existing connection not re-declared by the document is implicitly removed,
@@ -184,7 +278,11 @@ UFlowAsset* FFlowGraphReconciler::FindOrLoadFlowAsset(const FString& TargetAsset
 
 	if (!Found)
 	{
-		Found = LoadObject<UFlowAsset>(nullptr, *TargetAssetPath);
+		// Do not create a placeholder package when planning against a missing target.
+		if (FPackageName::DoesPackageExist(PackageName))
+		{
+			Found = LoadObject<UFlowAsset>(nullptr, *TargetAssetPath);
+		}
 	}
 
 	return Found;
@@ -236,9 +334,467 @@ bool FFlowGraphReconciler::ComputePlanForNewAsset(
 	OutPlan.bIsNewAsset = true;
 
 	const TSet<FGuid> PostPlanNodeGuids = BuildPostPlanNodeSet(TMap<FGuid, UFlowNode*>(), OutPlan.NodesToAdd, TArray<FGuid>());
-	FFlowGraphValidation::ValidateDocument(nullptr, OutPlan.AllParsedNodes, OutPlan.AllParsedConnections, OutPlan.ValidationFindings, &PostPlanNodeGuids);
+	// Project new nodes and their AddOn trees before validating same-document generated-pin connections.
+	FString PreviewError;
+	if (!BuildEffectivePinSchema(
+		nullptr, OutPlan, OutPlan.ProjectedPinSchema, PreviewError, &OutPlan.EffectiveStateAsset))
+	{
+		FFlowValidationFinding& Finding = OutPlan.ValidationFindings.AddDefaulted_GetRef();
+		Finding.Severity = EFlowValidationSeverity::Error;
+		Finding.Code = TEXT("PinSchemaPreviewFailed");
+		Finding.Message = PreviewError;
+	}
+	FFlowValidationContext ValidationContext;
+	ValidationContext.EffectiveAsset = OutPlan.EffectiveStateAsset.Get();
+	ValidationContext.ResolvedAssetClass = OutPlan.ResolvedAssetClass;
+	ValidationContext.StagedAssetProperties = &OutPlan.StagedAssetProperties;
+	FFlowGraphValidation::ValidateDocument(OutPlan.EffectiveStateAsset.Get(), OutPlan.AllParsedNodes,
+		OutPlan.AllParsedConnections, OutPlan.ValidationFindings, &PostPlanNodeGuids,
+		&OutPlan.ProjectedPinSchema, &ValidationContext);
 
 	return true;
+}
+
+#if WITH_EDITOR
+namespace FlowGraphEffectiveStateDetail
+{
+	// Restore authored AddOn identity after DuplicateObject's lifecycle hooks, then reconnect each
+	// clone to the transient owning node so context pins see the same ownership as commit.
+	void RestoreAddOnGuids(const UFlowNodeBase& SourceOwner, UFlowNodeBase& PreviewOwner, UFlowNode& PreviewFlowNode)
+	{
+		const TArray<UFlowNodeAddOn*>& SourceAddOns = SourceOwner.GetFlowNodeAddOnChildren();
+		TArray<UFlowNodeAddOn*>& PreviewAddOns = PreviewOwner.GetFlowNodeAddOnChildrenByEditor();
+		const int32 AddOnCount = FMath::Min(SourceAddOns.Num(), PreviewAddOns.Num());
+		for (int32 AddOnIndex = 0; AddOnIndex < AddOnCount; ++AddOnIndex)
+		{
+			UFlowNodeAddOn* const SourceAddOn = SourceAddOns[AddOnIndex];
+			UFlowNodeAddOn* const PreviewAddOn = PreviewAddOns[AddOnIndex];
+			if (!IsValid(SourceAddOn) || !IsValid(PreviewAddOn))
+			{
+				continue;
+			}
+
+			PreviewAddOn->SetGuid(SourceAddOn->GetGuid());
+			PreviewAddOn->ClearPreviousGuidForPinRemapping();
+			PreviewAddOn->SetFlowNodeForEditor(&PreviewFlowNode);
+			RestoreAddOnGuids(*SourceAddOn, *PreviewAddOn, PreviewFlowNode);
+		}
+	}
+
+	void ClearGraphNodeReference(UFlowNodeBase& Node)
+	{
+		// SetGraphNode has editor side effects; clear the reflected pointer without touching a live graph.
+		if (FObjectPropertyBase* GraphNodeProperty = FindFProperty<FObjectPropertyBase>(
+			UFlowNodeBase::StaticClass(), TEXT("GraphNode")))
+		{
+			GraphNodeProperty->SetObjectPropertyValue_InContainer(&Node, nullptr);
+		}
+	}
+
+	bool AddNodeToPreviewAsset(UFlowAsset& PreviewAsset, UFlowNode& Node, FString& OutErrorMessage)
+	{
+		// Insert only the runtime GUID-to-node entry. RegisterNode would harvest editor connections.
+		FMapProperty* NodesProperty = FindFProperty<FMapProperty>(UFlowAsset::StaticClass(), TEXT("Nodes"));
+		if (!NodesProperty)
+		{
+			OutErrorMessage = TEXT("Could not find the FlowAsset Nodes map for the isolated preview");
+			return false;
+		}
+
+		void* NodesPtr = NodesProperty->ContainerPtrToValuePtr<void>(&PreviewAsset);
+		FScriptMapHelper NodesHelper(NodesProperty, NodesPtr);
+		const int32 NewIndex = NodesHelper.AddDefaultValue_Invalid_NeedsRehash();
+		uint8* PairPtr = NodesHelper.GetPairPtr(NewIndex);
+
+		FStructProperty* KeyProperty = CastField<FStructProperty>(NodesProperty->KeyProp);
+		FObjectPropertyBase* ValueProperty = CastField<FObjectPropertyBase>(NodesProperty->ValueProp);
+		if (!KeyProperty || !ValueProperty)
+		{
+			OutErrorMessage = TEXT("FlowAsset Nodes map has an unexpected key or value type");
+			return false;
+		}
+
+		KeyProperty->Struct->CopyScriptStruct(KeyProperty->ContainerPtrToValuePtr<void>(PairPtr), &Node.GetGuid());
+		ValueProperty->SetObjectPropertyValue_InContainer(PairPtr, &Node);
+		NodesHelper.Rehash();
+		return true;
+	}
+
+	// Keep the projected pin set unique by name while preserving metadata from its first source.
+	bool HasPinNamed(const TArray<FFlowPin>& Pins, FName PinName)
+	{
+		for (const FFlowPin& Pin : Pins)
+		{
+			if (Pin.PinName == PinName)
+			{
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	void AppendUniquePins(TArray<FFlowPin>& InOutPins, const TArray<FFlowPin>& NewPins)
+	{
+		// Preserve first-seen pin metadata and skip duplicate names, matching runtime aggregation order.
+		for (const FFlowPin& Pin : NewPins)
+		{
+			if (!Pin.PinName.IsNone() && !HasPinNamed(InOutPins, Pin.PinName))
+			{
+				InOutPins.Add(Pin);
+			}
+		}
+	}
+
+	FFlowProjectedPinSet BuildProjectedPinSet(const UFlowNode& Node)
+	{
+		// Combine static/auto pins with the AddOn-derived context in each independent direction.
+		FFlowProjectedPinSet Result;
+		AppendUniquePins(Result.InputPins, Node.GetInputPins());
+		AppendUniquePins(Result.InputPins, Node.GetContextInputs());
+		AppendUniquePins(Result.OutputPins, Node.GetOutputPins());
+		AppendUniquePins(Result.OutputPins, Node.GetContextOutputs());
+		return Result;
+	}
+
+	// Carries the isolated post-plan graph while each preview phase updates one part of its state.
+	struct FFlowEffectivePinSchemaPreview
+	{
+		// Transient asset used as the outer and ownership context for every preview node.
+		TStrongObjectPtr<UFlowAsset> Asset;
+
+		// Nodes that will survive execution, indexed by their stable graph GUID.
+		TMap<FGuid, UFlowNode*> Nodes;
+
+		// Strong references keep transient preview nodes alive until schema collection completes.
+		TArray<TStrongObjectPtr<UFlowNode>> NodeKeepAlive;
+
+		// Authored post-plan node blocks, used to identify which cloned nodes need projected edits.
+		TMap<FGuid, const FFlowGraphParsedNode*> ParsedNodesByGuid;
+
+		// Node identities whose pin schema comes from newly-instantiated preview nodes.
+		TSet<FGuid> AddedNodeGuids;
+
+		// Existing node identities removed by this plan and therefore excluded from the preview.
+		TSet<FGuid> DeletedNodeGuids;
+	};
+
+	bool CreatePreviewAsset(
+		UFlowAsset* ExistingAsset,
+		const FFlowReconcileExecutionPlan& ExecutionPlan,
+		TStrongObjectPtr<UFlowAsset>& OutPreviewAsset,
+		FString& OutErrorMessage)
+	{
+		UClass* PreviewAssetClass = ExistingAsset ? ExistingAsset->GetClass() : UFlowAsset::StaticClass();
+		if (!ExistingAsset && !ExecutionPlan.AssetClassPath.IsEmpty())
+		{
+			UClass* RequestedAssetClass = LoadObject<UClass>(nullptr, *ExecutionPlan.AssetClassPath);
+			if (!RequestedAssetClass || !RequestedAssetClass->IsChildOf(UFlowAsset::StaticClass()) ||
+				RequestedAssetClass->HasAnyClassFlags(CLASS_Abstract))
+			{
+				OutErrorMessage = FString::Printf(TEXT("Could not create an isolated asset preview for class '%s'"),
+					*ExecutionPlan.AssetClassPath);
+				return false;
+			}
+			PreviewAssetClass = RequestedAssetClass;
+		}
+
+		OutPreviewAsset.Reset(NewObject<UFlowAsset>(
+			GetTransientPackage(), PreviewAssetClass, NAME_None, RF_Transient));
+		if (!OutPreviewAsset.IsValid())
+		{
+			OutErrorMessage = FString::Printf(TEXT("Could not create an isolated preview of FlowAsset class '%s'"),
+				*PreviewAssetClass->GetPathName());
+			return false;
+		}
+		return true;
+	}
+
+	void IndexPreviewPlan(
+		const FFlowReconcileExecutionPlan& ExecutionPlan,
+		FFlowEffectivePinSchemaPreview& Preview)
+	{
+		// Index authored node blocks separately from adds so unchanged nodes can keep their live read-only schema.
+		for (const FFlowGraphParsedNode& ParsedNode : ExecutionPlan.AllParsedNodes)
+		{
+			if (!ParsedNode.bIsDeleteMarker)
+			{
+				Preview.ParsedNodesByGuid.Add(ParsedNode.NodeGuid, &ParsedNode);
+			}
+		}
+
+		for (const FGuid& DeletedNodeGuid : ExecutionPlan.NodesToDelete)
+		{
+			Preview.DeletedNodeGuids.Add(DeletedNodeGuid);
+		}
+
+		for (const FFlowGraphParsedNode& ParsedNode : ExecutionPlan.NodesToAdd)
+		{
+			Preview.AddedNodeGuids.Add(ParsedNode.NodeGuid);
+		}
+	}
+
+	bool DuplicateExistingNodes(
+		UFlowAsset* ExistingAsset,
+		FFlowEffectivePinSchemaPreview& Preview,
+		FString& OutErrorMessage)
+	{
+		if (!ExistingAsset)
+		{
+			return true;
+		}
+
+		for (const TPair<FGuid, UFlowNode*>& ExistingNodePair : ExistingAsset->GetNodes())
+		{
+			if (Preview.DeletedNodeGuids.Contains(ExistingNodePair.Key) || !IsValid(ExistingNodePair.Value))
+			{
+				continue;
+			}
+
+			UFlowNode* PreviewNode = DuplicateObject<UFlowNode>(ExistingNodePair.Value, Preview.Asset.Get());
+			if (!IsValid(PreviewNode))
+			{
+				OutErrorMessage = FString::Printf(TEXT("Could not duplicate node %s for the isolated pin preview"),
+					*ExistingNodePair.Key.ToString());
+				return false;
+			}
+
+			PreviewNode->SetGuid(ExistingNodePair.Key);
+			PreviewNode->ClearPreviousGuidForPinRemapping();
+			ClearGraphNodeReference(*PreviewNode);
+			RestoreAddOnGuids(*ExistingNodePair.Value, *PreviewNode, *PreviewNode);
+			Preview.NodeKeepAlive.Emplace(PreviewNode);
+			Preview.Nodes.Add(ExistingNodePair.Key, PreviewNode);
+		}
+
+		return true;
+	}
+
+	bool InstantiateAddedNodes(
+		const FFlowReconcileExecutionPlan& ExecutionPlan,
+		FFlowEffectivePinSchemaPreview& Preview,
+		FString& OutErrorMessage)
+	{
+		// New nodes use the same resolved classes and GUIDs as the live importer.
+		for (const FFlowGraphParsedNode& ParsedNode : ExecutionPlan.NodesToAdd)
+		{
+			UClass* NodeClass = UFlowGraphImporter::ResolveNodeClass(ParsedNode.NodeType);
+			if (!NodeClass || !NodeClass->IsChildOf(UFlowNode::StaticClass()) || NodeClass->HasAnyClassFlags(CLASS_Abstract))
+			{
+				OutErrorMessage = FString::Printf(TEXT("Could not create a node preview for class '%s'"), *ParsedNode.NodeType);
+				return false;
+			}
+
+			UFlowNode* PreviewNode = NewObject<UFlowNode>(Preview.Asset.Get(), NodeClass, NAME_None, RF_Transient);
+			if (!IsValid(PreviewNode))
+			{
+				OutErrorMessage = FString::Printf(TEXT("Could not create a transient node preview for '%s'"), *ParsedNode.NodeType);
+				return false;
+			}
+
+			PreviewNode->SetGuid(ParsedNode.NodeGuid);
+			Preview.NodeKeepAlive.Emplace(PreviewNode);
+			Preview.Nodes.Add(ParsedNode.NodeGuid, PreviewNode);
+		}
+
+		return true;
+	}
+
+	bool RegisterPreviewNodes(
+		FFlowEffectivePinSchemaPreview& Preview,
+		FString& OutErrorMessage)
+	{
+		// Ownership-dependent context queries need the full post-plan GUID-to-node map first.
+		for (const TPair<FGuid, UFlowNode*>& PreviewNodePair : Preview.Nodes)
+		{
+			if (!AddNodeToPreviewAsset(*Preview.Asset, *PreviewNodePair.Value, OutErrorMessage))
+			{
+				return false;
+			}
+		}
+		return true;
+	}
+
+	void RefreshPreviewAutoPins(FFlowEffectivePinSchemaPreview& Preview)
+	{
+		// AddOn property callbacks have run; now refresh node auto pins against their final state.
+		for (const TPair<FGuid, const FFlowGraphParsedNode*>& ParsedNodePair : Preview.ParsedNodesByGuid)
+		{
+			if (UFlowNode* PreviewNode = Preview.Nodes.FindRef(ParsedNodePair.Key))
+			{
+				PreviewNode->TryUpdateAutoDataPins();
+			}
+		}
+	}
+
+	bool CollectProjectedPinSchema(
+		UFlowAsset* ExistingAsset,
+		const FFlowEffectivePinSchemaPreview& Preview,
+		FFlowProjectedPinSchema& OutProjectedPinSchema,
+		FString& OutErrorMessage)
+	{
+		// Store active pins for every surviving node; an unmentioned existing node keeps its live schema.
+		for (const TPair<FGuid, UFlowNode*>& PreviewNodePair : Preview.Nodes)
+		{
+			const UFlowNode* NodeForSchema = PreviewNodePair.Value;
+			if (!Preview.AddedNodeGuids.Contains(PreviewNodePair.Key) &&
+				!Preview.ParsedNodesByGuid.Contains(PreviewNodePair.Key) && ExistingAsset)
+			{
+				NodeForSchema = ExistingAsset->GetNode(PreviewNodePair.Key);
+			}
+			if (!IsValid(NodeForSchema))
+			{
+				OutErrorMessage = FString::Printf(TEXT("Could not resolve effective node state for %s"),
+					*PreviewNodePair.Key.ToString());
+				return false;
+			}
+
+			OutProjectedPinSchema.Add(PreviewNodePair.Key, BuildProjectedPinSet(*NodeForSchema));
+		}
+		return true;
+	}
+}
+#endif // WITH_EDITOR
+
+bool FFlowGraphReconciler::BuildEffectivePinSchema(
+	UFlowAsset* ExistingAsset,
+	const FFlowReconcileExecutionPlan& ExecutionPlan,
+	FFlowProjectedPinSchema& OutProjectedPinSchema,
+	FString& OutErrorMessage,
+	TStrongObjectPtr<UFlowAsset>* OutEffectiveAsset)
+{
+	OutErrorMessage.Reset();
+	OutProjectedPinSchema.Reset();
+
+#if WITH_EDITOR
+	// Validation must preview the exact AddOn-generated pins from the requested final state,
+	// because Courier resolves connections before its live mutation begins.
+	FlowGraphEffectiveStateDetail::FFlowEffectivePinSchemaPreview Preview;
+	if (!FlowGraphEffectiveStateDetail::CreatePreviewAsset(
+		ExistingAsset, ExecutionPlan, Preview.Asset, OutErrorMessage))
+	{
+		return false;
+	}
+	if (ExistingAsset)
+	{
+		if (!FFlowAssetPropertyPolicy::CopyRegisteredProperties(ExistingAsset, Preview.Asset.Get(), OutErrorMessage))
+		{
+			return false;
+		}
+	}
+	else
+	{
+		Preview.Asset->bWorldBound = ExecutionPlan.bWorldBound;
+	}
+
+	TArray<FName> StagedPropertyNames;
+	ExecutionPlan.StagedAssetProperties.GenerateKeyArray(StagedPropertyNames);
+	StagedPropertyNames.Sort(FNameLexicalLess());
+	for (const FName PropertyName : StagedPropertyNames)
+	{
+		const FFlowStagedAssetProperty& StagedProperty = ExecutionPlan.StagedAssetProperties.FindChecked(PropertyName);
+		if (StagedProperty.bChanged && !FFlowAssetPropertyPolicy::SetStagedObjectReference(
+			Preview.Asset.Get(), StagedProperty, /*bSendEditNotifications=*/true, OutErrorMessage))
+		{
+			return false;
+		}
+	}
+	FlowGraphEffectiveStateDetail::IndexPreviewPlan(ExecutionPlan, Preview);
+
+	// Build isolated node identity and state first, then attach those nodes to the preview asset map.
+	if (!FlowGraphEffectiveStateDetail::DuplicateExistingNodes(ExistingAsset, Preview, OutErrorMessage) ||
+		!FlowGraphEffectiveStateDetail::InstantiateAddedNodes(ExecutionPlan, Preview, OutErrorMessage) ||
+		!FlowGraphEffectiveStateDetail::RegisterPreviewNodes(Preview, OutErrorMessage))
+	{
+		return false;
+	}
+
+	// Apply node properties and declared pins after preview nodes have their final identity and parent map.
+	for (const FFlowGraphParsedNode& ParsedNode : ExecutionPlan.AllParsedNodes)
+	{
+		if (ParsedNode.bIsDeleteMarker)
+		{
+			continue;
+		}
+
+		UFlowNode* PreviewNode = Preview.Nodes.FindRef(ParsedNode.NodeGuid);
+		if (!IsValid(PreviewNode))
+		{
+			OutErrorMessage = FString::Printf(
+				TEXT("Could not find isolated node preview for %s"), *ParsedNode.NodeGuid.ToString());
+			return false;
+		}
+
+		if (!UFlowGraphImporter::SetNodeProperties(PreviewNode, ParsedNode.Properties, OutErrorMessage))
+		{
+			return false;
+		}
+		PreviewNode->TryUpdateAutoDataPins();
+		UFlowGraphImporter::ApplyDeclaredPins(PreviewNode, ParsedNode);
+	}
+
+	// Apply AddOn edits into a shared notification set so callbacks wait until every tree is complete.
+	FFlowPendingAddOnPropertyChanges PendingPropertyChanges;
+	TArray<FFlowReconcileAddonEntry> PreviewAddOnsAdded;
+	TArray<FFlowReconcileAddonEntry> PreviewAddOnsUpdated;
+	TArray<FFlowReconcileAddonEntry> PreviewAddOnsDeleted;
+	for (const FFlowGraphParsedNode& ParsedNode : ExecutionPlan.AllParsedNodes)
+	{
+		if (ParsedNode.bIsDeleteMarker)
+		{
+			continue;
+		}
+
+		UFlowNode* PreviewNode = Preview.Nodes.FindRef(ParsedNode.NodeGuid);
+		if (Preview.AddedNodeGuids.Contains(ParsedNode.NodeGuid))
+		{
+			if (!UFlowGraphImporter::CreateAddOnsRecursive(
+				PreviewNode, ParsedNode.AddOns, PendingPropertyChanges, OutErrorMessage))
+			{
+				return false;
+			}
+		}
+		else if (!ParsedNode.AddOns.IsEmpty() || ParsedNode.bIsFullBlock)
+		{
+			if (!ReconcileNodeAddOns(PreviewNode, ParsedNode.NodeGuid, ParsedNode.AddOns, PendingPropertyChanges,
+				PreviewAddOnsAdded, PreviewAddOnsUpdated, PreviewAddOnsDeleted, OutErrorMessage, ParsedNode.bIsFullBlock))
+			{
+				return false;
+			}
+		}
+	}
+
+	// Run the same child-before-parent callbacks used during execution, then refresh auto data pins.
+	TArray<UFlowNodeBase*> PreviewRootOwners;
+	PreviewRootOwners.Reserve(Preview.Nodes.Num());
+	for (const TPair<FGuid, UFlowNode*>& PreviewNodePair : Preview.Nodes)
+	{
+		PreviewRootOwners.Add(PreviewNodePair.Value);
+	}
+	if (!UFlowGraphImporter::DispatchPendingAddOnPropertyChanges(
+		PreviewRootOwners, PendingPropertyChanges, OutErrorMessage))
+	{
+		return false;
+	}
+
+	FlowGraphEffectiveStateDetail::RefreshPreviewAutoPins(Preview);
+	if (!FlowGraphEffectiveStateDetail::CollectProjectedPinSchema(
+		ExistingAsset, Preview, OutProjectedPinSchema, OutErrorMessage))
+	{
+		return false;
+	}
+	if (OutEffectiveAsset)
+	{
+		*OutEffectiveAsset = MoveTemp(Preview.Asset);
+	}
+	return true;
+#else
+	(void)ExistingAsset;
+	(void)ExecutionPlan;
+	(void)OutEffectiveAsset;
+	OutErrorMessage = TEXT("Courier pin schema preview requires editor support");
+	return false;
+#endif // WITH_EDITOR
 }
 
 // new-asset execute: full import + regraph.
@@ -254,7 +810,9 @@ bool FFlowGraphReconciler::ExecutePlanForNewAsset(
 		ExecutionPlan.bWorldBound,
 		ExecutionPlan.AllParsedNodes,
 		ExecutionPlan.AllParsedConnections,
-		OutErrorMessage);
+		OutErrorMessage,
+		&ExecutionPlan.ProjectedPinSchema,
+		&ExecutionPlan.StagedAssetProperties);
 	if (!CreatedAsset)
 	{
 		Result.Findings.Add(OutErrorMessage);
@@ -481,30 +1039,16 @@ void FFlowGraphReconciler::ClassifyParsedConnections(
 	}
 }
 
-bool FFlowGraphReconciler::ApplyPlanToExistingAsset(
+bool FFlowGraphReconciler::ApplyNodeChanges(
 	UFlowAsset* ExistingAsset,
 	const FFlowReconcileExecutionPlan& ExecutionPlan,
-	FFlowReconcileResult& Result,
+	TMap<FGuid, UFlowNode*>& OutNewNodeMap,
 	FString& OutErrorMessage)
 {
-	FScopedTransaction Transaction(NSLOCTEXT("FlowGraphCourier", "ReconcileFlowGraph", "Reconcile Flow Graph"));
-
-	FString ApplyError;
-
-	// Apply order follows spec section 6's fixed kind order: UpsertNode, UpsertAddon,
-	// AddConnection, RemoveConnection, DeleteAddon, DeleteNode. DeleteAddon is folded into the
-	// UpsertAddon step below (ReconcileNodeAddOns reconciles a node's whole addon set - add,
-	// update, and delete - in one pass), which does not create a cross-node hazard since addon
-	// deletes only ever affect their own owning node. DeleteNode runs last so a document may
-	// delete a node it also connected or addon'd earlier without ordering hazards;
-	// RemoveNodeAndReferencingConnections also cleans up any connections still pointing at it.
-
-	// 1. UpsertNode: create new nodes, then apply properties/pins to existing nodes.
-	TMap<FGuid, UFlowNode*> NewNodeMap;
-	if (!ExecutionPlan.NodesToAdd.IsEmpty() && !UFlowGraphImporter::CreateFlowNodes(ExistingAsset, ExecutionPlan.NodesToAdd, NewNodeMap, ApplyError))
+	// Phase 1: create nodes and apply authored properties or declarations to existing nodes.
+	if (!ExecutionPlan.NodesToAdd.IsEmpty() &&
+		!UFlowGraphImporter::CreateFlowNodes(ExistingAsset, ExecutionPlan.NodesToAdd, OutNewNodeMap, OutErrorMessage))
 	{
-		OutErrorMessage = ApplyError;
-		Result.Findings.Add(ApplyError);
 		return false;
 	}
 
@@ -515,62 +1059,82 @@ bool FFlowGraphReconciler::ApplyPlanToExistingAsset(
 		{
 			continue;
 		}
+		ExistingNode->SetFlags(RF_Transactional);
+		ExistingNode->Modify();
 
-		if (!UFlowGraphImporter::SetNodeProperties(ExistingNode, NodeToUpdate.Properties, ApplyError))
+		if (!UFlowGraphImporter::SetNodeProperties(ExistingNode, NodeToUpdate.Properties, OutErrorMessage))
 		{
-			OutErrorMessage = ApplyError;
-			Result.Findings.Add(ApplyError);
 			return false;
 		}
 
 #if WITH_EDITOR
-		// A patch that changes a descriptor property has to regenerate the pins derived from it, or the
-		// node keeps the pin set the old value produced. Same call CreateFlowNodes makes for a new node,
-		// and same ordering: after the properties it reads, before ApplyDeclaredPins fills in the rest.
+		// Descriptor properties determine auto pins, so refresh those before applying authored pin declarations.
 		ExistingNode->TryUpdateAutoDataPins();
 #endif
-
-		// Mirrors CreateFlowNodes' call for new nodes: an updated node's declared InputPins/OutputPins
-		// (e.g. a dynamic pin re-declared on an existing node) must exist before SetupConnections runs
-		// below, or ResolveSourcePin/EnsureTargetDataPinExists fall back to mistyped wildcard stand-ins.
 		UFlowGraphImporter::ApplyDeclaredPins(ExistingNode, NodeToUpdate);
 	}
 
-	// Re-fetch after node adds so the addon and connection steps below can resolve newly-created
-	// nodes alongside pre-existing ones.
-	TMap<FGuid, UFlowNode*> CombinedNodeMap = ExistingAsset->GetNodes();
+	return true;
+}
 
-	// 2. UpsertAddon (and DeleteAddon, folded in - see note above): new nodes' addons, then
-	// existing nodes' addon reconciliation.
-	if (!ExecutionPlan.NodesToAdd.IsEmpty() && !UFlowGraphImporter::CreateNodeAddOns(CombinedNodeMap, ExecutionPlan.NodesToAdd, ApplyError))
+bool FFlowGraphReconciler::ApplyAddOnChanges(
+	UFlowAsset* ExistingAsset,
+	const FFlowReconcileExecutionPlan& ExecutionPlan,
+	const TMap<FGuid, UFlowNode*>& NewNodeMap,
+	FFlowReconcileResult& Result,
+	FString& OutErrorMessage)
+{
+	TMap<FGuid, UFlowNode*> CombinedNodeMap = ExistingAsset->GetNodes();
+	FFlowPendingAddOnPropertyChanges PendingPropertyChanges;
+
+	// Phase 2: attach complete new and updated AddOn trees while callbacks remain deferred.
+	if (!ExecutionPlan.NodesToAdd.IsEmpty() &&
+		!UFlowGraphImporter::CreateNodeAddOns(
+			CombinedNodeMap, ExecutionPlan.NodesToAdd, PendingPropertyChanges, OutErrorMessage))
 	{
-		OutErrorMessage = ApplyError;
-		Result.Findings.Add(ApplyError);
 		return false;
 	}
 
 	for (const FFlowGraphParsedNode& NodeToUpdate : ExecutionPlan.NodesToUpdate)
 	{
 		UFlowNode* ExistingNode = ExistingAsset->GetNodes().FindRef(NodeToUpdate.NodeGuid);
-		if (!ExistingNode)
+		if (!ExistingNode || (NodeToUpdate.AddOns.IsEmpty() && !NodeToUpdate.bIsFullBlock))
 		{
 			continue;
 		}
 
-		if ((!NodeToUpdate.AddOns.IsEmpty() || NodeToUpdate.bIsFullBlock)
-			&& !ReconcileNodeAddOns(ExistingNode, NodeToUpdate.NodeGuid, NodeToUpdate.AddOns, Result.Plan.AddOnsAdded, Result.Plan.AddOnsUpdated, Result.Plan.AddOnsDeleted, ApplyError, NodeToUpdate.bIsFullBlock))
+		if (!ReconcileNodeAddOns(ExistingNode, NodeToUpdate.NodeGuid, NodeToUpdate.AddOns, PendingPropertyChanges,
+			Result.Plan.AddOnsAdded, Result.Plan.AddOnsUpdated, Result.Plan.AddOnsDeleted,
+			OutErrorMessage, NodeToUpdate.bIsFullBlock))
 		{
-			OutErrorMessage = ApplyError;
-			Result.Findings.Add(ApplyError);
 			return false;
 		}
 	}
 
+	// Phase 3: callbacks run only after attachment, against each AddOn's complete final tree.
+	TArray<UFlowNodeBase*> AddOnRootOwners;
+	for (const TPair<FGuid, UFlowNode*>& NewNodePair : NewNodeMap)
+	{
+		AddOnRootOwners.Add(NewNodePair.Value);
+	}
+	for (const FFlowGraphParsedNode& NodeToUpdate : ExecutionPlan.NodesToUpdate)
+	{
+		if (!NodeToUpdate.AddOns.IsEmpty() || NodeToUpdate.bIsFullBlock)
+		{
+			if (UFlowNode* ExistingNode = ExistingAsset->GetNodes().FindRef(NodeToUpdate.NodeGuid))
+			{
+				AddOnRootOwners.Add(ExistingNode);
+			}
+		}
+	}
+	if (!UFlowGraphImporter::DispatchPendingAddOnPropertyChanges(
+		AddOnRootOwners, PendingPropertyChanges, OutErrorMessage))
+	{
+		return false;
+	}
+
 #if WITH_EDITOR
-	// Auto data pins depend on a node's addons, so step 2 above (addon reconcile) can change what a
-	// node's pin set should be. Regenerate before connections are wired below, so a pin an addon just
-	// contributed is there to connect to. Covers new nodes too, whose initial auto pins in step 1
-	// predate CreateNodeAddOns.
+	// Phase 4: refresh parent auto pins only after AddOn callbacks refreshed their cached pins.
 	for (const TPair<FGuid, UFlowNode*>& NewNodeEntry : NewNodeMap)
 	{
 		if (UFlowNode* NewNode = NewNodeEntry.Value)
@@ -591,50 +1155,57 @@ bool FFlowGraphReconciler::ApplyPlanToExistingAsset(
 	}
 #endif
 
-	// 3. AddConnection
-	if (!ExecutionPlan.ConnectionsToAdd.IsEmpty() && !UFlowGraphImporter::SetupConnections(ExistingAsset, CombinedNodeMap, ExecutionPlan.ConnectionsToAdd, ExecutionPlan.AllParsedNodes, ApplyError))
+	// Runtime endpoints must match the dry-run preview before any connection is written.
+	return FFlowGraphValidation::DoesRuntimePinSchemaMatchProjected(
+		ExistingAsset, ExecutionPlan.ProjectedPinSchema, OutErrorMessage);
+}
+
+bool FFlowGraphReconciler::ApplyConnectionChanges(
+	UFlowAsset* ExistingAsset,
+	const FFlowReconcileExecutionPlan& ExecutionPlan,
+	const TMap<FGuid, UFlowNode*>& CombinedNodeMap,
+	FString& OutErrorMessage)
+{
+	// Phase 5: install and remove requested connections against the verified active schema.
+	if (!ExecutionPlan.ConnectionsToAdd.IsEmpty() &&
+		!UFlowGraphImporter::SetupConnections(ExistingAsset, CombinedNodeMap, ExecutionPlan.ConnectionsToAdd,
+			ExecutionPlan.AllParsedNodes, OutErrorMessage))
 	{
-		OutErrorMessage = ApplyError;
-		Result.Findings.Add(ApplyError);
 		return false;
 	}
 
-	// 4. RemoveConnection
 	for (const FFlowGraphParsedConnection& ConnectionToRemove : ExecutionPlan.ConnectionsToRemove)
 	{
 		UFlowNode* RemoveSourceNode = ExistingAsset->GetNodes().FindRef(ConnectionToRemove.SourceNodeGuid);
 		UFlowNode* RemoveTargetNode = ExistingAsset->GetNodes().FindRef(ConnectionToRemove.TargetNodeGuid);
 		const bool bRemoveIsExecPin = IsExecConnectionSourcePin(RemoveSourceNode, ConnectionToRemove.SourcePinName);
 
-		// RemoveConnectionFromSourceNode clears whichever node's Connections map entry actually
-		// holds this connection - for a data connection that's the target node (see the keying
-		// comment on IsExecConnectionSourcePin above), despite the function's name.
+		// Data connection entries are stored on the target node; exec entries are stored on the source.
 		if (UFlowNode* KeyNodeToClear = bRemoveIsExecPin ? RemoveSourceNode : RemoveTargetNode)
 		{
-			const FName KeyPinToClear = bRemoveIsExecPin ? ConnectionToRemove.SourcePinName : ConnectionToRemove.TargetPinName;
+			const FName KeyPinToClear = bRemoveIsExecPin
+				? ConnectionToRemove.SourcePinName
+				: ConnectionToRemove.TargetPinName;
 			RemoveConnectionFromSourceNode(KeyNodeToClear, KeyPinToClear);
+			BreakEditorConnectionLink(ConnectionToRemove, *ExistingAsset);
 		}
 	}
 
-	// 6. DeleteNode - last (5, DeleteAddon, is folded into step 2 above).
-	for (const FGuid& NodeGuidToDelete : ExecutionPlan.NodesToDelete)
-	{
-		if (!RemoveNodeAndReferencingConnections(ExistingAsset, NodeGuidToDelete))
-		{
-			OutErrorMessage = FString::Printf(TEXT("Failed to delete node %s"), *NodeGuidToDelete.ToString());
-			Result.Findings.Add(OutErrorMessage);
-			return false;
-		}
-	}
+	return true;
+}
 
+bool FFlowGraphReconciler::RegraphAndVerify(
+	UFlowAsset* ExistingAsset,
+	const FFlowReconcileExecutionPlan& ExecutionPlan,
+	FFlowReconcileResult& Result,
+	FString& OutErrorMessage)
+{
 	if (UPackage* Package = ExistingAsset->GetOutermost())
 	{
 		Package->MarkPackageDirty();
 	}
 
-	// Extract positions from the already-parsed node list rather than re-calling ParseNodePositions,
-	// which would mint fresh GUIDs for new:<alias> nodes - different from those already in
-	// NodesToAdd/AliasMap, silently dropping any explicit Pos: on an aliased node.
+	// Retain parsed GUIDs so aliases and explicit positions use the same identities as the applied plan.
 	TMap<FGuid, FIntPoint> NodePositions;
 	for (const FFlowGraphParsedNode& ParsedNode : ExecutionPlan.AllParsedNodes)
 	{
@@ -644,8 +1215,6 @@ bool FFlowGraphReconciler::ApplyPlanToExistingAsset(
 		}
 	}
 
-	// Auto-place new nodes that had no explicit Pos: line. Merges computed positions into
-	// NodePositions before regraphing so RegraphFlowAsset applies them the same way.
 	if (!ExecutionPlan.NodesToAdd.IsEmpty())
 	{
 		TArray<FGuid> NewNodeGuidsForLayout;
@@ -654,7 +1223,8 @@ bool FFlowGraphReconciler::ApplyPlanToExistingAsset(
 		{
 			NewNodeGuidsForLayout.Add(AddedNode.NodeGuid);
 		}
-		FFlowGraphLayout::ComputeAutoPlacedPositions(ExistingAsset, NewNodeGuidsForLayout, ExecutionPlan.AllParsedConnections, NodePositions);
+		FFlowGraphLayout::ComputeAutoPlacedPositions(
+			ExistingAsset, NewNodeGuidsForLayout, ExecutionPlan.AllParsedConnections, NodePositions);
 	}
 
 	TMap<FGuid, FString> NodeComments;
@@ -673,15 +1243,11 @@ bool FFlowGraphReconciler::ApplyPlanToExistingAsset(
 		return false;
 	}
 
-	// Verify only after every destructive phase and the final regraph. Earlier verification can
-	// observe a connection that a later remove or delete phase legitimately removes.
+	// Verify only after destructive phases and the final regraph have completed.
 	TArray<FString> VerifiedConnectionsAdded;
 	TArray<FString> NotLandedConnections;
 	FFlowGraphReconciler::VerifyConnectionsLanded(
-		ExistingAsset,
-		ExecutionPlan.ConnectionsToAdd,
-		VerifiedConnectionsAdded,
-		NotLandedConnections);
+		ExistingAsset, ExecutionPlan.ConnectionsToAdd, VerifiedConnectionsAdded, NotLandedConnections);
 	for (const FString& NotLandedLabel : NotLandedConnections)
 	{
 		Result.Findings.Add(FString::Printf(TEXT("Requested connection did not land: %s"), *NotLandedLabel));
@@ -697,6 +1263,106 @@ bool FFlowGraphReconciler::ApplyPlanToExistingAsset(
 	if (!NotLandedConnections.IsEmpty() || !GraphIntegrityIssues.IsEmpty())
 	{
 		OutErrorMessage = TEXT("Final Flow graph postcondition verification failed");
+		return false;
+	}
+
+	return true;
+}
+
+bool FFlowGraphReconciler::ApplyPlanToExistingAsset(
+	UFlowAsset* ExistingAsset,
+	const FFlowReconcileExecutionPlan& ExecutionPlan,
+	FFlowReconcileResult& Result,
+	FString& OutErrorMessage)
+{
+	// Apply the same AddOn callback ordering as preview, verify refreshed pins, and only then
+	// install generated-pin connections. An owned transaction lets the MCP caller abort any failed step.
+	TUniquePtr<FScopedTransaction> LocalTransaction;
+	if (!GEditor || !GEditor->Trans || !GEditor->Trans->IsActive())
+	{
+		LocalTransaction = MakeUnique<FScopedTransaction>(
+			NSLOCTEXT("FlowGraphCourier", "ReconcileFlowGraph", "Reconcile Flow Graph"));
+	}
+	TArray<FName> AssetPropertyNames;
+	ExecutionPlan.StagedAssetProperties.GenerateKeyArray(AssetPropertyNames);
+	AssetPropertyNames.Sort(FNameLexicalLess());
+	for (const FName PropertyName : AssetPropertyNames)
+	{
+		const FFlowStagedAssetProperty& StagedProperty = ExecutionPlan.StagedAssetProperties.FindChecked(PropertyName);
+		if (!StagedProperty.bChanged)
+		{
+			continue;
+		}
+		if (!FFlowAssetPropertyPolicy::SetStagedObjectReference(
+			ExistingAsset, StagedProperty, /*bSendEditNotifications=*/true, OutErrorMessage))
+		{
+			Result.Findings.Add(OutErrorMessage);
+			return false;
+		}
+		if (UPackage* Package = ExistingAsset->GetOutermost())
+		{
+			Package->MarkPackageDirty();
+		}
+	}
+	if (UEdGraph* Graph = ExistingAsset->GetGraph())
+	{
+		Graph->SetFlags(RF_Transactional);
+		Graph->Modify();
+	}
+
+	FString ApplyError;
+
+	// Apply order follows spec section 6's fixed kind order: UpsertNode, UpsertAddon,
+	// AddConnection, RemoveConnection, DeleteAddon, DeleteNode. DeleteAddon is folded into the
+	// UpsertAddon step below (ReconcileNodeAddOns reconciles a node's whole addon set - add,
+	// update, and delete - in one pass), which does not create a cross-node hazard since addon
+	// deletes only ever affect their own owning node. DeleteNode runs last so a document may
+	// delete a node it also connected or addon'd earlier without ordering hazards;
+	// RemoveNodeAndReferencingConnections also cleans up any connections still pointing at it.
+
+	// Phase 1: create nodes and apply their reflected properties and declared pins.
+	TMap<FGuid, UFlowNode*> NewNodeMap;
+	if (!ApplyNodeChanges(ExistingAsset, ExecutionPlan, NewNodeMap, ApplyError))
+	{
+		OutErrorMessage = ApplyError;
+		Result.Findings.Add(ApplyError);
+		return false;
+	}
+
+	// Re-fetch after node adds so the addon and connection steps below can resolve newly-created
+	// nodes alongside pre-existing ones.
+	TMap<FGuid, UFlowNode*> CombinedNodeMap = ExistingAsset->GetNodes();
+
+	// Phases 2-4: reconcile full AddOn trees, dispatch callbacks, and refresh parent pins.
+	if (!ApplyAddOnChanges(ExistingAsset, ExecutionPlan, NewNodeMap, Result, ApplyError))
+	{
+		OutErrorMessage = ApplyError;
+		Result.Findings.Add(ApplyError);
+		return false;
+	}
+
+	// Phase 5: mutate connections only after live pins match the projected active schema.
+	if (!ApplyConnectionChanges(ExistingAsset, ExecutionPlan, CombinedNodeMap, ApplyError))
+	{
+		OutErrorMessage = ApplyError;
+		Result.Findings.Add(ApplyError);
+		return false;
+	}
+
+	// Phase 6: remove nodes last, after connection updates and AddOn reconciliation are complete.
+	for (const FGuid& NodeGuidToDelete : ExecutionPlan.NodesToDelete)
+	{
+		if (!RemoveNodeAndReferencingConnections(ExistingAsset, NodeGuidToDelete))
+		{
+			OutErrorMessage = FString::Printf(TEXT("Failed to delete node %s"), *NodeGuidToDelete.ToString());
+			Result.Findings.Add(OutErrorMessage);
+			return false;
+		}
+	}
+
+	// Phase 7: rebuild editor state and verify that the final connections and graph structure agree.
+	if (!RegraphAndVerify(ExistingAsset, ExecutionPlan, Result, OutErrorMessage))
+	{
 		return false;
 	}
 	return true;
@@ -738,6 +1404,17 @@ TSharedPtr<FFlowReconcileExecutionPlan> FFlowGraphReconciler::ComputeReconcilePl
 	AppendCourierIssuesAsFindings(CourierIssues, Plan->ValidationFindings);
 
 	UFlowAsset* ExistingAsset = FindOrLoadFlowAsset(TargetAssetPath);
+	UClass* ResolvedAssetClass = ExistingAsset ? ExistingAsset->GetClass() : UFlowAsset::StaticClass();
+	if (!ExistingAsset && !Document.AssetClass.IsEmpty() && !Document.AssetClass.Equals(TEXT("None"), ESearchCase::IgnoreCase))
+	{
+		UClass* const DocumentAssetClass = LoadObject<UClass>(nullptr, *Document.AssetClass);
+		if (DocumentAssetClass && DocumentAssetClass->IsChildOf(UFlowAsset::StaticClass()))
+		{
+			ResolvedAssetClass = DocumentAssetClass;
+		}
+	}
+	Plan->ResolvedAssetClass = ResolvedAssetClass;
+	StageAssetProperties(Document.AssetProperties, ResolvedAssetClass, ExistingAsset, *Plan);
 
 	// No asset yet: all nodes are adds, no validation possible.
 	if (!ExistingAsset)
@@ -835,9 +1512,28 @@ TSharedPtr<FFlowReconcileExecutionPlan> FFlowGraphReconciler::ComputeReconcilePl
 	Plan->NodesTouched = Plan->NodesToAdd.Num() + Plan->NodesToUpdate.Num() + Plan->NodesToDelete.Num();
 	Plan->NodesPreserved = TotalExistingBeforeApply - (Plan->NodesToUpdate.Num() + Plan->NodesToDelete.Num());
 
-	// Pre-commit validation on the fully-resolved document.
+	// Pre-commit validation on the fully-resolved document and its isolated final pin schema.
 	const TSet<FGuid> PostPlanNodeGuids = BuildPostPlanNodeSet(CurrentNodes, Plan->NodesToAdd, Plan->NodesToDelete);
-	FFlowGraphValidation::ValidateDocument(ExistingAsset, Plan->AllParsedNodes, Plan->AllParsedConnections, Plan->ValidationFindings, &PostPlanNodeGuids);
+	FString PreviewError;
+	if (!BuildEffectivePinSchema(
+		ExistingAsset, *Plan, Plan->ProjectedPinSchema, PreviewError, &Plan->EffectiveStateAsset))
+	{
+		FFlowValidationFinding& Finding = Plan->ValidationFindings.AddDefaulted_GetRef();
+		Finding.Severity = EFlowValidationSeverity::Error;
+		Finding.Code = TEXT("PinSchemaPreviewFailed");
+		Finding.Message = PreviewError;
+	}
+	FFlowValidationContext ValidationContext;
+	ValidationContext.TargetAsset = ExistingAsset;
+	ValidationContext.EffectiveAsset = Plan->EffectiveStateAsset.Get();
+	ValidationContext.ResolvedAssetClass = ResolvedAssetClass;
+	ValidationContext.StagedAssetProperties = &Plan->StagedAssetProperties;
+	const UFlowAsset* ValidationAsset = Plan->EffectiveStateAsset.IsValid()
+		? Plan->EffectiveStateAsset.Get()
+		: ExistingAsset;
+	FFlowGraphValidation::ValidateDocument(ValidationAsset, Plan->AllParsedNodes,
+		Plan->AllParsedConnections, Plan->ValidationFindings, &PostPlanNodeGuids,
+		&Plan->ProjectedPinSchema, &ValidationContext);
 
 	return Plan;
 }
@@ -997,6 +1693,11 @@ bool FFlowGraphReconciler::RemoveConnectionFromSourceNode(UFlowNode* SourceNode,
 	{
 		return false;
 	}
+	if (!SourceNode->HasAnyFlags(RF_Transient))
+	{
+		SourceNode->SetFlags(RF_Transactional);
+		SourceNode->Modify();
+	}
 
 	FMapProperty* ConnectionsProperty = FindFProperty<FMapProperty>(UFlowNode::StaticClass(), TEXT("Connections"));
 	if (!ConnectionsProperty)
@@ -1019,13 +1720,134 @@ bool FFlowGraphReconciler::RemoveConnectionFromSourceNode(UFlowNode* SourceNode,
 	return true;
 }
 
-bool FFlowGraphReconciler::ReconcileNodeAddOns(UFlowNodeBase* OwnerNode, const FGuid& OwnerNodeGuid, const TArray<FFlowGraphParsedNodeAddOn>& ParsedAddOns,
-	TArray<FFlowReconcileAddonEntry>& OutAdded, TArray<FFlowReconcileAddonEntry>& OutUpdated, TArray<FFlowReconcileAddonEntry>& OutDeleted, FString& OutErrorMessage, bool bFullBlock)
+bool FFlowGraphReconciler::ReconcileParsedAddOn(
+	UFlowNodeBase* OwnerNode,
+	const FGuid& OwnerNodeGuid,
+	const FFlowGraphParsedNodeAddOn& ParsedAddOn,
+	FArrayProperty* AddOnsProperty,
+	FObjectProperty* ElementProperty,
+	void* AddOnsValue,
+	TMap<UFlowNodeAddOn*, TArray<FString>>& OutPendingPropertyChanges,
+	TArray<FFlowReconcileAddonEntry>& OutAdded,
+	TArray<FFlowReconcileAddonEntry>& OutUpdated,
+	TArray<FFlowReconcileAddonEntry>& OutDeleted,
+	FString& OutErrorMessage,
+	bool bFullBlock)
 {
+	// Match one authored entry by GUID, retaining the live UObject whenever the identity already exists.
+	FScriptArrayHelper AddOnsHelper(AddOnsProperty, AddOnsValue);
+	int32 ExistingIndex = INDEX_NONE;
+	UFlowNodeAddOn* ExistingAddOn = nullptr;
+	for (int32 Index = 0; Index < AddOnsHelper.Num(); ++Index)
+	{
+		UFlowNodeAddOn* Candidate = Cast<UFlowNodeAddOn>(
+			ElementProperty->GetObjectPropertyValue(AddOnsHelper.GetRawPtr(Index)));
+		if (Candidate && Candidate->GetGuid() == ParsedAddOn.AddOnGuid)
+		{
+			ExistingIndex = Index;
+			ExistingAddOn = Candidate;
+			break;
+		}
+	}
+
+	if (ParsedAddOn.bIsDeleteMarker)
+	{
+		if (ExistingIndex != INDEX_NONE)
+		{
+			FFlowReconcileAddonEntry DeletedEntry;
+			DeletedEntry.OwnerNodeGuid = OwnerNodeGuid;
+			DeletedEntry.AddOnGuid = ParsedAddOn.AddOnGuid;
+			DeletedEntry.AddOnType = ExistingAddOn ? ExistingAddOn->GetClass()->GetPathName() : FString();
+			AddOnsHelper.RemoveValues(ExistingIndex, 1);
+			OutDeleted.Add(MoveTemp(DeletedEntry));
+		}
+		return true;
+	}
+
+	if (ExistingAddOn)
+	{
+		// Apply values now but let the caller notify after every sibling and child is reconciled.
+		if (!UFlowGraphImporter::SetAddOnProperties(
+			ExistingAddOn, ParsedAddOn.Properties, OutPendingPropertyChanges, OutErrorMessage))
+		{
+			return false;
+		}
+
+		FFlowReconcileAddonEntry UpdatedEntry;
+		UpdatedEntry.OwnerNodeGuid = OwnerNodeGuid;
+		UpdatedEntry.AddOnGuid = ParsedAddOn.AddOnGuid;
+		UpdatedEntry.AddOnType = ExistingAddOn->GetClass()->GetPathName();
+		UpdatedEntry.Properties = ParsedAddOn.Properties;
+		OutUpdated.Add(MoveTemp(UpdatedEntry));
+
+		if (ParsedAddOn.AddOns.IsEmpty() && !bFullBlock)
+		{
+			return true;
+		}
+
+		return ReconcileNodeAddOns(ExistingAddOn, ParsedAddOn.AddOnGuid, ParsedAddOn.AddOns,
+			OutPendingPropertyChanges, OutAdded, OutUpdated, OutDeleted, OutErrorMessage, bFullBlock);
+	}
+
+	// New identities are attached only after authored values are set, then their children are built.
+	UClass* AddOnClass = ResolveAddOnClass(ParsedAddOn.AddOnType, OutErrorMessage);
+	if (!AddOnClass)
+	{
+		return false;
+	}
+
+	UFlowNodeAddOn* NewAddOn = NewObject<UFlowNodeAddOn>(OwnerNode, AddOnClass, NAME_None, RF_Transactional);
+	if (!NewAddOn)
+	{
+		OutErrorMessage = FString::Printf(
+			TEXT("ReconcileNodeAddOns: Failed to create AddOn of type: %s"), *ParsedAddOn.AddOnType);
+		return false;
+	}
+
+	const FGuid NewAddOnGuid = ParsedAddOn.AddOnGuid.IsValid() ? ParsedAddOn.AddOnGuid : FGuid::NewGuid();
+	NewAddOn->SetGuid(NewAddOnGuid);
+	if (!UFlowGraphImporter::SetAddOnProperties(
+		NewAddOn, ParsedAddOn.Properties, OutPendingPropertyChanges, OutErrorMessage))
+	{
+		return false;
+	}
+
+	const int32 NewIndex = AddOnsHelper.AddValue();
+	ElementProperty->SetObjectPropertyValue(AddOnsHelper.GetRawPtr(NewIndex), NewAddOn);
+
+	FFlowReconcileAddonEntry AddedEntry;
+	AddedEntry.OwnerNodeGuid = OwnerNodeGuid;
+	AddedEntry.AddOnGuid = NewAddOnGuid;
+	AddedEntry.AddOnType = AddOnClass->GetPathName();
+	AddedEntry.Properties = ParsedAddOn.Properties;
+	OutAdded.Add(MoveTemp(AddedEntry));
+
+	// New descendants are part of this AddOn tree but only its root is reported as a plan entry.
+	return ParsedAddOn.AddOns.IsEmpty() || UFlowGraphImporter::CreateAddOnsRecursive(
+		NewAddOn, ParsedAddOn.AddOns, OutPendingPropertyChanges, OutErrorMessage);
+}
+
+bool FFlowGraphReconciler::ReconcileNodeAddOns(UFlowNodeBase* OwnerNode, const FGuid& OwnerNodeGuid,
+	const TArray<FFlowGraphParsedNodeAddOn>& ParsedAddOns,
+	TMap<UFlowNodeAddOn*, TArray<FString>>& OutPendingPropertyChanges,
+	TArray<FFlowReconcileAddonEntry>& OutAdded,
+	TArray<FFlowReconcileAddonEntry>& OutUpdated,
+	TArray<FFlowReconcileAddonEntry>& OutDeleted,
+	FString& OutErrorMessage,
+	bool bFullBlock)
+{
+	// Reconcile AddOn identity and properties without firing pin callbacks until the complete
+	// sibling/child tree is attached; the shared dispatcher then refreshes caches before parent regraph.
 	if (!OwnerNode)
 	{
 		OutErrorMessage = TEXT("ReconcileNodeAddOns: OwnerNode is null");
 		return false;
+	}
+
+	if ((!ParsedAddOns.IsEmpty() || bFullBlock) && !OwnerNode->HasAnyFlags(RF_Transient))
+	{
+		OwnerNode->SetFlags(RF_Transactional);
+		OwnerNode->Modify();
 	}
 
 	FArrayProperty* AddOnsProperty = FindFProperty<FArrayProperty>(UFlowNodeBase::StaticClass(), TEXT("AddOns"));
@@ -1044,108 +1866,18 @@ bool FFlowGraphReconciler::ReconcileNodeAddOns(UFlowNodeBase* OwnerNode, const F
 
 	void* AddOnsPtr = AddOnsProperty->ContainerPtrToValuePtr<void>(OwnerNode);
 
+	// Resolve each parsed identity independently so delete, update, and add behavior stay focused.
 	for (const FFlowGraphParsedNodeAddOn& ParsedAddOn : ParsedAddOns)
 	{
-		// Re-acquire the helper each iteration - a prior Add/RemoveValues call may have
-		// reallocated the underlying array.
-		FScriptArrayHelper AddOnsHelper(AddOnsProperty, AddOnsPtr);
-
-		int32 ExistingIndex = INDEX_NONE;
-		UFlowNodeAddOn* ExistingAddOn = nullptr;
-		for (int32 Index = 0; Index < AddOnsHelper.Num(); ++Index)
-		{
-			UFlowNodeAddOn* Candidate = Cast<UFlowNodeAddOn>(ElemProp->GetObjectPropertyValue(AddOnsHelper.GetRawPtr(Index)));
-			if (Candidate && Candidate->GetGuid() == ParsedAddOn.AddOnGuid)
-			{
-				ExistingIndex = Index;
-				ExistingAddOn = Candidate;
-				break;
-			}
-		}
-
-		if (ParsedAddOn.bIsDeleteMarker)
-		{
-			if (ExistingIndex != INDEX_NONE)
-			{
-				FFlowReconcileAddonEntry DeletedEntry;
-				DeletedEntry.OwnerNodeGuid = OwnerNodeGuid;
-				DeletedEntry.AddOnGuid = ParsedAddOn.AddOnGuid;
-				// Type is read from the live object being removed - the delete marker only carries a GUID.
-				DeletedEntry.AddOnType = ExistingAddOn ? ExistingAddOn->GetClass()->GetPathName() : FString();
-
-				AddOnsHelper.RemoveValues(ExistingIndex, 1);
-				OutDeleted.Add(MoveTemp(DeletedEntry));
-			}
-			continue;
-		}
-
-		if (ExistingAddOn)
-		{
-			// Preserve identity - update properties in place, same as node-level update.
-			if (!UFlowGraphImporter::SetAddOnProperties(ExistingAddOn, ParsedAddOn.Properties, OutErrorMessage))
-			{
-				return false;
-			}
-			FFlowReconcileAddonEntry UpdatedEntry;
-			UpdatedEntry.OwnerNodeGuid = OwnerNodeGuid;
-			UpdatedEntry.AddOnGuid = ParsedAddOn.AddOnGuid;
-			UpdatedEntry.AddOnType = ExistingAddOn->GetClass()->GetPathName();
-			UpdatedEntry.Properties = ParsedAddOn.Properties;
-			OutUpdated.Add(MoveTemp(UpdatedEntry));
-
-			// Recurse into nested children so an update to a deeper addon doesn't require
-			// touching every ancestor. The existing addon becomes the owner for its children, so
-			// nested entries are keyed by this addon's GUID.
-			if (!ParsedAddOn.AddOns.IsEmpty()
-				&& !ReconcileNodeAddOns(ExistingAddOn, ParsedAddOn.AddOnGuid, ParsedAddOn.AddOns, OutAdded, OutUpdated, OutDeleted, OutErrorMessage, bFullBlock))
-			{
-				return false;
-			}
-			continue;
-		}
-
-		// Not present yet - create it, mirroring UFlowGraphImporter::CreateNodeAddOns.
-		UClass* AddOnClass = ResolveAddOnClass(ParsedAddOn.AddOnType, OutErrorMessage);
-		if (!AddOnClass)
-		{
-			return false;
-		}
-
-		UFlowNodeAddOn* NewAddOn = NewObject<UFlowNodeAddOn>(OwnerNode, AddOnClass, NAME_None, RF_Transactional);
-		if (!NewAddOn)
-		{
-			OutErrorMessage = FString::Printf(TEXT("ReconcileNodeAddOns: Failed to create AddOn of type: %s"), *ParsedAddOn.AddOnType);
-			return false;
-		}
-
-		const FGuid NewAddOnGuid = ParsedAddOn.AddOnGuid.IsValid() ? ParsedAddOn.AddOnGuid : FGuid::NewGuid();
-		NewAddOn->SetGuid(NewAddOnGuid);
-
-		if (!UFlowGraphImporter::SetAddOnProperties(NewAddOn, ParsedAddOn.Properties, OutErrorMessage))
-		{
-			return false;
-		}
-
-		const int32 NewIndex = AddOnsHelper.AddValue();
-		ElemProp->SetObjectPropertyValue(AddOnsHelper.GetRawPtr(NewIndex), NewAddOn);
-
-		FFlowReconcileAddonEntry AddedEntry;
-		AddedEntry.OwnerNodeGuid = OwnerNodeGuid;
-		AddedEntry.AddOnGuid = NewAddOnGuid;
-		AddedEntry.AddOnType = AddOnClass->GetPathName();
-		AddedEntry.Properties = ParsedAddOn.Properties;
-		OutAdded.Add(MoveTemp(AddedEntry));
-
-		// A brand-new addon has no existing children - create its nested subtree wholesale.
-		// Only the subtree root is reported into OutAdded, not individual nested children.
-		if (!ParsedAddOn.AddOns.IsEmpty() && !UFlowGraphImporter::CreateAddOnsRecursive(NewAddOn, ParsedAddOn.AddOns, OutErrorMessage))
+		if (!ReconcileParsedAddOn(OwnerNode, OwnerNodeGuid, ParsedAddOn, AddOnsProperty, ElemProp,
+			AddOnsPtr, OutPendingPropertyChanges, OutAdded, OutUpdated, OutDeleted,
+			OutErrorMessage, bFullBlock))
 		{
 			return false;
 		}
 	}
 
-	// !full: ParsedAddOns is the complete authoritative list - delete any existing addon with no
-	// corresponding entry (added, updated, or explicitly delete-marked all count as matched).
+	// Full blocks make the parsed list authoritative; remove any existing child it did not mention.
 	if (bFullBlock)
 	{
 		FScriptArrayHelper FullBlockHelper(AddOnsProperty, AddOnsPtr);
@@ -1157,10 +1889,7 @@ bool FFlowGraphReconciler::ReconcileNodeAddOns(UFlowNodeBase* OwnerNode, const F
 				continue;
 			}
 
-			const bool bMentioned = ParsedAddOns.ContainsByPredicate([&Candidate](const FFlowGraphParsedNodeAddOn& ParsedAddOn)
-			{
-				return ParsedAddOn.AddOnGuid == Candidate->GetGuid();
-			});
+			const bool bMentioned = HasParsedAddOnGuid(ParsedAddOns, Candidate->GetGuid());
 
 			if (!bMentioned)
 			{

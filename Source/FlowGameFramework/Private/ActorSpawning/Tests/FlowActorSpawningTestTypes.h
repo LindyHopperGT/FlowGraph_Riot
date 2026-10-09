@@ -5,6 +5,8 @@
 #include "ActorSpawning/FlowActorSpawnRecordOwner.h"
 #include "ActorSpawning/FlowDefaultActorSpawnRecord.h"
 #include "ActorSpawning/FlowActorSpawnSelector.h"
+#include "AddOns/FlowNodeAddOn_FightActorsCohortBase.h"
+#include "Nodes/Actor/FlowNode_FightActorsBase.h"
 #include "Nodes/Actor/FlowNode_SpawnActors.h"
 #include "GameFramework/Actor.h"
 #include "Templates/Function.h"
@@ -144,5 +146,69 @@ public:
 	}
 #if WITH_SERVER_CODE
 	virtual AActor* TryGetActorOwner() const override { return TestActorOwner.Get(); }
+#endif
+};
+
+UCLASS(Hidden, NotBlueprintable, NotPlaceable, meta = (ExcludeFromFlowCatalog))
+class UFlowFightActorsTestNode : public UFlowNode_FightActorsBase
+{
+	GENERATED_BODY()
+
+public:
+	TArray<FName> Outputs;
+	bool bCleanupOnFinish = true;
+
+	virtual void TriggerOutput(const FName PinName, bool bFinish = false,
+		EFlowPinActivationType ActivationType = EFlowPinActivationType::Default) override
+	{
+		Outputs.Add(PinName);
+		if (bFinish && bCleanupOnFinish)
+		{
+			Cleanup();
+		}
+	}
+
+#if WITH_SERVER_CODE
+	void StartForTest() { StartSpawningPass(); }
+	void SetCompletionRuleForTest(EFlowFightActorCompletionRule Rule) { CompletionRule = Rule; }
+	void SetInitialMethodForTest(EFlowFightActorSpawnMethod Method) { InitialSpawnMethod = Method; }
+	EFlowFightActorState GetFightStateForTest() const { return FightState; }
+#endif
+};
+
+UCLASS(Hidden, NotBlueprintable, NotPlaceable, EditInlineNew, meta = (ExcludeFromFlowCatalog))
+class UFlowFightActorsTestCohort : public UFlowNodeAddOn_FightActorsCohortBase
+{
+	GENERATED_BODY()
+
+public:
+	int32 QueuedCount = 0;
+	int32 PendingCount = 0;
+	int32 AliveCount = 0;
+	int32 ExecuteCount = 0;
+	int32 CleanupCount = 0;
+
+#if WITH_SERVER_CODE
+	virtual int32 ExecuteSpawningPass(EFlowFightActorSpawnMethod Method,
+		FFlowActorSpawningAssistant& Assistant, bool bIsInitialPass) override
+	{
+		++ExecuteCount;
+		PendingCount = FMath::Max(QueuedCount, 0);
+		return QueuedCount;
+	}
+
+	virtual void AppendActorCounts(FFlowFightActorCounts& Counts) const override
+	{
+		Counts.PendingSpawnCount += PendingCount;
+		Counts.AliveCount += AliveCount;
+	}
+
+	virtual void CleanupActorRecords() override
+	{
+		++CleanupCount;
+		PendingCount = 0;
+		AliveCount = 0;
+		Super::CleanupActorRecords();
+	}
 #endif
 };

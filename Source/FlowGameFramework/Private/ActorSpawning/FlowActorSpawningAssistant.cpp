@@ -155,6 +155,7 @@ FFlowActorSpawningPassResult FFlowActorSpawningAssistant::TryExecuteSpawningPass
 			: StandardGroupNum;
 
 	Result.NumQueued = 0;
+	bool bPassFailed = false;
 	Context.RecordsToSubmit.Reserve(NumToSpawn);
 	for (int32 Index = 0; Index < StandardGroupNum; ++Index)
 	{
@@ -169,6 +170,7 @@ FFlowActorSpawningPassResult FFlowActorSpawningAssistant::TryExecuteSpawningPass
 			// If we have elected not to respawn this actor record, skip it.
 			continue;
 		}
+
 		while (Context.PreparedRecordIndices.Contains(RecordIndex))
 		{
 			++RecordIndex;
@@ -177,18 +179,39 @@ FFlowActorSpawningPassResult FFlowActorSpawningAssistant::TryExecuteSpawningPass
 		const TSubclassOf<AActor> ActorClass = ChooseActorClass(Context, RecordIndex);
 		if (!IsValid(ActorClass))
 		{
+			if (Config.bAbortOnFailure)
+			{
+				bPassFailed = true;
+
+				break;
+			}
+
 			continue;
 		}
 
 		UFlowActorSpawnRecord* Record = PrepareRecord(Context, RecordIndex, ActorClass);
 		if (!IsValid(Record))
 		{
+			if (Config.bAbortOnFailure)
+			{
+				bPassFailed = true;
+
+				break;
+			}
+
 			continue;
 		}
 
 		if (Record->GetOuter() != &Config.Owner)
 		{
 			OnRejectedRecord(Context, *Record);
+			if (Config.bAbortOnFailure)
+			{
+				bPassFailed = true;
+
+				break;
+			}
+
 			continue;
 		}
 
@@ -197,6 +220,13 @@ FFlowActorSpawningPassResult FFlowActorSpawningAssistant::TryExecuteSpawningPass
 	}
 
 	FinishPass(Context);
+	Result.NumPrepared = Context.NumPrepared;
+	if (bPassFailed)
+	{
+		Result.NumQueued = INDEX_NONE;
+
+		return Result;
+	}
 
 	if (Config.QueueMode == EFlowActorSpawnQueueMode::Staggered)
 	{
@@ -206,18 +236,31 @@ FFlowActorSpawningPassResult FFlowActorSpawningAssistant::TryExecuteSpawningPass
 			{
 				++Result.NumQueued;
 			}
-			else if (IsValid(Record))
+			else
 			{
-				OnRejectedRecord(Context, *Record);
+				if (IsValid(Record))
+				{
+					OnRejectedRecord(Context, *Record);
+				}
+
+				if (Config.bAbortOnFailure)
+				{
+					Result.NumQueued = INDEX_NONE;
+
+					break;
+				}
 			}
 		}
 	}
 	else if (!Context.RecordsToSubmit.IsEmpty())
 	{
 		Result.NumQueued = Subsystem->SubmitSpawnPass(Config.Owner, Context.RecordsToSubmit, Config.QueueMode);
+		if (Config.bAbortOnFailure && Result.NumQueued != Context.RecordsToSubmit.Num())
+		{
+			Result.NumQueued = INDEX_NONE;
+		}
 	}
 
-	Result.NumPrepared = Context.NumPrepared;
 	return Result;
 }
 

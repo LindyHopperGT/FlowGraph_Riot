@@ -4,6 +4,8 @@
 
 #include "UObject/Object.h"
 #include "Nodes/FlowPin.h"
+#include "FlowGraphValidation.h"
+#include "FlowAssetPropertyPolicy.h"
 #include "FlowGraphImporter.generated.h"
 
 class UFlowAsset;
@@ -12,12 +14,18 @@ class UFlowNodeBase;
 class UFlowNodeAddOn;
 class FMapProperty;
 
+// Keep changed property paths grouped by AddOn until its complete sibling and child tree
+// is attached. The dispatcher then builds callback chains against final authored values.
+using FFlowPendingAddOnPropertyChanges = TMap<UFlowNodeAddOn*, TArray<FString>>;
+
 // Per-pin info stored in FFlowGraphDeclaredOutputPinTypes.
 // TypeStr: "Exec", "Vector", "wildcard", etc. (case-insensitive "Exec" == exec pin).
 // SubCategoryPath: object path from a "PinName [PinType:/Path]" bracket; empty when absent.
 struct FDeclaredPinInfo
 {
+	// Authored pin type name, such as Exec, Vector, or wildcard.
 	FString TypeStr;
+	// Optional object path used as the pin type's subcategory.
 	FString SubCategoryPath;
 };
 
@@ -29,11 +37,11 @@ struct FLOWGRAPHCOURIER_API FFlowGraphParsedNodeAddOn
 {
 	GENERATED_BODY()
 
-	// Present when the source op carried an explicit guid. Invalid when the addon was created via
-	// newAlias (a NEW addon being authored) - callers should mint a fresh GUID rather than treat
-	// all-zero as a real identity.
+	// Stable identity when the source operation supplied a GUID; invalid for a newAlias AddOn.
 	FGuid AddOnGuid;
+	// Resolved class or short name of the AddOn to create or update.
 	FString AddOnType;
+	// Authored AddOn property values, keyed by reflected property path.
 	TMap<FString, FString> Properties;
 
 	// Mutation-document-only (Reconciler). Never set when parsing a full-graph export.
@@ -53,21 +61,31 @@ struct FLOWGRAPHCOURIER_API FFlowGraphParsedNode
 {
 	GENERATED_BODY()
 
+	// Stable identity used to look up this node in the FlowAsset.
 	FGuid NodeGuid;
+	// Resolved class or short name of the node to create or update.
 	FString NodeType;
+	// Authored node property values, keyed by reflected property name.
 	TMap<FString, FString> Properties;
+	// Declared additional input pin names from the Courier document.
 	TArray<FString> InputPins;
+	// Declared additional output pin specifications from the Courier document.
 	TArray<FString> OutputPins;
+	// Child AddOns nested under this node after flat document relationships are resolved.
 	TArray<FFlowGraphParsedNodeAddOn> AddOns;
 
 	// Present when the source op carried an explicit position. Optional/advisory - absent nodes
 	// are placed by FFlowGraphLayout::ComputeAutoPlacedPositions.
+	// True when the source operation supplied an explicit editor position.
 	bool bHasPos = false;
+	// Requested editor position when bHasPos is true.
 	FIntPoint Pos = FIntPoint::ZeroValue;
 
 	// Optional per-node comment text, from an op's "comment" field (WITH_EDITOR only). Applied
 	// to UEdGraphNode::NodeComment during regraph.
+	// True when the source operation supplied node comment text.
 	bool bHasComment = false;
+	// Requested editor comment when bHasComment is true.
 	FString NodeComment;
 
 	// Mutation-document-only. Never emitted by the exporter.
@@ -76,6 +94,7 @@ struct FLOWGRAPHCOURIER_API FFlowGraphParsedNode
 	// Set when the source op carried a newAlias instead of a guid, minting a fresh GUID. Alias is
 	// the document-local name other ops reference to resolve this node.
 	bool bIsNewAlias = false;
+	// Document-local name used to reference a node whose GUID is minted during conversion.
 	FString Alias;
 
 	// Set from an UpsertNode op's bReplaceAddons: listed AddOns become the complete authoritative
@@ -90,9 +109,13 @@ struct FLOWGRAPHCOURIER_API FFlowGraphParsedConnection
 {
 	GENERATED_BODY()
 
+	// GUID of the node whose output pin starts the connection.
 	FGuid SourceNodeGuid;
+	// Name of the source node's output pin.
 	FName SourcePinName;
+	// GUID of the node whose input pin receives the connection.
 	FGuid TargetNodeGuid;
+	// Name of the target node's input pin.
 	FName TargetPinName;
 
 	// Mutation-document-only. Never set when parsing a full-graph export.
@@ -123,7 +146,9 @@ public:
 		bool bWorldBound,
 		const TArray<FFlowGraphParsedNode>& ParsedNodes,
 		const TArray<FFlowGraphParsedConnection>& ParsedConnections,
-		FString& OutErrorMessage);
+		FString& OutErrorMessage,
+		const FFlowProjectedPinSchema* ProjectedPinSchema = nullptr,
+		const TMap<FName, FFlowStagedAssetProperty>* StagedAssetProperties = nullptr);
 
 	static bool PopulateFlowAssetFromDocument(
 		UFlowAsset* TargetAsset,
@@ -163,11 +188,19 @@ private:
 	static bool SetNodeProperties(UFlowNode* FlowNode, const TMap<FString, FString>& Properties, FString& OutErrorMessage);
 	static bool SetupConnections(UFlowAsset* FlowAsset, const TMap<FGuid, UFlowNode*>& NodeMap, const TArray<FFlowGraphParsedConnection>& Connections, const TArray<FFlowGraphParsedNode>& ParsedNodes, FString& OutErrorMessage);
 	static bool CreateNodeAddOns(const TMap<FGuid, UFlowNode*>& NodeMap, const TArray<FFlowGraphParsedNode>& ParsedNodes, FString& OutErrorMessage);
+	static bool CreateNodeAddOns(const TMap<FGuid, UFlowNode*>& NodeMap, const TArray<FFlowGraphParsedNode>& ParsedNodes,
+		FFlowPendingAddOnPropertyChanges& OutPendingPropertyChanges, FString& OutErrorMessage);
 
 	// Recursively creates ParsedAddOns under Owner (a UFlowNode or UFlowNodeAddOn, both of which
 	// have an AddOns array), then recurses into each newly-created addon's own nested AddOns.
 	// Shared by CreateNodeAddOns and FFlowGraphReconciler::ReconcileNodeAddOns.
-	static bool CreateAddOnsRecursive(UFlowNodeBase* Owner, const TArray<FFlowGraphParsedNodeAddOn>& ParsedAddOns, FString& OutErrorMessage);
+	static bool CreateAddOnsRecursive(UFlowNodeBase* Owner, const TArray<FFlowGraphParsedNodeAddOn>& ParsedAddOns,
+		FString& OutErrorMessage);
+	static bool CreateAddOnsRecursive(UFlowNodeBase* Owner, const TArray<FFlowGraphParsedNodeAddOn>& ParsedAddOns,
+		FFlowPendingAddOnPropertyChanges& OutPendingPropertyChanges, FString& OutErrorMessage);
+	// Dispatches queued property changes after the entire root-owned AddOn tree has been attached.
+	static bool DispatchPendingAddOnPropertyChanges(const TArray<UFlowNodeBase*>& RootOwners,
+		const FFlowPendingAddOnPropertyChanges& PendingPropertyChanges, FString& OutErrorMessage);
 
 	// SetupConnections helpers
 	static FFlowGraphDeclaredOutputPinTypes BuildDeclaredOutputPinTypes(const TArray<FFlowGraphParsedNode>& ParsedNodes);
@@ -175,7 +208,13 @@ private:
 	static bool EnsureTargetDataPinExists(UFlowNode* TargetNode, FName TargetPinName);
 	static bool WriteConnectionToNode(UFlowNode* NodeToModify, FName KeyName, const FConnectedPin& ConnectedPin, FMapProperty* ConnectionsProperty);
 
-	static bool SetAddOnProperties(UFlowNodeAddOn* AddOn, const TMap<FString, FString>& Properties, FString& OutErrorMessage);
+	// Assigns reflected values immediately and queues changed paths for the later tree-complete dispatch.
+	static bool SetAddOnProperties(UFlowNodeAddOn* AddOn, const TMap<FString, FString>& Properties,
+		FFlowPendingAddOnPropertyChanges& OutPendingPropertyChanges, FString& OutErrorMessage);
+
+	// Resolves and writes one AddOn member or nested property path, queuing a callback only when its value changes.
+	static bool SetAddOnProperty(UFlowNodeAddOn* AddOn, const TPair<FString, FString>& PropertyChange,
+		FFlowPendingAddOnPropertyChanges& OutPendingPropertyChanges, FString& OutErrorMessage);
 
 #if WITH_EDITORONLY_DATA
 	static void SyncAddOnDataPinValueDirections(UFlowNodeAddOn* AddOn);

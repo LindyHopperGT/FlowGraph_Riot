@@ -138,6 +138,44 @@ namespace
 		return true;
 	}
 
+	bool DoesPlanReconcileAddOnPins(
+		const FFlowReconcileExecutionPlan& ExecutionPlan,
+		const UFlowAsset* ExistingAsset)
+	{
+		// New nodes can carry generated pins as soon as their AddOn trees are attached.
+		for (const FFlowGraphParsedNode& ParsedNode : ExecutionPlan.NodesToAdd)
+		{
+			if (!ParsedNode.AddOns.IsEmpty())
+			{
+				return true;
+			}
+		}
+
+		// Existing-node updates may replace or edit the complete AddOn list.
+		for (const FFlowGraphParsedNode& ParsedNode : ExecutionPlan.NodesToUpdate)
+		{
+			if (!ParsedNode.AddOns.IsEmpty() || ParsedNode.bIsFullBlock)
+			{
+				return true;
+			}
+		}
+
+		if (ExistingAsset)
+		{
+			// Deleting a node also removes its AddOn tree and requires transactional reconstruction.
+			for (const FGuid& DeletedNodeGuid : ExecutionPlan.NodesToDelete)
+			{
+				const UFlowNode* DeletedNode = ExistingAsset->GetNode(DeletedNodeGuid);
+				if (IsValid(DeletedNode) && !DeletedNode->GetFlowNodeAddOnChildren().IsEmpty())
+				{
+					return true;
+				}
+			}
+		}
+
+		return false;
+	}
+
 	bool CompleteMutation(
 		UFlowAsset* FlowAsset,
 		FFlowMCPMutationContext& MutationContext,
@@ -248,6 +286,8 @@ FFlowMCPImportAndRegraphFlowAssetResult UFlowMCPToolset::ImportAndRegraphFlowAss
 	const FFlowMCPImportAndRegraphFlowAssetRequest& Request)
 {
 	FFlowMCPImportAndRegraphFlowAssetResult Result;
+	// Run Courier's projected-pin preflight before creating the destination package so a
+	// connection to a nonexistent generated pin cannot leave a partial imported asset behind.
 	if (Request.FlowGraphText.IsEmpty())
 	{
 		RaiseFlowGraphToolError(TEXT("FlowGraphText is required."));
@@ -304,6 +344,7 @@ FFlowMCPImportAndRegraphFlowAssetResult UFlowMCPToolset::ImportAndRegraphFlowAss
 			return Result;
 		}
 	}
+	// Reject an occupied destination before planning or opening a mutation transaction.
 	// Check loaded and saved assets of any class. An unsaved object in the current editor session
 	// must also block import at the same path.
 	UPackage* ExistingPackage = FindPackage(nullptr, *ParsedPath.GetPackageName().ToString());
@@ -322,6 +363,48 @@ FFlowMCPImportAndRegraphFlowAssetResult UFlowMCPToolset::ImportAndRegraphFlowAss
 			TEXT("AssetClass is not a resolvable FlowAsset class: %s"), *Document.AssetClass));
 		return Result;
 	}
+
+	// Plan on transient final-state nodes and reject schema errors before opening the destination.
+	TSharedPtr<FFlowReconcileExecutionPlan> ExecutionPlan = FFlowGraphReconciler::ComputeReconcilePlan(
+		Request.AssetPath, Request.FlowGraphText, Error);
+	if (!ExecutionPlan)
+	{
+		RaiseFlowGraphToolError(Error.IsEmpty()
+			? TEXT("ImportAndRegraphFlowAsset could not compute a Courier plan.")
+			: Error);
+		return Result;
+	}
+
+	bool bHasBlockingFinding = false;
+	for (const FFlowValidationFinding& Finding : ExecutionPlan->ValidationFindings)
+	{
+		Result.Findings.Add(FString::Printf(TEXT("[%s] %s"), *Finding.Code, *Finding.Message));
+		bHasBlockingFinding |= Finding.Severity == EFlowValidationSeverity::Error;
+	}
+	if (bHasBlockingFinding)
+	{
+		const FFlowValidationFinding* BlockingFinding = ExecutionPlan->ValidationFindings.FindByPredicate(
+			[](const FFlowValidationFinding& Finding)
+			{
+				return Finding.Severity == EFlowValidationSeverity::Error;
+			});
+		if (BlockingFinding)
+		{
+			RaiseFlowGraphToolError(FString::Printf(
+				TEXT("Failed to import and rebuild FlowAsset from Courier document. [%s] %s"),
+				*BlockingFinding->Code, *BlockingFinding->Message));
+		}
+		return Result;
+	}
+
+	// AddOn callbacks can mutate pin caches and editor wrappers, so their commit must own an undo scope.
+	if (DoesPlanReconcileAddOnPins(*ExecutionPlan, nullptr) &&
+		(!Request.Mutation.bUseTransaction || (GEditor && GEditor->Trans && GEditor->Trans->IsActive())))
+	{
+		Result.Findings.Add(TEXT("[UnsupportedTransaction] AddOn pin changes require bUseTransaction=true and no ambient transaction."));
+		return Result;
+	}
+
 	const bool bPackageWasDirty = ExistingPackage && ExistingPackage->IsDirty();
 	FFlowMCPMutationContext MutationContext(Request.Mutation);
 	if (!MutationContext.Begin(Error))
@@ -330,23 +413,38 @@ FFlowMCPImportAndRegraphFlowAssetResult UFlowMCPToolset::ImportAndRegraphFlowAss
 		return Result;
 	}
 
-	UFlowAsset* ImportedAsset = UFlowGraphRegrapher::ImportAndRegraphFromDocument(
-			ParsedPath.ToString(),
-			Document.AssetClass,
-			Document.bWorldBound,
-			ParsedNodes,
-			ParsedConnections);
+	// Apply the already-validated plan; abort and discard any new package if execution fails.
+	FFlowReconcileResult ReconcileResult = FFlowGraphReconciler::ExecuteReconcilePlan(
+		*ExecutionPlan, Request.AssetPath, Error);
+	if (!ReconcileResult.bSuccess)
+	{
+		MutationContext.Abort();
+		DiscardFailedImport(ParsedPath, bPackageWasDirty);
+		for (const FString& Finding : ReconcileResult.Findings)
+		{
+			Result.Findings.Add(Finding);
+		}
+		if (!Error.IsEmpty())
+		{
+			Result.Findings.Add(Error);
+		}
+		return Result;
+	}
+
+	UFlowAsset* ImportedAsset = FFlowGraphReconciler::FindOrLoadFlowAsset(Request.AssetPath);
 	if (!ImportedAsset)
 	{
-		MutationContext.CancelUnmodified();
+		MutationContext.Abort();
 		DiscardFailedImport(ParsedPath, bPackageWasDirty);
-		RaiseFlowGraphToolError(TEXT("Failed to import and rebuild FlowAsset from Courier document."));
+		RaiseFlowGraphToolError(FString::Printf(
+			TEXT("ImportAndRegraphFlowAsset created an asset that could not be resolved at '%s'."),
+			*Request.AssetPath));
 		return Result;
 	}
 
 	if (!MutationContext.PrepareAsset(ImportedAsset, Error))
 	{
-		MutationContext.CancelUnmodified();
+		MutationContext.Abort();
 		DiscardFailedImport(ParsedPath, bPackageWasDirty);
 		RaiseFlowGraphToolError(Error);
 		return Result;
@@ -368,7 +466,8 @@ FFlowMCPImportAndRegraphFlowAssetResult UFlowMCPToolset::ImportAndRegraphFlowAss
 	// Verify every requested connection against the imported runtime graph. A successful import
 	// alone does not establish that every connection was created.
 	TArray<FString> VerifiedConnections, NotLandedConnections;
-	FFlowGraphReconciler::VerifyConnectionsLanded(ImportedAsset, ParsedConnections, VerifiedConnections, NotLandedConnections);
+	FFlowGraphReconciler::VerifyConnectionsLanded(
+		ImportedAsset, ExecutionPlan->AllParsedConnections, VerifiedConnections, NotLandedConnections);
 	for (const FString& NotLandedLabel : NotLandedConnections)
 	{
 		Result.Findings.Add(FString::Printf(TEXT("Requested connection did not land: %s"), *NotLandedLabel));
@@ -418,6 +517,22 @@ namespace
 		return Result;
 	}
 
+	TArray<FFlowMCPReconcileAssetPropertyEntry> ToFlowMCPAssetPropertyEntries(
+		const TArray<FFlowReconcileAssetPropertyEntry>& Properties)
+	{
+		TArray<FFlowMCPReconcileAssetPropertyEntry> Result;
+		Result.Reserve(Properties.Num());
+		for (const FFlowReconcileAssetPropertyEntry& Property : Properties)
+		{
+			FFlowMCPReconcileAssetPropertyEntry Entry;
+			Entry.Name = Property.Name;
+			Entry.PreviousValue = Property.PreviousValue;
+			Entry.ProposedValue = Property.ProposedValue;
+			Result.Add(MoveTemp(Entry));
+		}
+		return Result;
+	}
+
 	FFlowMCPReconcilePlan ToFlowMCPReconcilePlan(const FFlowReconcilePlan& Plan)
 	{
 		FFlowMCPReconcilePlan Result;
@@ -429,6 +544,7 @@ namespace
 		Result.AddonsAdded = ToFlowMCPReconcileAddonEntries(Plan.AddOnsAdded);
 		Result.AddonsUpdated = ToFlowMCPReconcileAddonEntries(Plan.AddOnsUpdated);
 		Result.AddonsDeleted = ToFlowMCPReconcileAddonEntries(Plan.AddOnsDeleted);
+		Result.AssetPropertiesChanged = ToFlowMCPAssetPropertyEntries(Plan.AssetPropertiesChanged);
 		Result.bIsEmpty = Plan.IsEmpty();
 		return Result;
 	}
@@ -453,6 +569,7 @@ namespace
 			FlowMCPFinding.Severity = ValidationSeverityToString(Finding.Severity);
 			FlowMCPFinding.Code = Finding.Code;
 			FlowMCPFinding.Message = Finding.Message;
+			FlowMCPFinding.SourceDocumentPath = Finding.SourceDocumentPath;
 			if (Finding.NodeGuid.IsValid())
 			{
 				FlowMCPFinding.NodeGuid = Finding.NodeGuid.ToString();
@@ -1419,6 +1536,8 @@ FFlowMCPApplyFlowPatchResult UFlowMCPToolset::ApplyFlowPatch(
 	const FFlowMCPApplyFlowPatchRequest& Request)
 {
 	FFlowMCPApplyFlowPatchResult Result;
+	// Planning and commit share one projected AddOn pin schema so generated endpoints are
+	// accepted or rejected consistently before any live asset, package, or transaction is changed.
 	if (Request.MutationText.IsEmpty())
 	{
 		RaiseFlowGraphToolError(TEXT("MutationText cannot be empty."));
@@ -1440,6 +1559,7 @@ FFlowMCPApplyFlowPatchResult UFlowMCPToolset::ApplyFlowPatch(
 	Result.AssetPath = Request.TargetAssetPath;
 	Result.Mutation.bDryRun = Request.Mutation.bDryRun;
 
+	// Preflight resolves identities, AddOn property changes, generated pins, and connection types.
 	FString ComputeError;
 	TSharedPtr<FFlowReconcileExecutionPlan> ExecutionPlan = FFlowGraphReconciler::ComputeReconcilePlan(Request.TargetAssetPath, Request.MutationText, ComputeError);
 	if (!ExecutionPlan)
@@ -1452,6 +1572,7 @@ FFlowMCPApplyFlowPatchResult UFlowMCPToolset::ApplyFlowPatch(
 	FString ExecuteError;
 	if (Request.Mutation.bDryRun)
 	{
+		// Report the immutable plan directly; dry-run never opens a transaction or loads for mutation.
 		// Dry runs only compute the plan; the asset is never loaded for mutation, so there is
 		// nothing for FFlowMCPMutationContext to check out, transact, or roll back.
 		ReconcileResult.Plan = ExecutionPlan->Plan;
@@ -1462,9 +1583,41 @@ FFlowMCPApplyFlowPatchResult UFlowMCPToolset::ApplyFlowPatch(
 		ReconcileResult.InputSizeBytes = ExecutionPlan->InputSizeBytes;
 		ReconcileResult.bSuccess = FFlowGraphValidation::HasNoErrors(ReconcileResult.ValidationFindings);
 	}
+	else if (!ExecutionPlan->bIsNewAsset && ExecutionPlan->Plan.IsEmpty())
+	{
+		// A verified no-op must not check out, transact, notify, or save the existing asset.
+		ReconcileResult.Plan = ExecutionPlan->Plan;
+		ReconcileResult.AliasMap = ExecutionPlan->AliasMap;
+		ReconcileResult.ValidationFindings = ExecutionPlan->ValidationFindings;
+		ReconcileResult.NodesTouched = ExecutionPlan->NodesTouched;
+		ReconcileResult.NodesPreserved = ExecutionPlan->NodesPreserved;
+		ReconcileResult.InputSizeBytes = ExecutionPlan->InputSizeBytes;
+		ReconcileResult.bSuccess = FFlowGraphValidation::HasNoErrors(ReconcileResult.ValidationFindings);
+	}
+	else if (DoesPlanReconcileAddOnPins(
+		*ExecutionPlan,
+		FFlowGraphReconciler::FindOrLoadFlowAsset(Request.TargetAssetPath)) &&
+		(!Request.Mutation.bUseTransaction || (GEditor && GEditor->Trans && GEditor->Trans->IsActive())))
+	{
+		// Reject an externally owned or disabled transaction before changing live AddOn state.
+		ReconcileResult.Plan = ExecutionPlan->Plan;
+		ReconcileResult.AliasMap = ExecutionPlan->AliasMap;
+		ReconcileResult.ValidationFindings = ExecutionPlan->ValidationFindings;
+		ReconcileResult.NodesTouched = ExecutionPlan->NodesTouched;
+		ReconcileResult.NodesPreserved = ExecutionPlan->NodesPreserved;
+		ReconcileResult.InputSizeBytes = ExecutionPlan->InputSizeBytes;
+
+		FFlowValidationFinding& Finding = ReconcileResult.ValidationFindings.AddDefaulted_GetRef();
+		Finding.Severity = EFlowValidationSeverity::Error;
+		Finding.Code = TEXT("UnsupportedTransaction");
+		Finding.Message = TEXT("AddOn pin changes require bUseTransaction=true and no ambient transaction.");
+	}
 	else
 	{
+		// Open the mutation scope, apply the exact preflight plan, and restore package state on failure.
 		UFlowAsset* FlowAsset = LoadFlowAssetOrNull(Request.TargetAssetPath);
+		UPackage* const ExistingPackage = FlowAsset ? FlowAsset->GetOutermost() : nullptr;
+		const bool bPackageWasDirty = ExistingPackage && ExistingPackage->IsDirty();
 		FFlowMCPMutationContext MutationContext(Request.Mutation);
 		const bool bHasExistingAsset = (FlowAsset != nullptr);
 
@@ -1521,12 +1674,38 @@ FFlowMCPApplyFlowPatchResult UFlowMCPToolset::ApplyFlowPatch(
 		{
 			if (!CompleteMutation(FlowAsset, MutationContext, Result.Mutation))
 			{
+				if (bHasExistingAsset && ExistingPackage)
+				{
+					ExistingPackage->SetDirtyFlag(bPackageWasDirty);
+				}
+				else
+				{
+					FTopLevelAssetPath ParsedTargetPath;
+					FString PathError;
+					if (ParseAssetPath(Request.TargetAssetPath, ParsedTargetPath, PathError))
+					{
+						DiscardFailedImport(ParsedTargetPath, false);
+					}
+				}
 				return Result;
 			}
 		}
 		else
 		{
 			MutationContext.Abort();
+			if (bHasExistingAsset && ExistingPackage)
+			{
+				ExistingPackage->SetDirtyFlag(bPackageWasDirty);
+			}
+			else
+			{
+				FTopLevelAssetPath ParsedTargetPath;
+				FString PathError;
+				if (ParseAssetPath(Request.TargetAssetPath, ParsedTargetPath, PathError))
+				{
+					DiscardFailedImport(ParsedTargetPath, false);
+				}
+			}
 		}
 	}
 
@@ -1849,6 +2028,8 @@ FFlowMCPDescribeCourierGrammarResult UFlowMCPToolset::DescribeCourierGrammar(
 		TEXT("Full class path. Required when creating an asset; on an existing asset it must match, or it is an error.")));
 	Result.DocumentFields.Add(MakeCourierField(TEXT("bWorldBound"), EFlowMCPCourierFieldLegality::Optional, FString()));
 	Result.DocumentFields.Add(MakeCourierField(TEXT("expectedOwnerClass"), EFlowMCPCourierFieldLegality::Optional, FString()));
+	Result.DocumentFields.Add(MakeCourierField(TEXT("assetProperties"), EFlowMCPCourierFieldLegality::Optional,
+		TEXT("Optional merge of registered asset-level properties. Omitted values are preserved in both modes; initially only Encounter BlackboardAsset accepts a full object path or \"None\".")));
 	Result.DocumentFields.Add(MakeCourierField(TEXT("scopeNodeGuids"), EFlowMCPCourierFieldLegality::Optional,
 		TEXT("Patch mode only: nodes this document is authoritative over. A listed node with no corresponding UpsertNode op is deleted. Illegal (ScopeWithFullMode) in Full mode, where the whole document is already authoritative.")));
 	Result.DocumentFields.Add(MakeCourierField(TEXT("ops"), EFlowMCPCourierFieldLegality::Required, FString()));

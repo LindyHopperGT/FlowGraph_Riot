@@ -13,6 +13,8 @@
 #include "ActorSpawning/FlowActorSpawningAssistant.h"
 #include "ActorSpawning/FlowActorSpawningSubsystem.h"
 #include "FlowSettings.h"
+#include "FlowAsset.h"
+#include "UObject/StrongObjectPtr.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(FlowActorSpawningTestTypes)
 
@@ -73,6 +75,30 @@ namespace FlowActorSpawningTests
 			FFlowActorSpawningAssistant::FinishPass(Context);
 		}
 	};
+
+	struct FFailingPassProbe : FFinishPassProbe
+	{
+		int32 ChoiceCount = 0;
+		int32 FinishCount = 0;
+		bool bRejectSecondRecord = false;
+
+		virtual TSubclassOf<AActor> ChooseActorClass(FFlowActorSpawningPassContext& Context,
+			int32 RecordIndex) override
+		{
+			++ChoiceCount;
+			return !bRejectSecondRecord && RecordIndex == 1 ? nullptr : AActor::StaticClass();
+		}
+
+		virtual void FinishPass(FFlowActorSpawningPassContext& Context) override
+		{
+			++FinishCount;
+			FFinishPassProbe::FinishPass(Context);
+			if (bRejectSecondRecord && Context.RecordsToSubmit.IsValidIndex(1))
+			{
+				Context.RecordsToSubmit[1]->CleanupRuntime();
+			}
+		}
+	};
 }
 
 BEGIN_DEFINE_SPEC(
@@ -84,6 +110,130 @@ END_DEFINE_SPEC(FFlowActorSpawningSpec)
 void FFlowActorSpawningSpec::Define()
 {
 	using namespace FlowActorSpawningTests;
+
+	It("completes an empty fight through the existing outputs for every completion rule", [this]
+	{
+		for (const EFlowFightActorCompletionRule Rule : {
+			EFlowFightActorCompletionRule::AllActorsDefeatedWithNoReinforcementsScheduled,
+			EFlowFightActorCompletionRule::AllActorsDefeatedAndReinforcementsExhausted,
+			EFlowFightActorCompletionRule::WhenDefeatAndDisableAutoReinforceIsTriggered})
+		{
+			UFlowFightActorsTestNode* Node = NewObject<UFlowFightActorsTestNode>();
+			Node->SetCompletionRuleForTest(Rule);
+			Node->StartForTest();
+
+			TestTrue(TEXT("Spawning complete precedes all actors defeated"), Node->Outputs == TArray<FName>{
+				UFlowNode_SpawnActorsBase::OUTPIN_AllSpawnsCompleted.PinName,
+				UFlowNode_FightActorsBase::OUTPIN_AllActorsDefeated});
+			TestEqual(TEXT("Synchronous Flow cleanup resets the fight"),
+				Node->GetFightStateForTest(), EFlowFightActorState::Invalid);
+		}
+	});
+
+	It("keeps deliberate NoSpawning fights available for later reinforcement", [this]
+	{
+		UFlowFightActorsTestNode* Node = NewObject<UFlowFightActorsTestNode>();
+		Node->SetInitialMethodForTest(EFlowFightActorSpawnMethod::NoSpawning);
+		Node->StartForTest();
+		TestTrue(TEXT("No premature completion output"), Node->Outputs.IsEmpty());
+		TestEqual(TEXT("Fight waits for authored commands"),
+			Node->GetFightStateForTest(), EFlowFightActorState::Executing);
+		Node->Cleanup();
+	});
+
+	It("does not hide a failing cohort behind another cohort's accepted count", [this]
+	{
+		TStrongObjectPtr<UFlowAsset> TemplateAsset(NewObject<UFlowAsset>());
+		TStrongObjectPtr<UFlowAsset> InstanceAsset(NewObject<UFlowAsset>());
+		InstanceAsset->InitializeInstance(nullptr, *TemplateAsset);
+		UFlowFightActorsTestNode* Node = NewObject<UFlowFightActorsTestNode>(InstanceAsset.Get());
+		UFlowFightActorsTestCohort* First = NewObject<UFlowFightActorsTestCohort>(Node);
+		UFlowFightActorsTestCohort* Failed = NewObject<UFlowFightActorsTestCohort>(Node);
+		UFlowFightActorsTestCohort* Last = NewObject<UFlowFightActorsTestCohort>(Node);
+		First->QueuedCount = 3;
+		Failed->QueuedCount = INDEX_NONE;
+		Node->GetFlowNodeAddOnChildrenByEditor() = {First, Failed, Last};
+		Node->EnsureAddOnFlowNodePointersForEditor();
+		AddExpectedError(TEXT("Fight spawning could not finish its pass"), EAutomationExpectedErrorFlags::Contains, 1);
+		Node->StartForTest();
+		TestEqual(TEXT("Later cohorts are not scheduled"), Last->ExecuteCount, 0);
+		TestEqual(TEXT("Partial work is released"), First->PendingCount, 0);
+		TestTrue(TEXT("First cohort cleaned up"), First->CleanupCount > 0);
+		TestTrue(TEXT("Existing completion outputs"), Node->Outputs == TArray<FName>{
+			UFlowNode_SpawnActorsBase::OUTPIN_AllSpawnsCompleted.PinName,
+			UFlowNode_FightActorsBase::OUTPIN_AllActorsDefeated});
+	});
+
+	It("does not complete a no-work refill while cohort actors are still alive", [this]
+	{
+		UFlowFightActorsTestNode* Node = NewObject<UFlowFightActorsTestNode>();
+		Node->SetInitialMethodForTest(EFlowFightActorSpawnMethod::NoSpawning);
+		UFlowFightActorsTestCohort* Cohort = NewObject<UFlowFightActorsTestCohort>(Node);
+		Cohort->AliveCount = 2;
+		Node->GetFlowNodeAddOnChildrenByEditor().Add(Cohort);
+		Node->EnsureAddOnFlowNodePointersForEditor();
+		Node->StartForTest();
+		TestEqual(TEXT("Refill has no missing actors"),
+			Node->ExecuteReinforcementPass(EFlowFightActorSpawnMethod::RefillSpawnAllCohorts, false), 0);
+		TestTrue(TEXT("Live fight remains active"), Node->Outputs.IsEmpty());
+		Node->Cleanup();
+	});
+
+	It("aborts a strict pass before submission when class selection fails", [this]
+	{
+		FFixture Fixture;
+		FInstancedStruct Selector;
+		Selector.InitializeAs<FFlowActorSpawnTestSelector>();
+		UFlowDefaultActorSpawnRecord* Template = NewObject<UFlowDefaultActorSpawnRecord>(Fixture.Owner);
+		const FFlowActorSpawningPassConfig Config{*Fixture.Owner, Selector, *Template, Fixture.Owner->Records,
+			EFlowActorSpawnQueueMode::Staggered, EFlowActorSpawningMethod::FullSpawn, true, true};
+
+		FFailingPassProbe Assistant;
+		const FFlowActorSpawningPassResult Result = Assistant.TryExecuteSpawningPass(Config);
+		TestEqual(TEXT("Failure remains a sentinel"), Result.NumQueued, INDEX_NONE);
+		TestEqual(TEXT("Stops choosing after the failed candidate"), Assistant.ChoiceCount, 2);
+		TestEqual(TEXT("Selector finish is paired"), Assistant.FinishCount, 1);
+		TestFalse(TEXT("No partial submission"), Fixture.Scheduler->HasOutstandingSpawns(Fixture.Owner));
+
+		for (UFlowActorSpawnRecord* Record : Fixture.Owner->Records)
+		{
+			Record->CleanupRuntime();
+		}
+	});
+
+	It("reports a queue rejection after partial acceptance and preserves later record indices", [this]
+	{
+		FFixture Fixture;
+		FInstancedStruct Selector;
+		Selector.InitializeAs<FFlowActorSpawnTestSelector>();
+		UFlowDefaultActorSpawnRecord* Template = NewObject<UFlowDefaultActorSpawnRecord>(Fixture.Owner);
+		const FFlowActorSpawningPassConfig Config{*Fixture.Owner, Selector, *Template, Fixture.Owner->Records,
+			EFlowActorSpawnQueueMode::Staggered, EFlowActorSpawningMethod::FullSpawn, true, true};
+
+		FFailingPassProbe Assistant;
+		Assistant.bRejectSecondRecord = true;
+		const FFlowActorSpawningPassResult Result = Assistant.TryExecuteSpawningPass(Config);
+		TestEqual(TEXT("Accepted records cannot hide rejection"), Result.NumQueued, INDEX_NONE);
+		TestEqual(TEXT("Later configured slot is retained for cleanup"), Fixture.Owner->Records.Num(), 3);
+		if (Fixture.Owner->Records.Num() != 3)
+		{
+			return;
+		}
+
+		TestNull(TEXT("Rejected middle slot is not compacted"), Fixture.Owner->Records[1].Get());
+		TestTrue(TEXT("First record was accepted before rejection"), Fixture.Owner->Records[0]->IsQueuedToSpawn());
+		TestFalse(TEXT("Later record was not submitted"), Fixture.Owner->Records[2]->IsQueuedToSpawn());
+		for (UFlowActorSpawnRecord* Record : Fixture.Owner->Records)
+		{
+			if (IsValid(Record))
+			{
+				Record->CleanupRuntime();
+			}
+		}
+
+		Fixture.Scheduler->Tick(0.0f);
+		TestEqual(TEXT("Cancelled partial pass produces no spawn callbacks"), Fixture.Owner->FinishedCount, 0);
+	});
 
 	It("queues a vanilla deferred actor without running callbacks until tick", [this]
 	{

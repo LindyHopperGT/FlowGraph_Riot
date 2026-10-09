@@ -77,7 +77,12 @@ void UFlowNode_FightActorsBase::StartSpawningPass()
 	SetFightState(EFlowFightActorState::Executing);
 
 	const int32 NumQueued = ExecuteFightPass(InitialSpawnMethod, false, true);
-	if (NumQueued >= 0 && ShouldCheckCompletionAfterPass(NumQueued > 0))
+	if (CompleteFightIfSpawnPassFailedOrEmpty(NumQueued, InitialSpawnMethod, true))
+	{
+		return;
+	}
+
+	if (ShouldCheckCompletionAfterPass(NumQueued > 0))
 	{
 		ReevaluateFightCompletion();
 	}
@@ -86,12 +91,44 @@ void UFlowNode_FightActorsBase::StartSpawningPass()
 int32 UFlowNode_FightActorsBase::ExecuteReinforcementPass(EFlowFightActorSpawnMethod Method, bool bShuffleCohorts)
 {
 	FLOW_ASSERT_ENUM_MAX(EFlowFightActorState, 4);
-	if (FightState == EFlowFightActorState::Invalid)
+	if (FightState == EFlowFightActorState::Invalid || FightState == EFlowFightActorState::Complete)
 	{
 		return 0;
 	}
 
-	return ExecuteFightPass(Method, bShuffleCohorts, false);
+	const int32 NumQueued = ExecuteFightPass(Method, bShuffleCohorts, false);
+	CompleteFightIfSpawnPassFailedOrEmpty(NumQueued, Method, false);
+
+	return NumQueued;
+}
+
+bool UFlowNode_FightActorsBase::CompleteFightIfSpawnPassFailedOrEmpty(
+	int32 NumQueued, EFlowFightActorSpawnMethod Method, bool bIsInitialPass)
+{
+	if (NumQueued < 0)
+	{
+		const TCHAR* FailureMessage = bIsInitialPass
+			? TEXT("Fight spawning could not finish its pass. Remaining records are cancelled and the fight completes. ")
+				TEXT("Check cohort selectors and spawn-record configuration.")
+			: TEXT("Fight reinforcement could not finish its pass. Remaining records are cancelled and the fight completes. ")
+				TEXT("Check cohort selectors and spawn-record configuration.");
+		LogWarning(FailureMessage);
+
+		CompleteFightWithoutSpawning();
+
+		return true;
+	}
+
+	if (NumQueued == 0
+		&& EFlowFightActorSpawnMethod_Classifiers::IsAnySpawnMethod(Method)
+		&& GetFightActorCounts().GetAliveAndPendingCount() == 0)
+	{
+		CompleteFightWithoutSpawning();
+
+		return true;
+	}
+
+	return false;
 }
 
 int32 UFlowNode_FightActorsBase::ExecuteFightPass(
@@ -136,6 +173,12 @@ int32 UFlowNode_FightActorsBase::ExecuteFightPass(
 			IFlowFightActorsCohort* Cohort = Cast<IFlowFightActorsCohort>(AddOn);
 
 			const int32 CohortQueued = Cohort->ExecuteSpawningPass(Method, *Assistant, bIsInitialPass);
+
+			if (CohortQueued < 0)
+			{
+				return INDEX_NONE;
+			}
+
 			NumQueued += CohortQueued;
 
 			if (CohortQueued > 0 &&
@@ -147,6 +190,32 @@ int32 UFlowNode_FightActorsBase::ExecuteFightPass(
 		}
 	}
 	return NumQueued;
+}
+
+void UFlowNode_FightActorsBase::CompleteFightWithoutSpawning()
+{
+	FLOW_ASSERT_ENUM_MAX(EFlowFightActorState, 4);
+	if (FightState == EFlowFightActorState::Invalid || FightState == EFlowFightActorState::Complete)
+	{
+		return;
+	}
+
+	{
+		// AbortReinforcement and record cleanup can call back into completion; finish only after both settle.
+		TGuardValue<bool> CleanupGuard(bCleaningUpFight, true);
+		if (UFlowNodeAddOn_ReinforcementBase* Reinforcement = FindReinforcement())
+		{
+			Reinforcement->AbortReinforcement(true);
+		}
+
+		CleanupActorRecords();
+	}
+
+	TriggerOutput(OUTPIN_AllSpawnsCompleted.PinName, false);
+	if (FightState != EFlowFightActorState::Invalid && FightState != EFlowFightActorState::Complete)
+	{
+		SetFightState(EFlowFightActorState::Complete);
+	}
 }
 
 void UFlowNode_FightActorsBase::DefeatAllSpawnedActors()

@@ -106,7 +106,6 @@ void UFlowNode_SubGraph::Cleanup()
 		const bool bRemoveInstanceOnCleanup = SubFlow && SubFlow->GetSubGraphFinishPolicy() == ESubGraphFinishPolicy::Deinitialize;
 		FlowSubsystem->FinishSubFlow(this, EFlowFinishPolicy::Keep, bRemoveInstanceOnCleanup);
 	}
-	}
 
 	Super::Cleanup();
 }
@@ -118,6 +117,7 @@ void UFlowNode_SubGraph::DeinitializeInstance()
 	{
 		FlowSubsystem->FinishSubFlow(this, EFlowFinishPolicy::Keep, true);
 	}
+
 	Super::DeinitializeInstance();
 }
 

@@ -4,10 +4,12 @@
 #include "FlowGraphExporter.h"
 #include "FlowGraphReconciler.h"
 #include "FlowGraphRegrapher.h"
+#include "FlowGraphCourierTestAddOns.h"
 #include "FlowCourierConverter.h"
 #include "FlowCourierDocument.h"
 #include "FlowAsset.h"
 #include "Nodes/FlowNode.h"
+#include "Nodes/Graph/FlowNode_Start.h"
 #include "Nodes/Graph/FlowNode_CustomInput.h"
 #include "Nodes/Graph/FlowNode_CustomOutput.h"
 #include "AddOns/FlowNodeAddOn.h"
@@ -16,6 +18,8 @@
 #include "Graph/Nodes/FlowGraphNode.h"
 #include "Misc/AutomationTest.h"
 #include "Editor.h"
+#include "GameFramework/Actor.h"
+#include "Misc/PackageName.h"
 
 #include "Nodes/Actor/FlowNode_ExecuteComponent.h"
 #include "Components/BillboardComponent.h"
@@ -1089,6 +1093,396 @@ void FFlowGraphImporterSpec::Define()
 							AddOns[0]->IsA(UFlowNodeAddOn_SwitchCase::StaticClass()));
 					}
 				}
+			});
+
+			// A constructor-cached fixture proves preview accepts generated outputs on a new graph.
+			It("previews and connects cached AddOn pins on a fresh import", [this]()
+			{
+				const FString AssetPath = TEXT("/Game/Test/TestCachedAddOnPinFreshImport");
+				const FString AddOnClassPath = UFlowGraphCourierTestCachedPinAddOn::StaticClass()->GetPathName();
+				const FString Document = FString::Printf(TEXT(
+					"{\"formatVersion\":2,\"mode\":\"Full\",\"bWorldBound\":false,\"ops\":["
+					"{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000001\",\"type\":\"/Script/Flow.FlowNode_Start\"},"
+					"{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000002\",\"type\":\"/Script/Flow.FlowNode_Finish\"},"
+					"{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000003\",\"type\":\"/Script/Flow.FlowNode_Finish\"},"
+					"{\"kind\":\"UpsertAddon\",\"newAlias\":\"thresholds\",\"parentGuid\":\"00000000-0000-0000-0000-000000000001\","
+					"\"type\":\"%s\",\"properties\":{\"Thresholds\":\"(20,40)\"}},"
+					"{\"kind\":\"AddConnection\",\"source\":{\"nodeGuid\":\"00000000-0000-0000-0000-000000000001\",\"pin\":\"th20\"},"
+					"\"target\":{\"nodeGuid\":\"00000000-0000-0000-0000-000000000002\",\"pin\":\"In\"}},"
+					"{\"kind\":\"AddConnection\",\"source\":{\"nodeGuid\":\"00000000-0000-0000-0000-000000000001\",\"pin\":\"th40\"},"
+					"\"target\":{\"nodeGuid\":\"00000000-0000-0000-0000-000000000003\",\"pin\":\"In\"}}]}"),
+					*AddOnClassPath);
+
+				const FString PackageName = FPackageName::ObjectPathToPackageName(AssetPath);
+				TestNull("Dry-run target package should not exist before planning", FindPackage(nullptr, *PackageName));
+
+				FString PlanError;
+				TSharedPtr<FFlowReconcileExecutionPlan> Plan =
+					FFlowGraphReconciler::ComputeReconcilePlan(AssetPath, Document, PlanError);
+				TestNotNull("Dry-run should build an execution plan", Plan.Get());
+				if (!Plan)
+				{
+					AddError(FString::Printf(TEXT("Planning failed: %s"), *PlanError));
+					return;
+				}
+				TestTrue("Dry-run should accept connections to the generated threshold pins",
+					FFlowGraphValidation::HasNoErrors(Plan->ValidationFindings));
+				TestNull("Dry-run should leave the target package uncreated", FindPackage(nullptr, *PackageName));
+
+				const FString InvalidDocument = Document.Replace(
+					TEXT("\"pin\":\"th40\""), TEXT("\"pin\":\"th99\""), ESearchCase::CaseSensitive);
+				TSharedPtr<FFlowReconcileExecutionPlan> InvalidPlan =
+					FFlowGraphReconciler::ComputeReconcilePlan(AssetPath, InvalidDocument, PlanError);
+				TestNotNull("Invalid dry-run should still return its findings", InvalidPlan.Get());
+				if (InvalidPlan)
+				{
+					TestTrue("Dry-run should reject an unknown generated pin",
+						InvalidPlan->ValidationFindings.ContainsByPredicate([](const FFlowValidationFinding& Finding)
+						{
+							return Finding.Severity == EFlowValidationSeverity::Error && Finding.Code == TEXT("PinNotFound");
+						}));
+				}
+				TestNull("Invalid dry-run should leave the target package uncreated", FindPackage(nullptr, *PackageName));
+
+				FString ExecuteError;
+				const FFlowReconcileResult Result = FFlowGraphReconciler::ExecuteReconcilePlan(*Plan, AssetPath, ExecuteError);
+				TestTrue("Fresh import should apply", Result.bSuccess);
+				if (!Result.bSuccess)
+				{
+					AddError(FString::Printf(TEXT("Import failed: %s"), *ExecuteError));
+					return;
+				}
+
+				TestFlowAsset = FFlowGraphReconciler::FindOrLoadFlowAsset(AssetPath);
+				FGuid StartGuid;
+				FGuid FinishGuid20;
+				FGuid FinishGuid40;
+				FGuid::Parse(TEXT("00000000-0000-0000-0000-000000000001"), StartGuid);
+				FGuid::Parse(TEXT("00000000-0000-0000-0000-000000000002"), FinishGuid20);
+				FGuid::Parse(TEXT("00000000-0000-0000-0000-000000000003"), FinishGuid40);
+				UFlowNode* const StartNode = TestFlowAsset ? TestFlowAsset->GetNode(StartGuid) : nullptr;
+				TestNotNull("Imported start node should exist", StartNode);
+				if (!StartNode)
+				{
+					return;
+				}
+
+				const TArray<FFlowPin> ContextOutputs = StartNode->GetContextOutputs();
+				for (const FName PinName : {FName(TEXT("th20")), FName(TEXT("th40"))})
+				{
+					const FFlowPin* Pin = ContextOutputs.FindByPredicate([PinName](const FFlowPin& Candidate)
+					{
+						return Candidate.PinName == PinName;
+					});
+					TestNotNull(FString::Printf(TEXT("AddOn context should expose %s"), *PinName.ToString()), Pin);
+					if (Pin)
+					{
+						TestTrue(FString::Printf(TEXT("%s should be an exec pin"), *PinName.ToString()), Pin->IsExecPin());
+					}
+				}
+				TestEqual("th20 should connect to its requested target", StartNode->GetConnection(TEXT("th20")).NodeGuid, FinishGuid20);
+				TestEqual("th40 should connect to its requested target", StartNode->GetConnection(TEXT("th40")).NodeGuid, FinishGuid40);
+			});
+
+			// Dotted struct/array writes share one callback-visible member and must project final pins.
+			It("notifies cached AddOn pins for dotted paths after all sibling writes", [this]()
+			{
+				// Build a minimal existing graph so the patch exercises live-asset planning, not only new imports.
+				const FString AssetPath = FString::Printf(TEXT("/Game/Test/TestDottedCachedAddOn_%s"),
+					*FGuid::NewGuid().ToString(EGuidFormats::Digits));
+				const FString AddOnClassPath = UFlowGraphCourierTestCachedPinAddOn::StaticClass()->GetPathName();
+				const FString InitialDocument = FString::Printf(TEXT(
+					"{\"formatVersion\":2,\"mode\":\"Full\",\"assetClass\":\"/Script/Flow.FlowAsset\",\"bWorldBound\":true,\"ops\":["
+					"{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000001\",\"type\":\"/Script/Flow.FlowNode_Start\"},"
+					"{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000002\",\"type\":\"/Script/Flow.FlowNode_Finish\"},"
+					"{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000003\",\"type\":\"/Script/Flow.FlowNode_Finish\"},"
+					"{\"kind\":\"UpsertAddon\",\"newAlias\":\"settings\",\"parentGuid\":\"00000000-0000-0000-0000-000000000001\",\"type\":\"%s\"}]}"),
+					*AddOnClassPath);
+
+				FString PlanError;
+				TSharedPtr<FFlowReconcileExecutionPlan> InitialPlan =
+					FFlowGraphReconciler::ComputeReconcilePlan(AssetPath, InitialDocument, PlanError);
+				TestNotNull("Initial fixture should produce a plan", InitialPlan.Get());
+				if (!InitialPlan)
+				{
+					AddError(FString::Printf(TEXT("Initial planning failed: %s"), *PlanError));
+					return;
+				}
+
+				FFlowReconcileResult InitialResult =
+					FFlowGraphReconciler::ExecuteReconcilePlan(*InitialPlan, AssetPath, PlanError);
+				TestTrue("Initial fixture should import", InitialResult.bSuccess);
+				if (!InitialResult.bSuccess)
+				{
+					AddError(FString::Printf(TEXT("Initial import failed: %s"), *PlanError));
+					return;
+				}
+
+				TestFlowAsset = FFlowGraphReconciler::FindOrLoadFlowAsset(AssetPath);
+				FGuid StartGuid;
+				FGuid FinishGuid20;
+				FGuid FinishGuid40;
+				FGuid::Parse(TEXT("00000000-0000-0000-0000-000000000001"), StartGuid);
+				FGuid::Parse(TEXT("00000000-0000-0000-0000-000000000002"), FinishGuid20);
+				FGuid::Parse(TEXT("00000000-0000-0000-0000-000000000003"), FinishGuid40);
+				UFlowNode* const StartNode = TestFlowAsset ? TestFlowAsset->GetNode(StartGuid) : nullptr;
+				if (!TestNotNull("Fixture start node should exist", StartNode) || !TestFlowAsset)
+				{
+					return;
+				}
+				UFlowGraphCourierTestCachedPinAddOn* const AddOn = StartNode->GetFlowNodeAddOnChildren().IsEmpty()
+					? nullptr
+					: Cast<UFlowGraphCourierTestCachedPinAddOn>(StartNode->GetFlowNodeAddOnChildren()[0]);
+				if (!TestNotNull("Fixture cached-pin AddOn should exist", AddOn))
+				{
+					return;
+				}
+
+				// Replace nested values and offset together, then connect to pins produced from their final state.
+				const FString PatchDocument = FString::Printf(TEXT(
+					"{\"formatVersion\":2,\"mode\":\"Patch\",\"assetClass\":\"/Script/Flow.FlowAsset\",\"bWorldBound\":true,\"ops\":["
+					"{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000001\",\"type\":\"/Script/Flow.FlowNode_Start\"},"
+					"{\"kind\":\"UpsertAddon\",\"guid\":\"%s\",\"parentGuid\":\"00000000-0000-0000-0000-000000000001\",\"type\":\"%s\","
+					"\"properties\":{\"Settings.Values\":\"(40,20,20)\",\"Settings.Offset\":\"100\"}},"
+					"{\"kind\":\"AddConnection\",\"source\":{\"nodeGuid\":\"00000000-0000-0000-0000-000000000001\",\"pin\":\"cfg120\"},"
+					"\"target\":{\"nodeGuid\":\"00000000-0000-0000-0000-000000000002\",\"pin\":\"In\"}},"
+					"{\"kind\":\"AddConnection\",\"source\":{\"nodeGuid\":\"00000000-0000-0000-0000-000000000001\",\"pin\":\"cfg140\"},"
+					"\"target\":{\"nodeGuid\":\"00000000-0000-0000-0000-000000000003\",\"pin\":\"In\"}}]}"),
+					*AddOn->GetGuid().ToString(EGuidFormats::DigitsWithHyphensLower), *AddOnClassPath);
+
+				// Snapshot live and class-default pins before preview to detect any planning side effect.
+				TArray<FName> AddOnOutputsBefore;
+				for (const FFlowPin& Pin : AddOn->GetContextOutputs())
+				{
+					AddOnOutputsBefore.Add(Pin.PinName);
+				}
+				const UFlowGraphCourierTestCachedPinAddOn* const AddOnClassDefault =
+					GetDefault<UFlowGraphCourierTestCachedPinAddOn>();
+				TArray<FName> ClassDefaultOutputsBefore;
+				for (const FFlowPin& Pin : AddOnClassDefault->GetContextOutputs())
+				{
+					ClassDefaultOutputsBefore.Add(Pin.PinName);
+				}
+				// Valid and invalid dry-runs must preserve authored objects and package state.
+				TestFlowAsset->GetPackage()->SetDirtyFlag(false);
+				TSharedPtr<FFlowReconcileExecutionPlan> Plan =
+					FFlowGraphReconciler::ComputeReconcilePlan(AssetPath, PatchDocument, PlanError);
+				TestNotNull("Dotted-path patch dry-run should produce a plan", Plan.Get());
+				if (!Plan)
+				{
+					AddError(FString::Printf(TEXT("Patch planning failed: %s"), *PlanError));
+					return;
+				}
+				TestTrue("Dry-run should accept pins generated from multiple dotted writes",
+					FFlowGraphValidation::HasNoErrors(Plan->ValidationFindings));
+				TestTrue("Dry-run should leave the package clean", !TestFlowAsset->GetPackage()->IsDirty());
+				TestTrue("Dry-run should not apply nested property writes", AddOn->Settings.Values.IsEmpty());
+				TestEqual("Dry-run should not apply the nested offset", AddOn->Settings.Offset, 0);
+				TArray<FName> AddOnOutputsAfterPreview;
+				for (const FFlowPin& Pin : AddOn->GetContextOutputs())
+				{
+					AddOnOutputsAfterPreview.Add(Pin.PinName);
+				}
+				TestEqual("Dry-run should leave AddOn cached pins unchanged", AddOnOutputsAfterPreview, AddOnOutputsBefore);
+				TArray<FName> ClassDefaultOutputsAfterPreview;
+				for (const FFlowPin& Pin : AddOnClassDefault->GetContextOutputs())
+				{
+					ClassDefaultOutputsAfterPreview.Add(Pin.PinName);
+				}
+				TestEqual("Dry-run should not mutate cached pins on the AddOn class default",
+					ClassDefaultOutputsAfterPreview, ClassDefaultOutputsBefore);
+
+				const FString InvalidPatchDocument = PatchDocument.Replace(
+					TEXT("cfg140"), TEXT("cfg125"), ESearchCase::CaseSensitive);
+				TSharedPtr<FFlowReconcileExecutionPlan> InvalidPlan =
+					FFlowGraphReconciler::ComputeReconcilePlan(AssetPath, InvalidPatchDocument, PlanError);
+				TestNotNull("Invalid dotted-path dry-run should produce findings", InvalidPlan.Get());
+				if (InvalidPlan)
+				{
+					TestTrue("Dry-run should reject a nonexistent projected pin",
+						InvalidPlan->ValidationFindings.ContainsByPredicate([](const FFlowValidationFinding& Finding)
+						{
+							return Finding.Code == TEXT("PinNotFound") && Finding.Severity == EFlowValidationSeverity::Error;
+						}));
+				}
+				TestTrue("Invalid dry-run should leave the package clean", !TestFlowAsset->GetPackage()->IsDirty());
+				TestTrue("Invalid dry-run should leave nested properties unchanged", AddOn->Settings.Values.IsEmpty());
+
+				// Commit the already-planned document and verify both runtime and editor sides immediately.
+				FFlowReconcileResult Result = FFlowGraphReconciler::ExecuteReconcilePlan(*Plan, AssetPath, PlanError);
+				TestTrue("Patch should apply using the projected dotted-path schema", Result.bSuccess);
+				if (!Result.bSuccess)
+				{
+					AddError(FString::Printf(TEXT("Patch failed: %s"), *PlanError));
+					return;
+				}
+
+				TestEqual("Callback should normalize nested values after all writes", AddOn->Settings.Values, TArray<int32>({20, 40}));
+				TestEqual("Callback should retain the final nested offset", AddOn->Settings.Offset, 100);
+				const TArray<FFlowPin> ContextOutputs = AddOn->GetContextOutputs();
+				for (const FName PinName : {FName(TEXT("cfg120")), FName(TEXT("cfg140"))})
+				{
+					TestTrue(FString::Printf(TEXT("AddOn should expose %s"), *PinName.ToString()),
+						ContextOutputs.ContainsByPredicate([PinName](const FFlowPin& Pin)
+						{
+							return Pin.PinName == PinName && Pin.IsExecPin();
+						}));
+				}
+				TestEqual("cfg120 connection should be installed", StartNode->GetConnection(TEXT("cfg120")).NodeGuid, FinishGuid20);
+				TestEqual("cfg140 connection should be installed", StartNode->GetConnection(TEXT("cfg140")).NodeGuid, FinishGuid40);
+				UFlowGraphNode* const StartGraphNode = Cast<UFlowGraphNode>(StartNode->GetGraphNode());
+				TestNotNull("Start editor node should exist after patch", StartGraphNode);
+				TestNotNull("Editor graph should expose the generated cfg120 pin",
+					StartGraphNode ? StartGraphNode->FindPin(TEXT("cfg120"), EGPD_Output) : nullptr);
+				TestNotNull("Editor graph should expose the generated cfg140 pin",
+					StartGraphNode ? StartGraphNode->FindPin(TEXT("cfg140"), EGPD_Output) : nullptr);
+			});
+
+			It("should keep nested AddOn pins in their own context direction", [this]()
+			{
+				UFlowNode_Start* RootNode = NewObject<UFlowNode_Start>(GetTransientPackage());
+				UFlowGraphCourierTestCompositeAddOn* ParentAddOn =
+					NewObject<UFlowGraphCourierTestCompositeAddOn>(RootNode);
+				UFlowGraphCourierTestInputPinAddOn* InputChild =
+					NewObject<UFlowGraphCourierTestInputPinAddOn>(ParentAddOn);
+				UFlowGraphCourierTestOutputPinAddOn* OutputChild =
+					NewObject<UFlowGraphCourierTestOutputPinAddOn>(ParentAddOn);
+				ParentAddOn->GetFlowNodeAddOnChildrenByEditor().Add(InputChild);
+				ParentAddOn->GetFlowNodeAddOnChildrenByEditor().Add(OutputChild);
+				RootNode->GetFlowNodeAddOnChildrenByEditor().Add(ParentAddOn);
+				ParentAddOn->SetFlowNodeForEditor(RootNode);
+
+				const TArray<FFlowPin> ContextInputs = ParentAddOn->GetContextInputs();
+				const TArray<FFlowPin> ContextOutputs = ParentAddOn->GetContextOutputs();
+				const TArray<FFlowPin> RootContextInputs = RootNode->GetContextInputs();
+				const TArray<FFlowPin> RootContextOutputs = RootNode->GetContextOutputs();
+				const FFlowPin* NestedInput = ContextInputs.FindByPredicate([](const FFlowPin& Pin)
+				{
+					return Pin.PinName == FName(TEXT("NestedInput"));
+				});
+				const FFlowPin* NestedOutput = ContextOutputs.FindByPredicate([](const FFlowPin& Pin)
+				{
+					return Pin.PinName == FName(TEXT("NestedOutput"));
+				});
+				TestNotNull("Nested input reaches the parent input context", NestedInput);
+				TestNotNull("Nested output reaches the parent output context", NestedOutput);
+				TestFalse("Nested input does not leak into the parent output context",
+					ContextOutputs.ContainsByPredicate([](const FFlowPin& Pin)
+					{
+						return Pin.PinName == FName(TEXT("NestedInput"));
+					}));
+				TestFalse("Nested output does not leak into the parent input context",
+					ContextInputs.ContainsByPredicate([](const FFlowPin& Pin)
+					{
+						return Pin.PinName == FName(TEXT("NestedOutput"));
+					}));
+				TestTrue("Nested input reaches the root node input context",
+					RootContextInputs.ContainsByPredicate([](const FFlowPin& Pin)
+					{
+						return Pin.PinName == FName(TEXT("NestedInput"));
+					}));
+				TestTrue("Nested output reaches the root node output context",
+					RootContextOutputs.ContainsByPredicate([](const FFlowPin& Pin)
+					{
+						return Pin.PinName == FName(TEXT("NestedOutput"));
+					}));
+				if (NestedInput && NestedOutput)
+				{
+					TestEqual("Nested input keeps its data category", NestedInput->GetPinTypeName().Name,
+						FName(TEXT("Object")));
+					TestTrue("Nested input keeps its class subcategory",
+						NestedInput->GetPinSubCategoryObject().Get() == UObject::StaticClass());
+					TestEqual("Nested output keeps its data category", NestedOutput->GetPinTypeName().Name,
+						FName(TEXT("Object")));
+					TestTrue("Nested output keeps its class subcategory",
+						NestedOutput->GetPinSubCategoryObject().Get() == AActor::StaticClass());
+				}
+			});
+
+			It("should finalize AddOn context pins on their parent during the first regraph", [this]()
+			{
+				const FString Document = TEXT(
+					"{\"formatVersion\":2,\"mode\":\"Full\",\"bWorldBound\":false,\"ops\":["
+					"{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000001\",\"type\":\"/Script/Flow.FlowNode_Start\"},"
+					"{\"kind\":\"UpsertNode\",\"guid\":\"00000000-0000-0000-0000-000000000002\",\"type\":\"/Script/Flow.FlowNode_Finish\"},"
+					"{\"kind\":\"UpsertAddon\",\"newAlias\":\"case\",\"parentGuid\":\"00000000-0000-0000-0000-000000000001\","
+					"\"type\":\"/Script/Flow.FlowNodeAddOn_SwitchCase\",\"properties\":{\"CaseName\":\"ImportedCase\"}},"
+					"{\"kind\":\"UpsertAddon\",\"newAlias\":\"predicate\",\"parentAlias\":\"case\","
+					"\"type\":\"/Script/Flow.FlowNodeAddOn_PredicateAND\"},"
+					"{\"kind\":\"AddConnection\",\"source\":{\"nodeGuid\":\"00000000-0000-0000-0000-000000000001\",\"pin\":\"ImportedCase\"},"
+					"\"target\":{\"nodeGuid\":\"00000000-0000-0000-0000-000000000002\",\"pin\":\"In\"}}]}"
+				);
+				TestFlowAsset = ImportAndRegraphFixtureDocument(Document,
+					TEXT("/Game/Test/TestAddOnContextPinFinalization"));
+				TestNotNull("Imported asset should exist", TestFlowAsset);
+				if (!TestFlowAsset)
+				{
+					return;
+				}
+
+				FGuid StartGuid;
+				FGuid FinishGuid;
+				FGuid::Parse(TEXT("00000000-0000-0000-0000-000000000001"), StartGuid);
+				FGuid::Parse(TEXT("00000000-0000-0000-0000-000000000002"), FinishGuid);
+				UFlowNode* const StartNode = TestFlowAsset->GetNode(StartGuid);
+				UFlowNode* const FinishNode = TestFlowAsset->GetNode(FinishGuid);
+				if (!StartNode || !FinishNode)
+				{
+					AddError(TEXT("Imported nodes are missing."));
+					return;
+				}
+
+				const FName CasePinName(TEXT("ImportedCase"));
+				const TArray<UFlowNodeAddOn*>& RootAddOns = StartNode->GetFlowNodeAddOnChildren();
+				if (RootAddOns.Num() != 1 || !RootAddOns[0])
+				{
+					AddError(TEXT("Imported root AddOn is missing."));
+					return;
+				}
+				TestEqual("Nested AddOn stays attached to the context pin supplier",
+					RootAddOns[0]->GetFlowNodeAddOnChildren().Num(), 1);
+				UFlowGraphNode* const StartGraphNode = Cast<UFlowGraphNode>(StartNode->GetGraphNode());
+				UFlowGraphNode* const FinishGraphNode = Cast<UFlowGraphNode>(FinishNode->GetGraphNode());
+				if (!StartGraphNode || !FinishGraphNode)
+				{
+					AddError(TEXT("Imported editor nodes are missing."));
+					return;
+				}
+				TestTrue("First regraph adds an exec context pin to the parent runtime node",
+					StartNode->GetOutputPins().ContainsByPredicate([CasePinName](const FFlowPin& Pin)
+					{
+						return Pin.PinName == CasePinName && Pin.IsExecPin();
+					}));
+				TestNotNull("First regraph adds the context pin to the parent editor node",
+					StartGraphNode->FindPin(CasePinName, EGPD_Output));
+				UEdGraphPin* const FirstCasePin = StartGraphNode->FindPin(CasePinName, EGPD_Output);
+				UEdGraphPin* const FirstFinishInput = FinishGraphNode->FindPin(TEXT("In"), EGPD_Input);
+				TestTrue("First regraph connects the context pin in the editor",
+					FirstCasePin && FirstFinishInput && FirstCasePin->LinkedTo.Contains(FirstFinishInput));
+				TestEqual("First regraph retains the context pin runtime connection",
+					StartNode->GetConnection(CasePinName).NodeGuid, FinishGuid);
+
+				TestTrue("Connected AddOn pin should regraph", UFlowGraphRegrapher::RegraphFlowAsset(TestFlowAsset));
+				UEdGraphPin* const CasePin = StartGraphNode->FindPin(CasePinName, EGPD_Output);
+				UEdGraphPin* const FinishInput = FinishGraphNode->FindPin(TEXT("In"), EGPD_Input);
+				TestTrue("Reconstructed context pin keeps its editor connection",
+					CasePin && FinishInput && CasePin->LinkedTo.Contains(FinishInput));
+				TestEqual("Connected context pin keeps its runtime target",
+					StartNode->GetConnection(CasePinName).NodeGuid, FinishGuid);
+
+				StartNode->SetConnections(TMap<FName, FConnectedPin>());
+				StartNode->GetFlowNodeAddOnChildrenByEditor().Reset();
+				TestTrue("Removing AddOn should regraph", UFlowGraphRegrapher::RegraphFlowAsset(TestFlowAsset));
+				TestFalse("Removed AddOn pin leaves the parent runtime node",
+					StartNode->GetOutputPins().ContainsByPredicate([CasePinName](const FFlowPin& Pin)
+					{
+						return Pin.PinName == CasePinName;
+					}));
+				TestNull("Removed AddOn pin leaves the parent editor node",
+					StartGraphNode->FindPin(CasePinName, EGPD_Output));
+				TestFalse("Removed AddOn pin no longer has a runtime connection",
+					StartNode->GetConnection(CasePinName).NodeGuid.IsValid());
+				TestFlowAsset->GetPackage()->SetDirtyFlag(false);
 			});
 
 			It("should preserve imported AddOns through regraph and save update", [this, MakeSwitchCaseAddonText]()

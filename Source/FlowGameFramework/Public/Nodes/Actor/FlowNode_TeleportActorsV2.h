@@ -15,8 +15,10 @@ enum class EFlowTeleportState : uint8
 {
 	/** Resolving selectors and starting teleport operations. */
 	Starting,
+
 	/** Waiting for execution addons to complete asynchronous operations. */
 	WaitingForOperations,
+
 	/** All teleport operations have reached a terminal state. */
 	Completed,
 
@@ -81,7 +83,7 @@ struct FLOWGAMEFRAMEWORK_API FFlowTeleportActivation
 // teleport them to by developing customized 'selector' structs.
 
 // Relocate one or more existing actors to explicit destinations.
-UCLASS(BlueprintType, meta = (DisplayName = "Teleport Actors", Keywords = "Teleport Actor Relocate Destination Transform"))
+UCLASS(BlueprintType, meta = (DisplayName = "Teleport Actors V2", Keywords = "Teleport Actor Relocate Destination Transform"))
 class FLOWGAMEFRAMEWORK_API UFlowNode_TeleportActorsV2 : public UFlowNode
 {
 	GENERATED_BODY()

@@ -25,6 +25,26 @@ FNativeFlowAssetEvent UFlowSubsystem::OnInstancedTemplateRemoved;
 
 #define LOCTEXT_NAMESPACE "FlowSubsystem"
 
+namespace
+{
+	bool HasValidNodesForInstancing(const UFlowAsset& Asset, const UFlowAsset& Template, const UObject* Owner)
+	{
+		for (const TPair<FGuid, UFlowNode*>& Node : Asset.GetNodes())
+		{
+			if (!IsValid(Node.Value))
+			{
+				UE_LOG(LogFlow, Error,
+					TEXT("Flow instance creation rejected an invalid node. Template: '%s', Asset: '%s', "
+						"Node GUID: '%s', Owner: '%s'. Repair and recook the graph; it will not execute."),
+					*Template.GetPathName(), *Asset.GetPathName(), *Node.Key.ToString(), *GetPathNameSafe(Owner));
+				return false;
+			}
+		}
+
+		return true;
+	}
+}
+
 UFlowSubsystem::UFlowSubsystem()
 	: LoadedSaveGame(nullptr)
 {
@@ -175,6 +195,10 @@ UFlowAsset* UFlowSubsystem::CreateSubFlow(UFlowNode_SubGraph* SubGraphNode, cons
 {
 	// all calls checks if SubGraphNode is valid
 	ensureAlways(SubGraphNode);
+	if (!IsValid(SubGraphNode))
+	{
+		return nullptr;
+	}
 
 	UFlowAsset* SubGraphOwner = SubGraphNode->GetFlowAsset();
 	UFlowAsset* AssetInstance = nullptr;
@@ -183,7 +207,7 @@ UFlowAsset* UFlowSubsystem::CreateSubFlow(UFlowNode_SubGraph* SubGraphNode, cons
 	// Preloaded instance is kept, as it hasn't started yet.
 	if (const UFlowAsset* PreviousInstance = InstancedSubFlows.FindRef(SubGraphNode))
 	{
-		if (PreviousInstance->HasStartedFlow() && !SubGraphOwner->ActiveSubGraphs.Contains(SubGraphNode))
+		if (PreviousInstance->HasStartedFlow() && (!SubGraphOwner || !SubGraphOwner->ActiveSubGraphs.Contains(SubGraphNode)))
 		{
 			FinishSubFlow(SubGraphNode, EFlowFinishPolicy::Keep, true);
 		}
@@ -194,24 +218,28 @@ UFlowAsset* UFlowSubsystem::CreateSubFlow(UFlowNode_SubGraph* SubGraphNode, cons
 		const TWeakObjectPtr<UObject> Owner = SubGraphOwner ? SubGraphOwner->GetOwner() : nullptr;
 		AssetInstance = CreateFlowInstance(Owner, SubGraphNode->Asset.LoadSynchronous(), SavedInstanceName);
 
-		if (NewInstance)
+		if (AssetInstance)
 		{
-			InstancedSubFlows.Add(SubGraphNode, NewInstance);
+			InstancedSubFlows.Add(SubGraphNode, AssetInstance);
 		}
 	}
 
 	if (InstancedSubFlows.Contains(SubGraphNode) && !bPreloading)
 	{
 		// get instanced asset from map - in case it was already instanced by calling CreateSubFlow() with bPreloading == true
-		UFlowAsset* AssetInstance = InstancedSubFlows[SubGraphNode];
+		AssetInstance = InstancedSubFlows[SubGraphNode];
 
 		// ensure that asset instance reference to its SubGraph owner
 		if (!AssetInstance->NodeOwningThisAssetInstance.IsValid())
 		{
 			AssetInstance->NodeOwningThisAssetInstance = SubGraphNode;
 		}
+		check(AssetInstance->NodeOwningThisAssetInstance == SubGraphNode);
 
-		SubGraphOwner->ActiveSubGraphs.Add(SubGraphNode, AssetInstance);
+		if (SubGraphOwner)
+		{
+			SubGraphOwner->ActiveSubGraphs.Add(SubGraphNode, AssetInstance);
+		}
 
 		// don't activate Start Node if we're loading Sub Graph from SaveGame
 		if (SavedInstanceName.IsEmpty())
@@ -220,51 +248,29 @@ UFlowAsset* UFlowSubsystem::CreateSubFlow(UFlowNode_SubGraph* SubGraphNode, cons
 		}
 	}
 
-	return NewInstance;
-}
-
-void UFlowSubsystem::FinishSubFlow(UFlowNode_SubGraph* SubGraphNode, const EFlowFinishPolicy FinishPolicy)
-{
-	if (InstancedSubFlows.Contains(SubGraphNode))
-	{
-		// The flow asset running on the subgraph node. 
-		UFlowAsset* SubgraphFlowAsset = InstancedSubFlows[SubGraphNode];
-		
-		// This is the flow asset that has the subgraph node. Do not confuse with the flow asset that the node is running.
-		// Remove the subgraph flow from the owning flow active subgraph list. 
-		UFlowAsset* SubgraphNodeParentFlow = SubGraphNode->GetFlowAsset();		
-		SubgraphNodeParentFlow->ActiveSubGraphs.Remove(SubGraphNode);
-		
-		// Finish the flow but do not remove the instance. 
-		SubgraphFlowAsset->FinishFlow(FinishPolicy, false);
-	}
+	return AssetInstance;
 }
 
 void UFlowSubsystem::FinishSubFlow(UFlowNode_SubGraph* SubGraphNode, const EFlowFinishPolicy FinishPolicy, const bool bRemoveInstance)
 {
-	if (InstancedSubFlows.Contains(SubGraphNode))
+	if (IsValid(SubGraphNode) && InstancedSubFlows.Contains(SubGraphNode))
 	{
-		// The Flow Asset instantiated by SubGraph node 
+		// The Flow Asset instantiated by SubGraph node
 		UFlowAsset* AssetInstance = InstancedSubFlows[SubGraphNode];
 
-		SubGraphNode->GetFlowAsset()->ActiveSubGraphs.Remove(SubGraphNode);
-		AssetInstance->FinishFlowInstance(FinishPolicy);
-
-		if (AssetInstance->IsActive())
+		if (UFlowAsset* SubGraphOwner = SubGraphNode->GetFlowAsset())
 		{
-			AssetInstance->FinishFlow(FinishPolicy, false);
+			SubGraphOwner->ActiveSubGraphs.Remove(SubGraphNode);
 		}
+
+		AssetInstance->FinishFlowInstance(FinishPolicy);
 
 		if (bRemoveInstance)
 		{
 			InstancedSubFlows.Remove(SubGraphNode);
 			AssetInstance->DeinitializeInstance();
-		}
 
-		// Make sure to set the NodeOwningThisAssetInstance after the FinishFlowInstance and DeinitializeInstance calls, as it may be needed there
-		AssetInstance->NodeOwningThisAssetInstance = nullptr;
-
-			// Make sure to set the NodeOwningThisAssetInstance after the FinishFlowInstance and DeinitializeInstance calls, as it may be needed there
+			// Keep the owning node available during finish and deinitialize callbacks.
 			AssetInstance->NodeOwningThisAssetInstance = nullptr;
 		}
 	}
@@ -272,11 +278,12 @@ void UFlowSubsystem::FinishSubFlow(UFlowNode_SubGraph* SubGraphNode, const EFlow
 
 UFlowAsset* UFlowSubsystem::CreateFlowInstance(const TWeakObjectPtr<UObject> Owner, UFlowAsset* LoadedFlowAsset, FString NewInstanceName)
 {
-	if (LoadedFlowAsset == nullptr)
+	if (!IsValid(LoadedFlowAsset) || !HasValidNodesForInstancing(*LoadedFlowAsset, *LoadedFlowAsset, Owner.Get()))
 	{
 		return nullptr;
 	}
 
+	const bool bTemplateAlreadyInstanced = InstancedTemplates.Contains(LoadedFlowAsset);
 	AddInstancedTemplate(LoadedFlowAsset);
 
 #if WITH_EDITOR
@@ -294,6 +301,15 @@ UFlowAsset* UFlowSubsystem::CreateFlowInstance(const TWeakObjectPtr<UObject> Own
 	}
 
 	UFlowAsset* NewInstance = NewObject<UFlowAsset>(this, LoadedFlowAsset->GetClass(), *NewInstanceName, RF_Transient, LoadedFlowAsset, false, nullptr);
+	if (!HasValidNodesForInstancing(*NewInstance, *LoadedFlowAsset, Owner.Get()))
+	{
+		if (!bTemplateAlreadyInstanced)
+		{
+			RemoveInstancedTemplate(LoadedFlowAsset);
+		}
+		return nullptr;
+	}
+
 	NewInstance->InitializeInstance(Owner, *LoadedFlowAsset);
 
 	LoadedFlowAsset->AddInstance(NewInstance);

@@ -9,11 +9,14 @@
 #include "Find/FindInFlowEnums.h"
 #include "FlowAsset.h"
 #include "FlowCourierDocument.h"
+#include "FlowGraphReconciler.h"
 #include "FlowMCPToolset.h"
 #include "Graph/Nodes/FlowGraphNode.h"
 #include "Kismet/KismetSystemLibrary.h"
 #include "Misc/PackageName.h"
 #include "Nodes/FlowNode.h"
+#include "ScopedTransaction.h"
+#include "Tests/FlowGraphCourierTestAddOns.h"
 #include "Tests/FlowNodeClassReplacementTestTypes.h"
 #include "ToolsetRegistry/ToolCallExceptionHandler.h"
 #include "ToolsetRegistry/UToolsetRegistry.h"
@@ -409,6 +412,39 @@ void FFlowMCPToolsetSpec::Define()
 			TestTrue(TEXT("The corrected import can use the same path"), Result.NodeCount >= 2);
 		});
 
+		// Invalid generated endpoints must fail during preflight, before package creation.
+		It(TEXT("Rejects invalid generated-pin connections before creating the target package"), [this]()
+		{
+			const FString TargetAssetPath = MakeTestAssetPath();
+			const FString AddOnClassPath = UFlowGraphCourierTestCachedPinAddOn::StaticClass()->GetPathName();
+			const FString Document = FString::Printf(TEXT(R"JSON(
+{
+	"formatVersion": 2,
+	"mode": "Full",
+	"assetClass": "/Script/Flow.FlowAsset",
+	"bWorldBound": true,
+	"ops": [
+		{ "kind": "UpsertNode", "guid": "00000000-0000-0000-0000-000000000001", "type": "/Script/Flow.FlowNode_Start" },
+		{ "kind": "UpsertNode", "guid": "00000000-0000-0000-0000-000000000002", "type": "/Script/Flow.FlowNode_Finish" },
+		{ "kind": "UpsertAddon", "newAlias": "thresholds", "parentGuid": "00000000-0000-0000-0000-000000000001", "type": "%s", "properties": { "Thresholds": "(20)" } },
+		{ "kind": "AddConnection", "source": { "nodeGuid": "00000000-0000-0000-0000-000000000001", "pin": "th99" }, "target": { "nodeGuid": "00000000-0000-0000-0000-000000000002", "pin": "In" } }
+	]
+})JSON"), *AddOnClassPath);
+
+			FFlowMCPImportAndRegraphFlowAssetRequest Request;
+			Request.AssetPath = TargetAssetPath;
+			Request.FlowGraphText = Document;
+			Request.Mutation.bSave = false;
+			ExceptionHandler->CaptureErrorsIn([&Request]()
+			{
+				UFlowMCPToolset::ImportAndRegraphFlowAsset(Request);
+			});
+
+			ExpectExceptionContains(TEXT("PinNotFound"));
+			TestNull(TEXT("Invalid preflight leaves the target package uncreated"),
+				FindPackage(nullptr, *FPackageName::ObjectPathToPackageName(TargetAssetPath)));
+		});
+
 		It(TEXT("Rejects an unresolved asset class instead of creating a base FlowAsset"), [this]()
 		{
 			FFlowMCPImportAndRegraphFlowAssetRequest Request;
@@ -488,6 +524,102 @@ void FFlowMCPToolsetSpec::Define()
 			TestTrue(
 				TEXT("Dry run does not report a modified package"),
 				Result.Mutation.ModifiedPackages.IsEmpty());
+		});
+
+		// Generated AddOn pin callbacks mutate editor state, so commit requires an owned undo transaction.
+		It(TEXT("Blocks generated AddOn pins when the caller disables transactions"), [this]()
+		{
+			const FString TargetAssetPath = MakeTestAssetPath();
+			const FString AddOnClassPath = UFlowGraphCourierTestCachedPinAddOn::StaticClass()->GetPathName();
+			const FString Document = FString::Printf(TEXT(R"JSON(
+{"formatVersion":2,"mode":"Full","assetClass":"/Script/Flow.FlowAsset","bWorldBound":true,"ops":[
+{"kind":"UpsertNode","guid":"00000000-0000-0000-0000-000000000001","type":"/Script/Flow.FlowNode_Start"},
+{"kind":"UpsertNode","guid":"00000000-0000-0000-0000-000000000002","type":"/Script/Flow.FlowNode_Finish"},
+{"kind":"UpsertAddon","newAlias":"thresholds","parentGuid":"00000000-0000-0000-0000-000000000001","type":"%s","properties":{"Thresholds":"(20)"}}]})JSON"),
+				*AddOnClassPath);
+
+			FFlowMCPApplyFlowPatchRequest Request;
+			Request.TargetAssetPath = TargetAssetPath;
+			Request.MutationText = Document;
+			Request.Mutation.bSave = false;
+			Request.Mutation.bUseTransaction = false;
+			FFlowMCPApplyFlowPatchResult Result;
+			ExceptionHandler->CaptureErrorsIn([&Request, &Result]()
+			{
+				Result = UFlowMCPToolset::ApplyFlowPatch(Request);
+			});
+
+			ExpectNoException();
+			TestFalse(TEXT("Apply is blocked without an owned transaction"), Result.bApplySucceeded);
+			TestTrue(TEXT("The blocking transaction finding is structured"), Result.ValidationFindings.ContainsByPredicate(
+				[](const FFlowMCPValidationFinding& Finding) { return Finding.Code == TEXT("UnsupportedTransaction"); }));
+			TestNull(TEXT("The rejected apply leaves no target package"),
+				FindPackage(nullptr, *FPackageName::ObjectPathToPackageName(TargetAssetPath)));
+		});
+
+		// Reject ambient transactions without undoing the caller's prior edits or dirty state.
+		It(TEXT("Preserves an ambient caller transaction when generated pins are requested"), [this]()
+		{
+			const FString TargetAssetPath = MakeTestAssetPath();
+			const FString AddOnClassPath = UFlowGraphCourierTestCachedPinAddOn::StaticClass()->GetPathName();
+			const FString InitialDocument = FString::Printf(TEXT(R"JSON(
+{"formatVersion":2,"mode":"Full","assetClass":"/Script/Flow.FlowAsset","bWorldBound":true,"ops":[
+{"kind":"UpsertNode","guid":"00000000-0000-0000-0000-000000000001","type":"/Script/Flow.FlowNode_Start"},
+{"kind":"UpsertNode","guid":"00000000-0000-0000-0000-000000000002","type":"/Script/Flow.FlowNode_Finish"},
+{"kind":"UpsertAddon","newAlias":"thresholds","parentGuid":"00000000-0000-0000-0000-000000000001","type":"%s","properties":{"Thresholds":"(10)"}}]})JSON"),
+				*AddOnClassPath);
+			FFlowMCPImportAndRegraphFlowAssetRequest ImportRequest;
+			ImportRequest.AssetPath = TargetAssetPath;
+			ImportRequest.FlowGraphText = InitialDocument;
+			ImportRequest.Mutation.bSave = false;
+			FFlowMCPImportAndRegraphFlowAssetResult ImportResult;
+			ExceptionHandler->CaptureErrorsIn([&ImportRequest, &ImportResult]()
+			{
+				ImportResult = UFlowMCPToolset::ImportAndRegraphFlowAsset(ImportRequest);
+			});
+			ExpectNoException();
+			UFlowAsset* const Asset = FFlowGraphReconciler::FindOrLoadFlowAsset(TargetAssetPath);
+			if (!TestNotNull(TEXT("Initial fixture asset exists"), Asset))
+			{
+				return;
+			}
+			UFlowNode* const StartNode = Asset->GetNode(FGuid(0, 0, 0, 1));
+			UFlowGraphCourierTestCachedPinAddOn* const AddOn = StartNode && !StartNode->GetFlowNodeAddOnChildren().IsEmpty()
+				? Cast<UFlowGraphCourierTestCachedPinAddOn>(StartNode->GetFlowNodeAddOnChildren()[0])
+				: nullptr;
+			if (!TestNotNull(TEXT("Cached pin AddOn exists"), AddOn))
+			{
+				return;
+			}
+
+			const FString PatchDocument = FString::Printf(TEXT(R"JSON(
+{"formatVersion":2,"mode":"Patch","assetClass":"/Script/Flow.FlowAsset","bWorldBound":true,"ops":[
+{"kind":"UpsertNode","guid":"00000000-0000-0000-0000-000000000001","type":"/Script/Flow.FlowNode_Start"},
+{"kind":"UpsertAddon","guid":"%s","parentGuid":"00000000-0000-0000-0000-000000000001","type":"%s","properties":{"Thresholds":"(20)"}}]})JSON"),
+				*AddOn->GetGuid().ToString(EGuidFormats::DigitsWithHyphensLower), *AddOnClassPath);
+			AddOn->SetFlags(RF_Transactional);
+			FFlowMCPApplyFlowPatchRequest Request;
+			Request.TargetAssetPath = TargetAssetPath;
+			Request.MutationText = PatchDocument;
+			Request.Mutation.bSave = false;
+
+			FScopedTransaction CallerTransaction(NSLOCTEXT("FlowGraphCourier", "CallerTransaction", "Caller Transaction"));
+			AddOn->Modify();
+			AddOn->Thresholds.Reset();
+			AddOn->Thresholds.Add(15);
+			Asset->GetPackage()->SetDirtyFlag(false);
+			FFlowMCPApplyFlowPatchResult Result;
+			ExceptionHandler->CaptureErrorsIn([&Request, &Result]()
+			{
+				Result = UFlowMCPToolset::ApplyFlowPatch(Request);
+			});
+
+			ExpectNoException();
+			TestFalse(TEXT("Apply is blocked inside an ambient transaction"), Result.bApplySucceeded);
+			TestTrue(TEXT("The ambient transaction finding is structured"), Result.ValidationFindings.ContainsByPredicate(
+				[](const FFlowMCPValidationFinding& Finding) { return Finding.Code == TEXT("UnsupportedTransaction"); }));
+			TestEqual(TEXT("The caller's earlier AddOn edit is preserved"), AddOn->Thresholds, TArray<int32>({15}));
+			TestFalse(TEXT("Rejected planning leaves the package dirty flag unchanged"), Asset->GetPackage()->IsDirty());
 		});
 	});
 

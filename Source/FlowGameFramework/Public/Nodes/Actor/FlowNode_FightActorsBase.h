@@ -82,6 +82,12 @@ protected:
 	void SetFightState(EFlowFightActorState NextState);
 	void UpdateFightState();
 	void ReevaluateAfterDefeat();
+
+	/** Cancel remaining work and finish through the existing spawn-complete and all-defeated outputs. */
+	void CompleteFightWithoutSpawning();
+	bool CompleteFightIfSpawnPassFailedOrEmpty(
+		int32 NumQueued, EFlowFightActorSpawnMethod Method, bool bIsInitialPass);
+
 	FFlowFightActorCounts GetFightActorCounts() const;
 	UFlowNodeAddOn_ReinforcementBase* FindReinforcement() const;
 

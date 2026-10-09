@@ -2,6 +2,7 @@
 #pragma once
 
 #include "IDetailCustomization.h"
+#include "PropertyHandle.h"
 
 class FFlowComponentDetails : public IDetailCustomization
 {

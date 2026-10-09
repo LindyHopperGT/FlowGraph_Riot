@@ -160,6 +160,10 @@ struct FLOWGRAPHCOURIER_API FFlowCourierDocument
 	UPROPERTY()
 	FString ExpectedOwnerClass;
 
+	// Optional asset-level setting deltas. Omitted keys preserve the current value in both modes.
+	UPROPERTY()
+	TMap<FString, FString> AssetProperties;
+
 	// Patch mode only. Nodes this document is authoritative over: a listed node with no
 	// corresponding UpsertNode op is deleted. Empty means nothing is implicitly deleted. Illegal
 	// (ScopeWithFullMode) in Full mode, where the whole document is already authoritative.

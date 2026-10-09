@@ -112,6 +112,12 @@ protected:
 	void CacheFlowNode();
 
 #if WITH_EDITOR
-	TArray<FFlowPin> GetPinsForContext(const TArray<FFlowPin>& Context) const;
+	/**
+	 * Combines this AddOn's pins with the inherited context for one direction.
+	 * @param Context The pins contributed by this AddOn: InputPins or OutputPins.
+	 * @param BaseContext The superclass context for that same direction, copied before appending Context.
+	 * @return BaseContext followed by the valid pins from Context.
+	 */
+	TArray<FFlowPin> GetPinsForContext(const TArray<FFlowPin>& Context, const TArray<FFlowPin>& BaseContext) const;
 #endif
 };

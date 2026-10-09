@@ -3,16 +3,19 @@
 #pragma once
 
 #include "UObject/Object.h"
+#include "UObject/StrongObjectPtr.h"
+#include "FlowAsset.h"
+#include "FlowAssetPropertyPolicy.h"
 #include "FlowGraphValidation.h"
+#include "FlowGraphImporter.h"
 #include "FlowGraphReconciler.generated.h"
 
 class UFlowAsset;
 class UFlowNode;
 class UFlowNodeBase;
-struct FFlowGraphParsedNode;
-struct FFlowGraphParsedNodeAddOn;
-struct FFlowGraphParsedConnection;
-
+class UFlowNodeAddOn;
+class FArrayProperty;
+class FObjectProperty;
 /**
  * One addon touched by a reconcile, reported in FFlowReconcilePlan. Carries enough to let a caller
  * understand the change without re-exporting the asset: which node owns the addon, the addon's
@@ -32,6 +35,7 @@ struct FLOWGRAPHCOURIER_API FFlowReconcileAddonEntry
 	UPROPERTY()
 	FGuid OwnerNodeGuid;
 
+	// Stable identity of the AddOn that this plan entry adds, updates, or deletes.
 	UPROPERTY()
 	FGuid AddOnGuid;
 
@@ -47,16 +51,34 @@ struct FLOWGRAPHCOURIER_API FFlowReconcileAddonEntry
 };
 
 USTRUCT(BlueprintType)
-struct FLOWGRAPHCOURIER_API FFlowReconcilePlan
+struct FLOWGRAPHCOURIER_API FFlowReconcileAssetPropertyEntry
 {
 	GENERATED_BODY()
 
 	UPROPERTY()
+	FString Name;
+
+	UPROPERTY()
+	FString PreviousValue;
+
+	UPROPERTY()
+	FString ProposedValue;
+};
+
+USTRUCT(BlueprintType)
+struct FLOWGRAPHCOURIER_API FFlowReconcilePlan
+{
+	GENERATED_BODY()
+
+	// GUIDs of nodes created by this mutation.
+	UPROPERTY()
 	TArray<FGuid> NodesAdded;
 
+	// GUIDs of existing nodes whose authored state changed.
 	UPROPERTY()
 	TArray<FGuid> NodesUpdated;
 
+	// GUIDs of nodes removed by this mutation.
 	UPROPERTY()
 	TArray<FGuid> NodesDeleted;
 
@@ -71,20 +93,28 @@ struct FLOWGRAPHCOURIER_API FFlowReconcilePlan
 	UPROPERTY()
 	TArray<FString> ConnectionsRemoved;
 
+	// AddOn entries created by this mutation.
 	UPROPERTY()
 	TArray<FFlowReconcileAddonEntry> AddOnsAdded;
 
+	// AddOn entries updated in place by this mutation.
 	UPROPERTY()
 	TArray<FFlowReconcileAddonEntry> AddOnsUpdated;
 
+	// AddOn entries removed by this mutation.
 	UPROPERTY()
 	TArray<FFlowReconcileAddonEntry> AddOnsDeleted;
+
+	// Supported asset-level properties whose values differ after this mutation.
+	UPROPERTY()
+	TArray<FFlowReconcileAssetPropertyEntry> AssetPropertiesChanged;
 
 	bool IsEmpty() const
 	{
 		return NodesAdded.IsEmpty() && NodesUpdated.IsEmpty() && NodesDeleted.IsEmpty()
 			&& ConnectionsAdded.IsEmpty() && ConnectionsRemoved.IsEmpty()
-			&& AddOnsAdded.IsEmpty() && AddOnsUpdated.IsEmpty() && AddOnsDeleted.IsEmpty();
+			&& AddOnsAdded.IsEmpty() && AddOnsUpdated.IsEmpty() && AddOnsDeleted.IsEmpty()
+			&& AssetPropertiesChanged.IsEmpty();
 	}
 };
 
@@ -108,9 +138,11 @@ struct FLOWGRAPHCOURIER_API FFlowReconcileExecutionPlan
 	// Structured pre-commit validation results. An Error-severity finding blocks execution.
 	TArray<FFlowValidationFinding> ValidationFindings;
 
-	// Metrics computed at plan time.
+	// Number of nodes classified as added, updated, or deleted.
 	int32 NodesTouched = 0;
+	// Number of current nodes left unchanged by the plan.
 	int32 NodesPreserved = 0;
+	// Number of bytes in the original mutation document.
 	int32 InputSizeBytes = 0;
 
 	// True when no existing asset was found at TargetAssetPath; ExecuteReconcilePlan will
@@ -120,18 +152,34 @@ struct FLOWGRAPHCOURIER_API FFlowReconcileExecutionPlan
 	// Document header fields, needed by the new-asset import path (only valid when bIsNewAsset
 	// is true) to create the right asset class.
 	FString AssetClassPath;
+	// Whether the requested new asset should be world-bound.
 	bool bWorldBound = false;
 
-	// Execution data: resolved and classified nodes/connections ready to apply.
+	// New nodes resolved and classified from the mutation document.
 	TArray<FFlowGraphParsedNode> NodesToAdd;
+	// Existing nodes with authored state to reconcile.
 	TArray<FFlowGraphParsedNode> NodesToUpdate;
+	// Existing node GUIDs that the mutation removes.
 	TArray<FGuid> NodesToDelete;
+	// Connections to install after the final active pin schema is verified.
 	TArray<FFlowGraphParsedConnection> ConnectionsToAdd;
+	// Existing connections to remove before deleting nodes.
 	TArray<FFlowGraphParsedConnection> ConnectionsToRemove;
 
-	// Full parsed lists needed by downstream helpers (SetupConnections, RegraphFlowAsset).
+	// Full parsed node list used by connection setup and editor regraphing.
 	TArray<FFlowGraphParsedNode> AllParsedNodes;
+	// Full parsed connection list used by auto-placement and verification.
 	TArray<FFlowGraphParsedConnection> AllParsedConnections;
+
+	// Final active pin schema projected without touching the asset. Planning validates
+	// endpoints against it, and execution compares refreshed runtime pins before installing wires.
+	FFlowProjectedPinSchema ProjectedPinSchema;
+
+	// Typed, validated asset-property deltas. Strong object references and the isolated effective
+	// state stay alive with the plan until execution or dry-run reporting completes.
+	TMap<FName, FFlowStagedAssetProperty> StagedAssetProperties;
+	TStrongObjectPtr<UFlowAsset> EffectiveStateAsset;
+	UClass* ResolvedAssetClass = nullptr;
 };
 
 USTRUCT(BlueprintType)
@@ -139,9 +187,11 @@ struct FLOWGRAPHCOURIER_API FFlowReconcileResult
 {
 	GENERATED_BODY()
 
+	// True only when mutation planning and execution both complete successfully.
 	UPROPERTY()
 	bool bSuccess = false;
 
+	// Summary of the graph changes that were planned and applied.
 	UPROPERTY()
 	FFlowReconcilePlan Plan;
 
@@ -161,12 +211,15 @@ struct FLOWGRAPHCOURIER_API FFlowReconcileResult
 	UPROPERTY()
 	TArray<FFlowValidationFinding> ValidationFindings;
 
+	// Number of nodes changed by the applied plan.
 	UPROPERTY()
 	int32 NodesTouched = 0;
 
+	// Number of existing nodes preserved by the applied plan.
 	UPROPERTY()
 	int32 NodesPreserved = 0;
 
+	// Length of the source mutation document in bytes.
 	UPROPERTY()
 	int32 InputSizeBytes = 0;
 };
@@ -260,6 +313,35 @@ public:
 		TArray<FString>& OutNotLanded);
 
 private:
+	// Creates/updates runtime nodes and declares their pins before AddOn callbacks or connections run.
+	static bool ApplyNodeChanges(
+		UFlowAsset* ExistingAsset,
+		const FFlowReconcileExecutionPlan& ExecutionPlan,
+		TMap<FGuid, UFlowNode*>& OutNewNodeMap,
+		FString& OutErrorMessage);
+
+	// Attaches complete AddOn trees, dispatches deferred property callbacks, and checks refreshed pins.
+	static bool ApplyAddOnChanges(
+		UFlowAsset* ExistingAsset,
+		const FFlowReconcileExecutionPlan& ExecutionPlan,
+		const TMap<FGuid, UFlowNode*>& NewNodeMap,
+		FFlowReconcileResult& Result,
+		FString& OutErrorMessage);
+
+	// Installs and removes connections only after the active pin schema matches its validated preview.
+	static bool ApplyConnectionChanges(
+		UFlowAsset* ExistingAsset,
+		const FFlowReconcileExecutionPlan& ExecutionPlan,
+		const TMap<FGuid, UFlowNode*>& CombinedNodeMap,
+		FString& OutErrorMessage);
+
+	// Applies layout/comment state, rebuilds editor nodes, and verifies connection and graph parity.
+	static bool RegraphAndVerify(
+		UFlowAsset* ExistingAsset,
+		const FFlowReconcileExecutionPlan& ExecutionPlan,
+		FFlowReconcileResult& Result,
+		FString& OutErrorMessage);
+
 	// Removes NodeGuidToRemove from the asset's Nodes map (reflection) and drops any connection
 	// entry, on any other node, whose FConnectedPin references it. Returns false only if FlowAsset
 	// or the reflection properties are invalid; removing an absent GUID is a no-op success.
@@ -269,6 +351,21 @@ private:
 	// (reflection). Returns false only if SourceNode or the reflection property are invalid.
 	static bool RemoveConnectionFromSourceNode(UFlowNode* SourceNode, FName SourcePinName);
 
+	// Applies one parsed entry by matching GUID, then updating, deleting, or creating that AddOn.
+	static bool ReconcileParsedAddOn(
+		UFlowNodeBase* OwnerNode,
+		const FGuid& OwnerNodeGuid,
+		const FFlowGraphParsedNodeAddOn& ParsedAddOn,
+		FArrayProperty* AddOnsProperty,
+		FObjectProperty* ElementProperty,
+		void* AddOnsValue,
+		TMap<UFlowNodeAddOn*, TArray<FString>>& OutPendingPropertyChanges,
+		TArray<FFlowReconcileAddonEntry>& OutAdded,
+		TArray<FFlowReconcileAddonEntry>& OutUpdated,
+		TArray<FFlowReconcileAddonEntry>& OutDeleted,
+		FString& OutErrorMessage,
+		bool bFullBlock);
+
 	// Reconciles OwnerNode's AddOns array against ParsedAddOns by AddOnGuid: a matched GUID updates
 	// the addon in place; an unmatched GUID creates it; a delete-marker entry removes the addon if
 	// present. By default (bFullBlock = false) an addon with no entry in ParsedAddOns is left alone.
@@ -276,8 +373,14 @@ private:
 	// matched by GUID is deleted. Reports each touched addon as an FFlowReconcileAddonEntry into
 	// OutAdded/OutUpdated/OutDeleted, tagged with OwnerNodeGuid (the node GUID at the top level, or
 	// the parent addon GUID when recursing into nested addon-of-addon children).
-	static bool ReconcileNodeAddOns(UFlowNodeBase* OwnerNode, const FGuid& OwnerNodeGuid, const TArray<FFlowGraphParsedNodeAddOn>& ParsedAddOns,
-		TArray<FFlowReconcileAddonEntry>& OutAdded, TArray<FFlowReconcileAddonEntry>& OutUpdated, TArray<FFlowReconcileAddonEntry>& OutDeleted, FString& OutErrorMessage, bool bFullBlock = false);
+	static bool ReconcileNodeAddOns(UFlowNodeBase* OwnerNode, const FGuid& OwnerNodeGuid,
+		const TArray<FFlowGraphParsedNodeAddOn>& ParsedAddOns,
+		TMap<UFlowNodeAddOn*, TArray<FString>>& OutPendingPropertyChanges,
+		TArray<FFlowReconcileAddonEntry>& OutAdded,
+		TArray<FFlowReconcileAddonEntry>& OutUpdated,
+		TArray<FFlowReconcileAddonEntry>& OutDeleted,
+		FString& OutErrorMessage,
+		bool bFullBlock = false);
 
 	// Parses RawValue into a scratch instance of Property's type via
 	// UFlowGraphImporter::SetPropertyFromString, then reads it back out via
@@ -327,6 +430,14 @@ private:
 		const TArray<FFlowGraphParsedConnection>& ParsedConnections,
 		FFlowReconcileExecutionPlan& OutPlan,
 		FString& OutErrorMessage);
+
+	// Builds the transient post-plan pin schema shared by dry-run validation and commit verification.
+	static bool BuildEffectivePinSchema(
+		UFlowAsset* ExistingAsset,
+		const FFlowReconcileExecutionPlan& ExecutionPlan,
+		FFlowProjectedPinSchema& OutProjectedPinSchema,
+		FString& OutErrorMessage,
+		TStrongObjectPtr<UFlowAsset>* OutEffectiveAsset = nullptr);
 
 	// Full import + regraph for a new-asset create.
 	// Calls UFlowGraphRegrapher::RegraphFlowAsset(asset, positions) (private, accessible via friend).
