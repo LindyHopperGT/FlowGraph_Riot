@@ -23,6 +23,7 @@
 
 class UFlowNode_CustomOutput;
 class UFlowNode_CustomInput;
+class UFlowNode_SubGraph;
 struct FFlowPreloadPolicy;
 struct FFlowPinConnectionPolicy;
 
@@ -402,7 +403,7 @@ protected:
 
 public:
 	virtual void InitializeInstance(const TWeakObjectPtr<UObject> InOwner, UFlowAsset& InTemplateAsset);
-	bool IsInstanceInitialized() const { return IsValid(TemplateAsset); }
+	bool IsInstanceInitialized() const { return IsValid(TemplateAsset.Get()); }
 
 	void FinishFlowAndDeinitializeInstance(const EFlowFinishPolicy InFinishPolicy);
 	virtual FName GetInstanceName() const;
