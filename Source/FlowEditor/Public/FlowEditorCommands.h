@@ -18,10 +18,7 @@ public:
 
 	TSharedPtr<FUICommandInfo> SearchInAsset;
 
-	TSharedPtr<FUICommandInfo> ContinueFlowExecution;
 	TSharedPtr<FUICommandInfo> StopFlowExecution;
-
-	TSharedPtr<FUICommandInfo> AutoFormatGraph;
 
 	/* Only shown while execution is halted at a Flow breakpoint. */
 	TSharedPtr<FUICommandInfo> ContinueFlowExecution;

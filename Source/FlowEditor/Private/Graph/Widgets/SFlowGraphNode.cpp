@@ -954,7 +954,9 @@ void SFlowGraphNode::AddSubNode(const TSharedPtr<SGraphNode> SubNodeWidget)
 {
 	SubNodes.Add(SubNodeWidget);
 
-	SubNodeBox->AddSlot().AutoHeight().HAlign(HAlign_Fill)
+	SubNodeBox->AddSlot()
+		.AutoHeight()
+		.HAlign(HAlign_Fill)
 		[
 			SubNodeWidget.ToSharedRef()
 		];

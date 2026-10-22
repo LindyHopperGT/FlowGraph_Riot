@@ -11,10 +11,10 @@ class UFlowAsset;
  * Modal prompt for the name of a sub-graph asset generated from a node selection. Validates the name
  * as it is typed, and lists any warnings the collapse plan raised so the designer can back out.
  */
-class SFlowCreateSubGraphDialog : public SCompoundWidget
+class SFlowCollapseToSubGraphDialog : public SCompoundWidget
 {
 public:
-	SLATE_BEGIN_ARGS(SFlowCreateSubGraphDialog) {}
+	SLATE_BEGIN_ARGS(SFlowCollapseToSubGraphDialog) {}
 		SLATE_ARGUMENT(const UFlowAsset*, SourceAsset)
 		SLATE_ARGUMENT(TArray<FText>, Warnings)
 	SLATE_END_ARGS()

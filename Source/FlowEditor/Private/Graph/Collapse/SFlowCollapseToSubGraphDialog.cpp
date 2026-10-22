@@ -1,6 +1,6 @@
 // Copyright https://github.com/MothCocoon/FlowGraph/graphs/contributors
 
-#include "SFlowCreateSubGraphDialog.h"
+#include "SFlowCollapseToSubGraphDialog.h"
 
 #include "FlowAsset.h"
 #include "FlowCollapseToSubGraphPlan.h"
@@ -18,9 +18,9 @@
 #include "Widgets/SWindow.h"
 #include "Widgets/Text/STextBlock.h"
 
-#define LOCTEXT_NAMESPACE "SFlowCreateSubGraphDialog"
+#define LOCTEXT_NAMESPACE "SFlowCollapseToSubGraphDialog"
 
-void SFlowCreateSubGraphDialog::Construct(const FArguments& InArgs)
+void SFlowCollapseToSubGraphDialog::Construct(const FArguments& InArgs)
 {
 	SourceAsset = InArgs._SourceAsset;
 	AssetName = FlowCollapseToSubGraph::GetRequiredAssetNamePrefix();
@@ -63,8 +63,8 @@ void SFlowCreateSubGraphDialog::Construct(const FArguments& InArgs)
 			SAssignNew(AssetNameTextBox, SEditableTextBox)
 			.Text(FText::FromString(AssetName))
 			.SelectAllTextWhenFocused(false)
-			.OnTextChanged(this, &SFlowCreateSubGraphDialog::OnAssetNameChanged)
-			.OnTextCommitted(this, &SFlowCreateSubGraphDialog::OnAssetNameCommitted)
+			.OnTextChanged(this, &SFlowCollapseToSubGraphDialog::OnAssetNameChanged)
+			.OnTextCommitted(this, &SFlowCollapseToSubGraphDialog::OnAssetNameCommitted)
 		]
 
 		+ SVerticalBox::Slot()
@@ -72,8 +72,8 @@ void SFlowCreateSubGraphDialog::Construct(const FArguments& InArgs)
 		.Padding(0.0f, 2.0f)
 		[
 			SNew(STextBlock)
-			.Text(this, &SFlowCreateSubGraphDialog::GetValidationErrorText)
-			.Visibility(this, &SFlowCreateSubGraphDialog::GetErrorVisibility)
+			.Text(this, &SFlowCollapseToSubGraphDialog::GetValidationErrorText)
+			.Visibility(this, &SFlowCollapseToSubGraphDialog::GetErrorVisibility)
 			.AutoWrapText(true)
 			.ColorAndOpacity(FSlateColor(FLinearColor(1.0f, 0.3f, 0.3f)))
 		]
@@ -98,8 +98,8 @@ void SFlowCreateSubGraphDialog::Construct(const FArguments& InArgs)
 			[
 				SNew(SButton)
 				.Text(LOCTEXT("Create", "Create"))
-				.IsEnabled(this, &SFlowCreateSubGraphDialog::IsCreateEnabled)
-				.OnClicked(this, &SFlowCreateSubGraphDialog::OnCreateClicked)
+				.IsEnabled(this, &SFlowCollapseToSubGraphDialog::IsCreateEnabled)
+				.OnClicked(this, &SFlowCollapseToSubGraphDialog::OnCreateClicked)
 			]
 
 			+ SHorizontalBox::Slot()
@@ -107,7 +107,7 @@ void SFlowCreateSubGraphDialog::Construct(const FArguments& InArgs)
 			[
 				SNew(SButton)
 				.Text(LOCTEXT("Cancel", "Cancel"))
-				.OnClicked(this, &SFlowCreateSubGraphDialog::OnCancelClicked)
+				.OnClicked(this, &SFlowCollapseToSubGraphDialog::OnCancelClicked)
 			]
 		]
 	];
@@ -115,7 +115,7 @@ void SFlowCreateSubGraphDialog::Construct(const FArguments& InArgs)
 	OnAssetNameChanged(FText::FromString(AssetName));
 }
 
-void SFlowCreateSubGraphDialog::OnAssetNameChanged(const FText& NewName)
+void SFlowCollapseToSubGraphDialog::OnAssetNameChanged(const FText& NewName)
 {
 	AssetName = NewName.ToString();
 
@@ -129,7 +129,7 @@ void SFlowCreateSubGraphDialog::OnAssetNameChanged(const FText& NewName)
 	}
 }
 
-void SFlowCreateSubGraphDialog::OnAssetNameCommitted(const FText& NewName, const ETextCommit::Type CommitType)
+void SFlowCollapseToSubGraphDialog::OnAssetNameCommitted(const FText& NewName, const ETextCommit::Type CommitType)
 {
 	if (CommitType == ETextCommit::OnEnter && IsCreateEnabled())
 	{
@@ -137,22 +137,22 @@ void SFlowCreateSubGraphDialog::OnAssetNameCommitted(const FText& NewName, const
 	}
 }
 
-FText SFlowCreateSubGraphDialog::GetValidationErrorText() const
+FText SFlowCollapseToSubGraphDialog::GetValidationErrorText() const
 {
 	return ValidationError;
 }
 
-EVisibility SFlowCreateSubGraphDialog::GetErrorVisibility() const
+EVisibility SFlowCollapseToSubGraphDialog::GetErrorVisibility() const
 {
 	return ValidationError.IsEmpty() ? EVisibility::Collapsed : EVisibility::Visible;
 }
 
-bool SFlowCreateSubGraphDialog::IsCreateEnabled() const
+bool SFlowCollapseToSubGraphDialog::IsCreateEnabled() const
 {
 	return ValidationError.IsEmpty();
 }
 
-FReply SFlowCreateSubGraphDialog::OnCreateClicked()
+FReply SFlowCollapseToSubGraphDialog::OnCreateClicked()
 {
 	bConfirmed = true;
 
@@ -164,7 +164,7 @@ FReply SFlowCreateSubGraphDialog::OnCreateClicked()
 	return FReply::Handled();
 }
 
-FReply SFlowCreateSubGraphDialog::OnCancelClicked()
+FReply SFlowCollapseToSubGraphDialog::OnCancelClicked()
 {
 	bConfirmed = false;
 
@@ -176,9 +176,9 @@ FReply SFlowCreateSubGraphDialog::OnCancelClicked()
 	return FReply::Handled();
 }
 
-bool SFlowCreateSubGraphDialog::ShowModal(const UFlowAsset& SourceAsset, const TArray<FText>& Warnings, FString& OutAssetName)
+bool SFlowCollapseToSubGraphDialog::ShowModal(const UFlowAsset& SourceAsset, const TArray<FText>& Warnings, FString& OutAssetName)
 {
-	TSharedRef<SFlowCreateSubGraphDialog> Dialog = SNew(SFlowCreateSubGraphDialog)
+	TSharedRef<SFlowCollapseToSubGraphDialog> Dialog = SNew(SFlowCollapseToSubGraphDialog)
 		.SourceAsset(&SourceAsset)
 		.Warnings(Warnings);
 

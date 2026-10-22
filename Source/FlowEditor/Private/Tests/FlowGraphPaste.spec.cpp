@@ -16,12 +16,17 @@
 #include "AddOns/FlowNodeAddOn_PredicateNOT.h"
 #include "Asset/FlowAssetEditor.h"
 #include "FlowAsset.h"
+#include "Graph/Collapse/FlowCollapseToSubGraphPlan.h"
 #include "Graph/FlowGraph.h"
 #include "Graph/FlowGraphEditor.h"
 #include "Graph/FlowGraphSchema.h"
+#include "Graph/Extraction/FlowSubGraphExtractionPlan.h"
 #include "Graph/Nodes/FlowGraphNode.h"
+#include "Nodes/Developer/FlowNode_Log.h"
 #include "Nodes/Route/FlowNode_Branch.h"
+#include "Nodes/Route/FlowNode_ExecutionSequence.h"
 #include "Nodes/Route/FlowNode_Reroute.h"
+#include "Nodes/Route/FlowNode_Timer.h"
 
 namespace FlowGraphPasteTests
 {
@@ -41,11 +46,13 @@ public:
 	{
 		FlowAsset = Asset;
 		FlowAssetEditor = AssetEditor;
+		bCanEditInPIE = false;
 		SGraphEditor::Construct(SGraphEditor::FArguments().GraphToEdit(Asset->GetGraph()));
 	}
 
 	virtual bool IsTabFocused() const override { return true; }
 	using SFlowGraphEditor::CopySelectedNodes;
+	using SFlowGraphEditor::DuplicateNodes;
 };
 
 struct FTestGraph
@@ -116,6 +123,62 @@ void FFlowGraphPasteSpec::Define()
 
 	BeforeEach([this]() { FPlatformApplicationMisc::ClipboardPaste(OriginalClipboard); });
 	AfterEach([this]() { FPlatformApplicationMisc::ClipboardCopy(*OriginalClipboard); });
+
+	It("GraphCreationHonorsDefaultNodePolicy", [this]()
+	{
+		TStrongObjectPtr<UFlowAsset> EmptyAsset(NewObject<UFlowAsset>());
+		UFlowGraph::CreateGraph(EmptyAsset.Get(), UFlowGraphSchema::StaticClass(), /*bCreateDefaultNodes=*/false);
+		TestTrue(TEXT("Graph creation without defaults leaves the graph empty"), EmptyAsset->GetGraph()->Nodes.IsEmpty());
+		TestTrue(TEXT("Graph creation without defaults registers no runtime nodes"), EmptyAsset->GetNodes().IsEmpty());
+
+		TStrongObjectPtr<UFlowAsset> DefaultAsset(NewObject<UFlowAsset>());
+		UFlowGraph::CreateGraph(DefaultAsset.Get(), UFlowGraphSchema::StaticClass());
+		TestFalse(TEXT("Ordinary graph creation still creates default graph nodes"), DefaultAsset->GetGraph()->Nodes.IsEmpty());
+		TestFalse(TEXT("Ordinary graph creation still registers default runtime nodes"), DefaultAsset->GetNodes().IsEmpty());
+	});
+
+	It("ExtractionPreservesConcurrentExits", [this]()
+	{
+		FTestGraph Source;
+		UFlowGraphNode* Entry = Source.AddNode(UFlowNode_Reroute::StaticClass());
+		UFlowGraphNode* Sequence = Source.AddNode(UFlowNode_ExecutionSequence::StaticClass());
+		UFlowGraphNode* Timer = Source.AddNode(UFlowNode_Timer::StaticClass());
+		UFlowGraphNode* Log = Source.AddNode(UFlowNode_Log::StaticClass());
+		UFlowGraphNode* TimerTarget = Source.AddNode(UFlowNode_Reroute::StaticClass());
+		UFlowGraphNode* LogTarget = Source.AddNode(UFlowNode_Reroute::StaticClass());
+		Log->NodePosY = 200;
+
+		const UEdGraphSchema* Schema = Source.Graph->GetSchema();
+		const auto Connect = [this, Schema](UFlowGraphNode* From, const FName OutputName, UFlowGraphNode* To)
+		{
+			return TestTrue(TEXT("The source execution connection is valid"), Schema->TryCreateConnection(
+				From->FindPin(OutputName, EGPD_Output), To->FindPin(TEXT("In"), EGPD_Input)));
+		};
+		if (!Connect(Entry, TEXT("Out"), Sequence)
+			|| !Connect(Sequence, TEXT("0"), Timer)
+			|| !Connect(Sequence, TEXT("1"), Log)
+			|| !Connect(Timer, TEXT("Completed"), TimerTarget)
+			|| !Connect(Log, TEXT("Out"), LogTarget))
+		{
+			return;
+		}
+
+		const auto CheckExits = [this](const auto& Plan)
+		{
+			TestTrue(TEXT("A selection containing concurrent timer and immediate branches can be extracted"), Plan.CanApply());
+			TestEqual(TEXT("Both branches retain their outgoing interfaces"), Plan.Exits.Num(), 2);
+			TSet<FName> ExitNames;
+			for (const auto& Exit : Plan.Exits)
+			{
+				TestFalse(TEXT("An ordinary exit must not finish the child and cancel sibling work"), Exit.bUsesBuiltInPin);
+				TestNotEqual(TEXT("An ordinary exit must not use the reserved Finish interface"), Exit.InterfaceName, FName(TEXT("Finish")));
+				ExitNames.Add(Exit.InterfaceName);
+			}
+			TestEqual(TEXT("Concurrent exits use distinct interfaces"), ExitNames.Num(), 2);
+		};
+		CheckExits(FlowSubGraphExtraction::PlanExtraction({Sequence, Timer, Log}));
+		CheckExits(FlowCollapseToSubGraph::PlanCollapse({Sequence, Timer, Log}));
+	});
 
 	It("AvailabilityDoesNotImportIncompatibleNodes", [this]()
 	{

@@ -218,7 +218,8 @@ UFlowAsset* UFlowSubsystem::CreateSubFlow(UFlowNode_SubGraph* SubGraphNode, cons
 	if (!InstancedSubFlows.Contains(SubGraphNode))
 	{
 		const TWeakObjectPtr<UObject> Owner = SubGraphOwner ? SubGraphOwner->GetOwner() : nullptr;
-		AssetInstance = CreateFlowInstance(Owner, SubGraphNode->Asset.LoadSynchronous(), SavedInstanceName, false);
+		AssetInstance = CreateFlowInstance(
+			Owner, SubGraphNode->Asset.LoadSynchronous(), SavedInstanceName, /*bStartReplication=*/false, SubGraphOwner);
 
 		if (AssetInstance)
 		{
@@ -283,7 +284,7 @@ void UFlowSubsystem::FinishSubFlow(UFlowNode_SubGraph* SubGraphNode, const EFlow
 	}
 }
 
-UFlowAsset* UFlowSubsystem::CreateFlowInstance(const TWeakObjectPtr<UObject> Owner, UFlowAsset* LoadedFlowAsset, FString NewInstanceName, const bool bStartReplication)
+UFlowAsset* UFlowSubsystem::CreateFlowInstance(const TWeakObjectPtr<UObject> Owner, UFlowAsset* LoadedFlowAsset, FString NewInstanceName, const bool bStartReplication, UFlowAsset* OwningFlowInstance)
 {
 	if (!IsValid(LoadedFlowAsset) || !HasValidNodesForInstancing(*LoadedFlowAsset, *LoadedFlowAsset, Owner.Get()))
 	{

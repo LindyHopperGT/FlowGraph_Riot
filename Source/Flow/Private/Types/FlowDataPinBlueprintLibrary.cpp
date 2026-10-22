@@ -43,9 +43,7 @@ namespace
 			const UScriptStruct* EntryType = PropertyValue.GetScriptStruct();
 			if (IsValid(EntryType) && EntryType->IsChildOf(ValueType))
 			{
-				FInstancedStruct Entry;
-				Entry.InitializeAs(EntryType, PropertyValue.GetMemory());
-				Unbox(Entry, Results);
+				Unbox(PropertyValue, Results);
 			}
 		}
 

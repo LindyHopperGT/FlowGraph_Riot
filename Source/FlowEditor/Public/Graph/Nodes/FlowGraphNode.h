@@ -298,6 +298,7 @@ public:
 
 	virtual FText GetDescription() const;
 
+	void AddSubNode(UFlowGraphNode* SubNode);
 	void AddSubNode(UFlowGraphNode* SubNode, class UEdGraph* ParentGraph);
 	bool AddSubNodeForRegraph(UFlowGraphNode* SubNode, UEdGraph* ParentGraph);
 	void ReparentSubNodeForRegraph(UFlowGraphNode* SubNode);

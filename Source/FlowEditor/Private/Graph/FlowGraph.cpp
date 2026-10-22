@@ -47,7 +47,10 @@ void UFlowGraph::CreateGraph(UFlowAsset* InFlowAsset, TSubclassOf<UFlowGraphSche
 	// Nodes read them while being reconstructed, so this must precede creating any node.
 	InFlowAsset->SetupForEditing();
 
-	InFlowAsset->FlowGraph->GetSchema()->CreateDefaultNodesForGraph(*InFlowAsset->FlowGraph);
+	if (bCreateDefaultNodes)
+	{
+		InFlowAsset->FlowGraph->GetSchema()->CreateDefaultNodesForGraph(*InFlowAsset->FlowGraph);
+	}
 }
 
 void UFlowGraph::RefreshGraph()

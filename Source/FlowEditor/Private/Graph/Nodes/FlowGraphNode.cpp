@@ -1607,10 +1607,14 @@ void UFlowGraphNode::DiffSubNodes(const FText& NodeTypeDisplayName, const TArray
 
 void UFlowGraphNode::AddSubNode(UFlowGraphNode* SubNode)
 {
+	AddSubNode(SubNode, GetGraph());
+}
+
+void UFlowGraphNode::AddSubNode(UFlowGraphNode* SubNode, UEdGraph* ParentGraph)
+{
 	const FScopedTransaction Transaction(LOCTEXT("AddNode", "Add Node"));
 	Modify();
 
-	UEdGraph* ParentGraph = GetGraph();
 	ParentGraph->Modify();
 
 	SubNode->SetFlags(RF_Transactional);
@@ -1930,6 +1934,7 @@ bool CheckPinsMatch(
 		if (!GraphPins.ContainsByPredicate([&FlowNodePin, PinDirection](const UEdGraphPin* GraphNodePin)
 		{
 			return GraphNodePin->PinName == FlowNodePin.PinName 
+				&& GraphNodePin->Direction == PinDirection
 				&& GraphNodePin->PinFriendlyName.EqualTo(FlowNodePin.PinFriendlyName)
 				&& GraphNodePin->PinToolTip == FlowNodePin.PinToolTip;
 		}))

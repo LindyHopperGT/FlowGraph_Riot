@@ -157,21 +157,15 @@ protected:
 	static bool IsFlowExecutionHalted();
 	static class UFlowDebugEditorSubsystem* GetFlowDebugEditorSubsystem();
 
-	virtual void AutoFormatGraph();
-
-	/* Continues execution halted at a Flow breakpoint. Only available while halted. */
-	void ContinueFlowExecution();
-	bool IsFlowExecutionHalted() const;
-	static class UFlowDebugEditorSubsystem* GetFlowDebugEditorSubsystem();
-
 	virtual void CreateWidgets();
 	virtual void CreateGraphWidget();
 
-	static bool CanEdit();
+	bool CanEdit() const;
 	static bool IsPropertyVisible(const FPropertyAndParent& PropertyAndParent);
 
 public:
 	void SetUISelectionState(const FName SelectionOwner);
+	void SetCanEditInPIE(bool value);
 	virtual void ClearSelectionStateFor(const FName SelectionOwner);
 	FName GetUISelectionState() const;
 

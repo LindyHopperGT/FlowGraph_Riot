@@ -38,10 +38,9 @@ namespace FlowCollapseToSubGraph
 		/** Vertical gap between stacked interface nodes. */
 		constexpr float InterfaceNodeSpacingY = 150.0f;
 
-		/** Recursively gathers a node and its AddOns, stamping the parent indices that survive the copy. */
-		void PrepareNodeForCopy(UFlowGraphNode& FlowGraphNode, const int32 ParentEdNodeIndex, FGraphPanelSelectionSet& OutNodes)
+		/** Recursively gathers a node and its AddOns, stamping the parent Guid that survives the copy. */
+		void PrepareNodeForCopy(UFlowGraphNode& FlowGraphNode, const FGuid& ParentGuid, FGraphPanelSelectionSet& OutNodes)
 		{
-			const int32 ThisNodeIndex = OutNodes.Num();
 			bool bAlreadyInSet = false;
 			OutNodes.Add(&FlowGraphNode, &bAlreadyInSet);
 			if (bAlreadyInSet)
@@ -49,14 +48,13 @@ namespace FlowCollapseToSubGraph
 				return;
 			}
 
+			FlowGraphNode.ParentGuidCopy = ParentGuid;
 			FlowGraphNode.PrepareForCopying();
-			FlowGraphNode.CopySubNodeParentIndex = ParentEdNodeIndex;
-			FlowGraphNode.CopySubNodeIndex = ThisNodeIndex;
 			for (UFlowGraphNode* SubNode : FlowGraphNode.SubNodes)
 			{
 				if (SubNode)
 				{
-					PrepareNodeForCopy(*SubNode, ThisNodeIndex, OutNodes);
+					PrepareNodeForCopy(*SubNode, FlowGraphNode.NodeGuid, OutNodes);
 				}
 			}
 		}
@@ -111,12 +109,12 @@ namespace FlowCollapseToSubGraph
 		 * Restores the parent/AddOn hierarchy flattened by ImportNodesFromText.
 		 *
 		 * Text import initially places every UFlowGraphNode in UEdGraph::Nodes. Flow AddOns are not standalone
-		 * graph nodes, however; they are owned through their parent's SubNodes array. CopySubNodeParentIndex
-		 * identifies the imported parent after object references have been remapped by the text importer.
+		 * graph nodes, however; they are owned through their parent's SubNodes array. ParentGuidCopy
+		 * identifies the imported parent by the source Guid it carried before the copy.
 		 */
 		bool ReattachImportedAddOns(
 			const TSet<UEdGraphNode*>& ImportedNodes,
-			const TMap<int32, UFlowGraphNode*>& ClonedByCopyIndex,
+			const TMap<FGuid, UFlowGraphNode*>& ClonedBySourceGuid,
 			UFlowGraph& NewGraph)
 		{
 			for (UEdGraphNode* ImportedNode : ImportedNodes)
@@ -127,7 +125,7 @@ namespace FlowCollapseToSubGraph
 					continue;
 				}
 
-				UFlowGraphNode* ClonedParent = ClonedByCopyIndex.FindRef(ClonedAddOn->CopySubNodeParentIndex);
+				UFlowGraphNode* ClonedParent = ClonedBySourceGuid.FindRef(ClonedAddOn->ParentGuidCopy);
 				if (!ClonedParent)
 				{
 					return false;
@@ -165,7 +163,7 @@ namespace FlowCollapseToSubGraph
 			FGraphPanelSelectionSet NodesToExport;
 			for (UFlowGraphNode* SelectedNode : Plan.SelectedNodes)
 			{
-				PrepareNodeForCopy(*SelectedNode, INDEX_NONE, NodesToExport);
+				PrepareNodeForCopy(*SelectedNode, FGuid(), NodesToExport);
 			}
 
 			FString ExportedText;
@@ -183,10 +181,9 @@ namespace FlowCollapseToSubGraph
 			TSet<UEdGraphNode*> ImportedNodes;
 			FEdGraphUtilities::ImportNodesFromText(&NewGraph, ExportedText, ImportedNodes);
 
-			// The copy indices are stable identifiers written before export. Build this lookup before clearing
-			// imported child arrays so each AddOn can later recover its imported parent without relying on stale
-			// object references from the source graph.
-			TMap<int32, UFlowGraphNode*> ClonedByCopyIndex;
+			// Text import preserves Guids. Build the lookup before AddSubNode assigns new AddOn Guids,
+			// so nested AddOns can recover their parents through ParentGuidCopy.
+			TMap<FGuid, UFlowGraphNode*> ClonedBySourceGuid;
 			for (UEdGraphNode* ImportedNode : ImportedNodes)
 			{
 				UFlowGraphNode* ClonedFlowNode = Cast<UFlowGraphNode>(ImportedNode);
@@ -195,7 +192,7 @@ namespace FlowCollapseToSubGraph
 					continue;
 				}
 
-				ClonedByCopyIndex.Add(ClonedFlowNode->CopySubNodeIndex, ClonedFlowNode);
+				ClonedBySourceGuid.Add(ClonedFlowNode->NodeGuid, ClonedFlowNode);
 				if (!ClonedFlowNode->IsSubNode())
 				{
 					OutClonedByOriginalGuid.Add(ClonedFlowNode->NodeGuid, ClonedFlowNode);
@@ -205,12 +202,12 @@ namespace FlowCollapseToSubGraph
 					}
 				}
 
-				// Rebuild every parent/AddOn relationship from the copied indices below rather than retaining the
+				// Rebuild every parent/AddOn relationship from the copied parent Guids below rather than retaining the
 				// hierarchy serialized by the source graph.
 				ClonedFlowNode->RemoveAllSubNodes();
 			}
 
-			return ReattachImportedAddOns(ImportedNodes, ClonedByCopyIndex, NewGraph);
+			return ReattachImportedAddOns(ImportedNodes, ClonedBySourceGuid, NewGraph);
 		}
 
 		/** Shifts the cloned region so it sits to the right of the Start node instead of at its original coordinates. */
@@ -422,8 +419,8 @@ namespace FlowCollapseToSubGraph
 
 	bool FCollapseApply::BuildExits()
 	{
-		// A Finish node always exists. An exit leaving through an unnamed pin runs into it; everything else
-		// gets a Custom Output. When nothing routes to it, it stays unconnected for the designer to wire.
+		// Leave Finish unconnected for the designer to wire. Ordinary exits use Custom Outputs so they
+		// cannot terminate the child instance while another branch is still active.
 		const float ExitColumnPosX = static_cast<float>(ClonedRegionMaxX) + Internal::ExitNodeOffsetX;
 		float NextExitNodePosY = ClonedRegionOrigin.Y;
 		FinishGraphNode = FFlowGraphSchemaAction_NewNode::CreateNode(

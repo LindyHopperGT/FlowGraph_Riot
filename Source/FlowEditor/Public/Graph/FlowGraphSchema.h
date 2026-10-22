@@ -77,9 +77,6 @@ public:
 	// the default Flow pin widgets (e.g. SFlowGraphPinExec). Returns null by default, meaning no substitution.
 	virtual TSharedPtr<SGraphPin> CreatePinWidget(UEdGraphPin* InPin) const { return nullptr; }
 
-	// Lets a schema substitute its own widget for a pin before Flow falls back to its default pin widgets.
-	virtual TSharedPtr<SGraphPin> CreatePinWidget(UEdGraphPin* InPin) const { return nullptr; }
-
 	static const FFlowPinType* LookupDataPinTypeForPinCategory(const FName& PinCategory);
 
 	bool ArePinSubCategoryObjectsCompatible(

@@ -186,13 +186,10 @@ EFlowReconcilePropertiesResult UFlowAssetParams::ReconcilePropertiesWithStartNod
 			{
 				OnAssetParamsReconciled.Broadcast();
 			}
-
-		if (OnAssetParamsReconciled.IsBound())
-		{
-			OnAssetParamsReconciled.Broadcast();
+			return EFlowReconcilePropertiesResult::ParamsPropertiesUpdated;
 		}
 
-		return EFlowReconcilePropertiesResult::ParamsPropertiesUpdated;
+		return EFlowReconcilePropertiesResult::NoChanges;
 	}
 
 	MutablePropertiesFromStartNode = Properties;

@@ -5,7 +5,7 @@
 #include "FlowCollapseToSubGraphPlan.h"
 #include "FlowCollapseToSubGraphApply.h"
 #include "FlowCollapseToSubGraphSourceControl.h"
-#include "SFlowCreateSubGraphDialog.h"
+#include "SFlowCollapseToSubGraphDialog.h"
 #include "Graph/FlowGraphEditor.h"
 #include "Graph/Nodes/FlowGraphNode.h"
 
@@ -44,7 +44,7 @@ void FFlowCollapseToSubGraphTool::Execute(SFlowGraphEditor& GraphEditor)
 	}
 
 	FString NewAssetName;
-	if (!SFlowCreateSubGraphDialog::ShowModal(*GraphEditor.FlowAsset, Plan.Warnings, NewAssetName))
+	if (!SFlowCollapseToSubGraphDialog::ShowModal(*GraphEditor.FlowAsset, Plan.Warnings, NewAssetName))
 	{
 		return;
 	}

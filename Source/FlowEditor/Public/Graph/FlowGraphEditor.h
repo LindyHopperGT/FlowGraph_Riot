@@ -8,6 +8,7 @@
 
 class FFlowAssetEditor;
 class FFlowCollapseToSubGraphTool;
+class FFlowSubGraphExtractionTool;
 class IDetailsView;
 class UEdGraphPin;
 class UFlowDebuggerSubsystem;
@@ -19,6 +20,7 @@ struct FFlowBreakpoint;
 class FLOWEDITOR_API SFlowGraphEditor : public SGraphEditor
 {
 	friend class FFlowCollapseToSubGraphTool;
+	friend class FFlowSubGraphExtractionTool;
 
 public:
 	SLATE_BEGIN_ARGS(SFlowGraphEditor)
@@ -62,7 +64,7 @@ private:
 public:
 	virtual bool IsTabFocused() const;
 
-	static bool CanEdit();
+	bool CanEdit() const;
 	static bool IsPIE();
 	static bool IsPlaySessionPaused();
 
@@ -127,19 +129,6 @@ protected:
 	static bool HasEnabledPinBreakpoint(UFlowDebuggerSubsystem* InDebuggerSubsystem, const UEdGraphPin* Pin);
 
 private:
-	static TSet<UEdGraphNode*> ImportAndValidatePastedNodes(
-		UFlowGraph& FlowGraph,
-		const TArray<UFlowGraphNode*>& PasteTargetNodes,
-		UFlowGraphNode* PasteTargetNode,
-		FString& OutTextToImport,
-		TMap<int32, UFlowGraphNode*>& OutNodeCopyIndexMap);
-	void PreparePastedNodesForPaste(const TSet<UEdGraphNode*>& NodesToPaste, const FVector2f& Location);
-	static void AttachPastedSubNodes(
-		const TSet<UEdGraphNode*>& NodesToPaste,
-		const TMap<int32, UFlowGraphNode*>& NodeCopyIndexMap,
-		UFlowGraphNode* PasteTargetNode,
-		UFlowGraph& FlowGraph);
-
 	void AddInput() const;
 	bool CanAddInput() const;
 

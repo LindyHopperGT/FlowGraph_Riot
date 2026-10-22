@@ -29,12 +29,6 @@ TSharedPtr<SGraphPin> FFlowGraphPinFactory::CreatePin(UEdGraphPin* InPin) const
 		return CustomPinWidget;
 	}
 
-	// Let specialized Flow schemas provide their own widget before using the default Flow pins.
-	if (TSharedPtr<SGraphPin> CustomPinWidget = FlowGraphSchema->CreatePinWidget(InPin))
-	{
-		return CustomPinWidget;
-	}
-
 	const UFlowGraphNode* FlowGraphNode = Cast<UFlowGraphNode>(InPin->GetOwningNode());
 
 	// Create the widget for a Flow 'Exec'-style pin

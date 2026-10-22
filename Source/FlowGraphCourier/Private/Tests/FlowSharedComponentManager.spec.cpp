@@ -226,7 +226,7 @@ void FFlowSharedComponentManagerSpec::Define()
 
 	It("distinguishes a child local manager from its root manager", [this]()
 	{
-		UFlowAsset* Child = Subsystem->CreateFlowInstance(Actor, Template.Get(), FString(), Root.Get());
+		UFlowAsset* Child = Subsystem->CreateFlowInstance(Actor, Template.Get(), FString(), /*bStartReplication=*/true, Root.Get());
 		if (!TestNotNull(TEXT("Child created"), Child))
 		{
 			return;
@@ -255,7 +255,7 @@ void FFlowSharedComponentManagerSpec::Define()
 
 	It("releases node users from local and root managers during cleanup", [this]()
 	{
-		UFlowAsset* Child = Subsystem->CreateFlowInstance(Actor, Template.Get(), FString(), Root.Get());
+		UFlowAsset* Child = Subsystem->CreateFlowInstance(Actor, Template.Get(), FString(), /*bStartReplication=*/true, Root.Get());
 		UFlowNode_Start* Node = NewObject<UFlowNode_Start>(Child);
 		USceneComponent* LocalComponent = NewObject<USceneComponent>(Actor);
 		Child->GetOrCreateComponentInjectionManager()->InjectComponentOnActor(*Actor, *LocalComponent, Node);
@@ -371,7 +371,7 @@ void FFlowSharedComponentManagerSpec::Define()
 
 	It("does not create a manager on a root that has already shut down", [this]()
 	{
-		UFlowAsset* Child = Subsystem->CreateFlowInstance(Actor, Template.Get(), FString(), Root.Get());
+		UFlowAsset* Child = Subsystem->CreateFlowInstance(Actor, Template.Get(), FString(), /*bStartReplication=*/true, Root.Get());
 		if (!TestNotNull(TEXT("Child created"), Child))
 		{
 			return;
@@ -386,7 +386,7 @@ void FFlowSharedComponentManagerSpec::Define()
 
 	It("drops its owning root when deinitialized", [this]()
 	{
-		UFlowAsset* Child = Subsystem->CreateFlowInstance(Actor, Template.Get(), FString(), Root.Get());
+		UFlowAsset* Child = Subsystem->CreateFlowInstance(Actor, Template.Get(), FString(), /*bStartReplication=*/true, Root.Get());
 		if (!TestNotNull(TEXT("Child created"), Child))
 		{
 			return;
@@ -400,7 +400,7 @@ void FFlowSharedComponentManagerSpec::Define()
 	It("uses the supplied instance as the root when it has no resolved root", [this]()
 	{
 		TStrongObjectPtr<UFlowAsset> Unresolved(NewObject<UFlowAsset>());
-		UFlowAsset* Child = Subsystem->CreateFlowInstance(Actor, Template.Get(), FString(), Unresolved.Get());
+		UFlowAsset* Child = Subsystem->CreateFlowInstance(Actor, Template.Get(), FString(), /*bStartReplication=*/true, Unresolved.Get());
 		if (!TestNotNull(TEXT("Child created"), Child))
 		{
 			return;

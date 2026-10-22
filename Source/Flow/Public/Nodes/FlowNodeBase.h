@@ -554,12 +554,39 @@ public:
 	 */
 	virtual bool GetCornerIcon(FName& OutBrushName, FName& OutStyleSetName) const { return false; }
 
+	/** The title border padding SFlowGraphNode applies to a node that does not override it.
+	 * The Right value is deliberately generous: it makes the title color spill stretch well past the title text.
+	 */
+	static FMargin GetDefaultTitleBorderMargin() { return FMargin(10.0f, 5.0f, 30.0f, 3.0f); }
+
+	/**
+	 * Returns the padding SFlowGraphNode applies to this node instance's title border.
+	 * Can override in a sub-class to produce a different margin.
+	 * This can be particularly useful for Nodes that want to draw several overlay icons in the title bar.
+	 */
+	virtual FMargin GetTitleBorderMargin() const { return GetDefaultTitleBorderMargin(); }
+
 	/** Returns the agent-facing guidance authored on this class or supplied by a native override. */
 	virtual const FFlowAgentDoc& GetAgentDoc() const { return AgentDoc; }
 
 	/* Persists documentation for classes whose defaults serialize AgentDoc. Native overrides should
 	 * return their compiled-in documentation directly. */
 	void SetAgentDoc(const FFlowAgentDoc& InAgentDoc) { AgentDoc = InAgentDoc; }
+
+	/* The single deprecation predicate for a Flow class. Keying anything off the category string
+	 * instead corrupts category filtering, because Category is display metadata. */
+	bool IsDeprecated() const { return bNodeDeprecated; }
+
+	/* The class an author should migrate to, or null when this class has no successor. */
+	const TSubclassOf<UFlowNode>& GetReplacedByClass() const { return ReplacedBy; }
+
+	/**
+	 * The pin surface a catalog or documentation consumer should report for this class, read from the
+	 * CDO. Defaults to nothing; UFlowNode reports its declared InputPins/OutputPins, and a base that
+	 * generates its pins procedurally overrides this to report what it will generate. Pins
+	 * contributed by attached addons are outside the scope of a CDO and are not reported here.
+	 */
+	virtual void GetCatalogPins(TArray<FFlowPin>& OutInputPins, TArray<FFlowPin>& OutOutputPins) const {}
 	
 protected:
 	void EnsureNodeDisplayStyle();

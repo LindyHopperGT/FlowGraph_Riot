@@ -33,7 +33,7 @@ FString UFlowNode_LogicalAND::GetStatusString() const
 {
 	FTextBuilder TextBuilder;
 
-	if (ActivationState != EFlowNodeState::NeverActivated)
+	if (GetActivationState() != EFlowNodeState::NeverActivated)
 	{
 		for (const FName& PinName : ExecutedInputNames)
 		{

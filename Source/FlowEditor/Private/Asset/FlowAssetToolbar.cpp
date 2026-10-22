@@ -123,6 +123,7 @@ void SFlowAssetInstanceList::RefreshInstances()
 	{
 		AllInstances.Add(ActiveInstance);
 	}
+
 	for (const TWeakObjectPtr<UFlowAsset>& ReplicaInstance : TemplateAsset->GetReplicaInstances())
 	{
 		if (const UFlowAsset* Replica = ReplicaInstance.Get())

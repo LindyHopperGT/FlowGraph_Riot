@@ -61,7 +61,7 @@ namespace FlowAssetEditor_Private
 		}
 
 		return PropertyAndParent.Property.GetFName() != TEXT("AddOns")
-			|| GetDefault<UFlowGraphEditorSettings>()->bMergeAddOnDetails;
+			|| GetDefault<UFlowGraphEditorSettings>()->bShowAddOnsInNodeDetails;
 	}
 }
 
@@ -345,8 +345,6 @@ void FFlowAssetEditor::InitFlowAssetEditor(const EToolkitMode::Type Mode, const 
 	UFlowGraphSchema::SubscribeToAssetChanges();
 
 	FlowAsset->OnDetailsRefreshRequested.BindThreadSafeSP(this, &FFlowAssetEditor::RefreshDetails);
-	FlowGraphEditorSettingsChangedHandle = UFlowGraphEditorSettings::OnSettingsChanged().AddRaw(this, &FFlowAssetEditor::RefreshDetails);
-
 	FlowGraphEditorSettingsChangedHandle = UFlowGraphEditorSettings::OnSettingsChanged().AddRaw(
 		this, &FFlowAssetEditor::RefreshDetails);
 
@@ -452,7 +450,7 @@ void FFlowAssetEditor::BindToolbarCommands()
 
 	ToolkitCommands->MapAction(ToolbarCommands.AutoFormatGraph,
 	                           FExecuteAction::CreateSP(this, &FFlowAssetEditor::AutoFormatGraph),
-	                           FCanExecuteAction::CreateStatic(&FFlowAssetEditor::CanEdit));
+	                           FCanExecuteAction::CreateSP(this, &FFlowAssetEditor::CanEdit));
 
 	// View
 	ToolkitCommands->MapAction(ToolbarCommands.SearchInAsset,
@@ -471,16 +469,6 @@ void FFlowAssetEditor::BindToolbarCommands()
 	                           FCanExecuteAction::CreateStatic(&FFlowAssetEditor::IsFlowExecutionHalted),
 	                           FIsActionChecked(),
 	                           FIsActionButtonVisible::CreateStatic(&FFlowAssetEditor::IsFlowExecutionHalted));
-
-	ToolkitCommands->MapAction(ToolbarCommands.AutoFormatGraph,
-	                           FExecuteAction::CreateSP(this, &FFlowAssetEditor::AutoFormatGraph),
-								FCanExecuteAction::CreateSP(this, &FFlowAssetEditor::CanEdit));
-
-	ToolkitCommands->MapAction(ToolbarCommands.ContinueFlowExecution,
-	                           FExecuteAction::CreateSP(this, &FFlowAssetEditor::ContinueFlowExecution),
-	                           FCanExecuteAction::CreateSP(this, &FFlowAssetEditor::IsFlowExecutionHalted),
-	                           FIsActionChecked(),
-	                           FIsActionButtonVisible::CreateSP(this, &FFlowAssetEditor::IsFlowExecutionHalted));
 
 	// Engine's Play commands
 	ToolkitCommands->Append(FPlayWorldCommands::GlobalPlayWorldActions.ToSharedRef());
@@ -621,7 +609,7 @@ void FFlowAssetEditor::CreateWidgets()
 
 		FPropertyEditorModule& PropertyModule = FModuleManager::LoadModuleChecked<FPropertyEditorModule>("PropertyEditor");
 		DetailsView = PropertyModule.CreateDetailView(Args);
-		DetailsView->SetIsPropertyEditingEnabledDelegate(FIsPropertyEditingEnabled::CreateStatic(&FFlowAssetEditor::CanEdit));
+		DetailsView->SetIsPropertyEditingEnabledDelegate(FIsPropertyEditingEnabled::CreateSP(this, &FFlowAssetEditor::CanEdit));
 		DetailsView->SetIsPropertyVisibleDelegate(FIsPropertyVisible::CreateStatic(&FFlowAssetEditor::IsPropertyVisible));
 		DetailsView->RegisterInstancedCustomPropertyTypeLayout(UFlowNodeAddOn::StaticClass()->GetFName(), FOnGetPropertyTypeCustomizationInstance::CreateStatic(&FFlowNodeAddOnCustomization::MakeInstance));
 		DetailsView->SetObject(FlowAsset);
@@ -681,7 +669,7 @@ void FFlowAssetEditor::CreateGraphWidget()
 		];
 }
 
-bool FFlowAssetEditor::CanEdit()
+bool FFlowAssetEditor::CanEdit() const
 {
 	return GEditor->PlayWorld == nullptr || bCanEditInPIE;
 }
