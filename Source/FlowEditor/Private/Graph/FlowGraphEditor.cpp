@@ -178,10 +178,6 @@ void SFlowGraphEditor::BindGraphCommands()
 	                       FExecuteAction::CreateSP(this, &SFlowGraphEditor::DuplicateNodes),
 	                       FCanExecuteAction::CreateSP(this, &SFlowGraphEditor::CanDuplicateNodes));
 
-	CommandList->MapAction(FlowGraphCommands.CreateSubGraphFromSelection,
-	                       FExecuteAction::CreateSP(this, &SFlowGraphEditor::CreateSubGraphFromSelection),
-	                       FCanExecuteAction::CreateSP(this, &SFlowGraphEditor::CanCreateSubGraphFromSelection));
-
 	// Pin commands
 	CommandList->MapAction(FlowGraphCommands.ReconstructNode,
 	                       FExecuteAction::CreateSP(this, &SFlowGraphEditor::ReconstructNode),
@@ -222,8 +218,8 @@ void SFlowGraphEditor::BindGraphCommands()
 						   FExecuteAction::CreateSP(this, &SFlowGraphEditor::OnStraightenConnections));
 	
 	CommandList->MapAction(FlowGraphCommands.ExtractToSubGraph,
-					   FExecuteAction::CreateSP(this, &SFlowGraphEditor::CreateSubGraphFromSelection),
-					   FCanExecuteAction::CreateSP(this, &SFlowGraphEditor::CanCreateSubGraphFromSelection));
+					   FExecuteAction::CreateSP(this, &SFlowGraphEditor::ExtractToSubGraph),
+					   FCanExecuteAction::CreateSP(this, &SFlowGraphEditor::CanExtractToSubGraph));
 
 	// Breakpoint commands
 	CommandList->MapAction(GraphEditorCommands.AddBreakpoint,
@@ -1144,12 +1140,12 @@ bool SFlowGraphEditor::CanReconstructNode() const
 	return false;
 }
 
-void SFlowGraphEditor::CreateSubGraphFromSelection()
+void SFlowGraphEditor::ExtractToSubGraph()
 {
 	FFlowSubGraphExtractionTool::Execute(*this);
 }
 
-bool SFlowGraphEditor::CanCreateSubGraphFromSelection() const
+bool SFlowGraphEditor::CanExtractToSubGraph() const
 {
 	return CanEdit() && !IsPIE() && IsTabFocused() && !GetSelectedFlowNodes().IsEmpty();
 }
