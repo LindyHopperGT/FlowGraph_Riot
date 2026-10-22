@@ -172,6 +172,10 @@ private:
 	FGuid PreviousGuidForPinRemapping;
 #endif
 
+private:
+	/* Releases this node's users on its Flow instance's local and root injection managers, if those exist. */
+	void ReleaseInjectedComponentUsers();
+
 //////////////////////////////////////////////////////////////////////////
 // Pins	
 
@@ -515,6 +519,10 @@ public:
 
 	virtual FText GetNodeTitle() const;
 	virtual FText GetNodeToolTip() const;
+
+	/* Keywords metadata of NodeClass and every superclass up to UFlowNodeBase, deduplicated case-insensitively, most-derived first.
+	 * Classes outside the UFlowNodeBase hierarchy return only their own Keywords. */
+	static FString GetInheritedNodeKeywords(const UClass* NodeClass);
 
 	FText GetGeneratedDisplayName() const;
 

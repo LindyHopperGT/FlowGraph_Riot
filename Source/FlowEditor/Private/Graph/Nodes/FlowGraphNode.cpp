@@ -424,7 +424,7 @@ void UFlowGraphNode::RewireOldPinsToNewPins(TArray<UEdGraphPin*>& InOldPins, con
 			{
 				UEdGraphPin* NewPin = Pins[NewPinIndex];
 
-				if (NewPin->PinName == OldPinNameForMatch)
+				if (NewPin->Direction == OldPin->Direction && NewPin->PinName == OldPinNameForMatch)
 				{
 					ReconstructSinglePin(NewPin, OldPin);
 
@@ -1902,7 +1902,10 @@ bool CheckPinsMatch(const TArray<FFlowPin>& LeftPins, const TArray<FFlowPin>& Ri
 	return true;
 }
 
-bool CheckPinsMatch(const TArray<UEdGraphPin*>& GraphPins, const TArray<FFlowPin>& NodePins)
+bool CheckPinsMatch(
+	const TArray<UEdGraphPin*>& GraphPins,
+	const TArray<FFlowPin>& NodePins,
+	const EEdGraphPinDirection PinDirection)
 {
 	// Compare valid pin counts
 	if (GraphPins.Num() != NodePins.Num())
@@ -1913,9 +1916,11 @@ bool CheckPinsMatch(const TArray<UEdGraphPin*>& GraphPins, const TArray<FFlowPin
 	// Compare valid pin names
 	for (const FFlowPin& FlowNodePin : NodePins)
 	{
-		if (!GraphPins.ContainsByPredicate([&FlowNodePin](const UEdGraphPin* GraphNodePin)
+		if (!GraphPins.ContainsByPredicate([&FlowNodePin, PinDirection](const UEdGraphPin* GraphNodePin)
 		{
-			return GraphNodePin->PinName == FlowNodePin.PinName && GraphNodePin->PinFriendlyName.EqualTo(FlowNodePin.PinFriendlyName);
+			return GraphNodePin->Direction == PinDirection
+				&& GraphNodePin->PinName == FlowNodePin.PinName
+				&& GraphNodePin->PinFriendlyName.EqualTo(FlowNodePin.PinFriendlyName);
 		}))
 		{
 			// Could not match the pin from the flow node with any of the EdPins array.
@@ -2070,15 +2075,19 @@ bool UFlowGraphNode::CheckGraphPinsMatchNodePins() const
 	}
 
 	// Get the existing node pins - invalid pins need to be stripped from the check
-	TArray<FFlowPin> ExistingNodePins = FlowNodeInstance->GetInputPins();
-	ExistingNodePins.Append(FlowNodeInstance->GetOutputPins());
-	CleanInvalidPins(ExistingNodePins);
+	TArray<FFlowPin> ExistingNodeInputPins = FlowNodeInstance->GetInputPins();
+	CleanInvalidPins(ExistingNodeInputPins);
+	TArray<FFlowPin> ExistingNodeOutputPins = FlowNodeInstance->GetOutputPins();
+	CleanInvalidPins(ExistingNodeOutputPins);
 
 	// Get the current FlowGraphNode pins list - orphaned pins need to be stripped from the check
-	TArray<UEdGraphPin*> AllGraphNodePins = Pins;
-	CleanInvalidPins(AllGraphNodePins);
+	TArray<UEdGraphPin*> ExistingGraphInputPins = InputPins;
+	CleanInvalidPins(ExistingGraphInputPins);
+	TArray<UEdGraphPin*> ExistingGraphOutputPins = OutputPins;
+	CleanInvalidPins(ExistingGraphOutputPins);
 
-	return CheckPinsMatch(AllGraphNodePins, ExistingNodePins);
+	return CheckPinsMatch(ExistingGraphInputPins, ExistingNodeInputPins, EGPD_Input)
+		&& CheckPinsMatch(ExistingGraphOutputPins, ExistingNodeOutputPins, EGPD_Output);
 }
 
 bool UFlowGraphNode::IsAncestorNode(const UFlowGraphNode& OtherNode) const

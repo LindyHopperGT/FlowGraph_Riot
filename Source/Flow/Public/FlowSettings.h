@@ -28,7 +28,8 @@ public:
 	UPROPERTY(EditAnywhere, config, Category = "Default Policies", DisplayName = "Preload Policy", NoClear, meta = (ExcludeBaseStruct, BaseStruct = "/Script/Flow.FlowPreloadPolicy"))
 	FInstancedStruct PreloadPolicy;
 
-	/* What happens to the Flow Asset instance created by SubGraph node after the SubGraph finished.
+	/* What happens to the Flow Asset instance created by SubGraph node after it finishes:
+	 * Deinitialize removes it, Keep retains it until rerun or owner deinitialization, and Reuse restarts it on rerun.
 	 * Flow Asset class can override it. */
 	UPROPERTY(Config, EditAnywhere, Category = "Flow")
 	ESubGraphFinishPolicy SubGraphFinishPolicy;

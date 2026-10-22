@@ -97,10 +97,31 @@ EDataValidationResult UFlowNode::ValidateNode()
 {
 	EDataValidationResult ValidationResult = Super::ValidateNode();
 
-	// Validate that output and input pins have unique names
-	TSet<FName> UniquePinNames;
-	ValidateFlowPinArrayIsUnique(InputPins, UniquePinNames, ValidationResult);
-	ValidateFlowPinArrayIsUnique(OutputPins, UniquePinNames, ValidationResult);
+	// Pin names must be unique within each direction. Exec input and output names may match because
+	// connections and execution dispatch distinguish the pin direction.
+	TSet<FName> UniqueInputPinNames;
+	ValidateFlowPinArrayIsUnique(InputPins, UniqueInputPinNames, ValidationResult);
+	TSet<FName> UniqueOutputPinNames;
+	ValidateFlowPinArrayIsUnique(OutputPins, UniqueOutputPinNames, ValidationResult);
+
+	for (const FFlowPin& InputPin : InputPins)
+	{
+		const FFlowPin* MatchingOutputPin = OutputPins.FindByPredicate([&InputPin](const FFlowPin& OutputPin)
+		{
+			return OutputPin.PinName == InputPin.PinName;
+		});
+
+		if (MatchingOutputPin && (!InputPin.IsExecPin() || !MatchingOutputPin->IsExecPin()))
+		{
+			ValidationLog.Warning<UFlowNode>(
+				*FString::Printf(
+					TEXT("Input and output pins with the same name must both be exec pins, pin name %s is duplicated"),
+					*InputPin.PinName.ToString()),
+				this);
+
+			ValidationResult = EDataValidationResult::Invalid;
+		}
+	}
 
 	return ValidationResult;
 }
@@ -114,7 +135,7 @@ void UFlowNode::ValidateFlowPinArrayIsUnique(const TArray<FFlowPin>& FlowPins, T
 		{
 			ValidationLog.Warning<UFlowNode>(
 				*FString::Printf(
-					TEXT("All pin names on a flow node must be unique, pin name %s is duplicated"),
+					TEXT("Pin names within a direction must be unique, pin name %s is duplicated"),
 					*ThisPinName.ToString()),
 				this);
 

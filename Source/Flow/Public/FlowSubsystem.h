@@ -97,7 +97,8 @@ protected:
 	void FinishSubFlow(UFlowNode_SubGraph* SubGraphNode, const EFlowFinishPolicy FinishPolicy, const bool bRemoveInstance);
 
 public:
-	UFlowAsset* CreateFlowInstance(const TWeakObjectPtr<UObject> Owner, UFlowAsset* LoadedFlowAsset, FString NewInstanceName = FString());
+	UFlowAsset* CreateFlowInstance(const TWeakObjectPtr<UObject> Owner, UFlowAsset* LoadedFlowAsset,
+		FString NewInstanceName = FString(), UFlowAsset* OwningFlowInstance = nullptr);
 
 protected:
 	virtual void AddInstancedTemplate(UFlowAsset* Template);

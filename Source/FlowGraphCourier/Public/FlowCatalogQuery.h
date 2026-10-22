@@ -463,7 +463,7 @@ public:
 	static EFlowCatalogKind ParseKind(const FString& KindString);
 
 private:
-	/* Returns Keywords metadata from the UCLASS, or empty string. */
+	/* Returns Keywords metadata from the UCLASS and its superclasses up to UFlowNodeBase (deduplicated), or empty string. */
 	static FString GetNodeKeywords(const UClass* NodeClass);
 
 	/** Projects one resolved class into a row carrying exactly the requested sections. */

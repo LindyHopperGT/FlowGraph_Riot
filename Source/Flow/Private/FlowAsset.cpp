@@ -5,6 +5,7 @@
 #include "FlowLogChannels.h"
 #include "FlowSettings.h"
 #include "FlowSubsystem.h"
+#include "Types/FlowInjectComponentsManager.h"
 #include "AddOns/FlowNodeAddOn.h"
 #include "Asset/FlowAssetParams.h"
 #include "Asset/FlowAssetParamsUtils.h"
@@ -1109,6 +1110,11 @@ void UFlowAsset::InitializeInstance(const TWeakObjectPtr<UObject> InOwner, UFlow
 
 	Owner = InOwner;
 	TemplateAsset = &InTemplateAsset;
+	// UFlowSubsystem::CreateFlowInstance assigns the root first; callers that initialize directly become their own root.
+	if (!IsValid(OwningRootFlowInstance))
+	{
+		OwningRootFlowInstance = this;
+	}
 
 	// Initialize any customizable Policies before we instantiate nodes
 	InitializePreloadPolicy();
@@ -1128,6 +1134,39 @@ void UFlowAsset::InitializeInstance(const TWeakObjectPtr<UObject> InOwner, UFlow
 
 		NewNodeInstance->InitializeInstance();
 	}
+}
+
+UFlowAsset* UFlowAsset::GetOwningRootFlowInstance() const
+{
+	return OwningRootFlowInstance.Get();
+}
+
+UFlowInjectComponentsManager* UFlowAsset::FindComponentInjectionManager() const
+{
+	return IsValid(ComponentInjector) ? ComponentInjector.Get() : nullptr;
+}
+
+UFlowInjectComponentsManager* UFlowAsset::FindComponentInjectionManagerInRootFlow() const
+{
+	const UFlowAsset* Root = GetOwningRootFlowInstance();
+	return IsValid(Root) ? Root->FindComponentInjectionManager() : nullptr;
+}
+
+UFlowInjectComponentsManager* UFlowAsset::GetOrCreateComponentInjectionManager()
+{
+	if (!IsValid(ComponentInjector))
+	{
+		ComponentInjector = NewObject<UFlowInjectComponentsManager>(this);
+		ComponentInjector->InitializeRuntime();
+	}
+	return ComponentInjector;
+}
+
+UFlowInjectComponentsManager* UFlowAsset::GetOrCreateComponentInjectionManagerInRootFlow()
+{
+	UFlowAsset* Root = GetOwningRootFlowInstance();
+	checkf(IsValid(Root), TEXT("Root component manager access requires a runtime Flow instance."));
+	return Root->GetOrCreateComponentInjectionManager();
 }
 
 FName UFlowAsset::GetInstanceName() const
@@ -1347,6 +1386,20 @@ void UFlowAsset::DeinitializeInstance()
 			GetFlowSubsystem()->RemoveInstancedTemplate(TemplateAsset);
 		}
 
+		// Unregister this child flow as a user of all components tracked by the root's manager.
+		UFlowInjectComponentsManager* RootManager = FindComponentInjectionManagerInRootFlow();
+		if (IsValid(RootManager) && RootManager != ComponentInjector)
+		{
+			RootManager->UnregisterAllComponentUsers(*this);
+		}
+
+		// Shut down only our own manager, which may be distinct from the root's manager.
+		if (IsValid(ComponentInjector))
+		{
+			ComponentInjector->ShutdownRuntime();
+			ComponentInjector = nullptr;
+		}
+		OwningRootFlowInstance = nullptr;
 		TemplateAsset = nullptr;
 	}
 }

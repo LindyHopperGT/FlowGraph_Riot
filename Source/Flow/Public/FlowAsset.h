@@ -24,6 +24,7 @@
 class UFlowNode_CustomOutput;
 class UFlowNode_CustomInput;
 class UFlowNode_SubGraph;
+class UFlowInjectComponentsManager;
 struct FFlowPreloadPolicy;
 struct FFlowPinConnectionPolicy;
 
@@ -476,6 +477,35 @@ public:
 	/* Returns nodes active in the past, done their work. */
 	UFUNCTION(BlueprintPure, Category = "Flow")
 	const TArray<UFlowNode*>& GetRecordedNodes() const { return RecordedNodes; }
+
+	/** Returns the root Flow graph instance this instance runs under. A root instance returns itself.
+	 * Returns null before initialization and after deinitialization. */
+	UFUNCTION(BlueprintPure, Category = "Flow|Components")
+	UFlowAsset* GetOwningRootFlowInstance() const;
+
+	/** Returns the injection manager owned by this instance, or null if none was created. Never creates a manager. */
+	UFlowInjectComponentsManager* FindComponentInjectionManager() const;
+
+	/** Returns the injection manager owned by this instance's root, or null if there is no root or no manager.
+	 * Never creates a manager and never asserts; use it in release and teardown paths. */
+	UFlowInjectComponentsManager* FindComponentInjectionManagerInRootFlow() const;
+
+	/** Returns the injection manager owned by this instance, creating and initializing it on first use. */
+	UFlowInjectComponentsManager* GetOrCreateComponentInjectionManager();
+
+	/** Returns the injection manager shared by every instance under this instance's root Flow graph,
+	 * creating it on first use.
+	 * Asserts when called on an instance without a root; only call it while injecting or registering users. */
+	UFlowInjectComponentsManager* GetOrCreateComponentInjectionManagerInRootFlow();
+
+private:
+	/* Root Flow graph instance this instance runs under. Assigned before InitializeInstance, cleared by DeinitializeInstance. */
+	UPROPERTY(Transient)
+	TObjectPtr<UFlowAsset> OwningRootFlowInstance = nullptr;
+
+	/* Injection manager owned by this instance. Created on demand, shut down by DeinitializeInstance. */
+	UPROPERTY(Transient)
+	TObjectPtr<UFlowInjectComponentsManager> ComponentInjector = nullptr;
 
 //////////////////////////////////////////////////////////////////////////
 // Preload policy

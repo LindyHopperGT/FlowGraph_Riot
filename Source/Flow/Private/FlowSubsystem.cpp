@@ -203,11 +203,13 @@ UFlowAsset* UFlowSubsystem::CreateSubFlow(UFlowNode_SubGraph* SubGraphNode, cons
 	UFlowAsset* SubGraphOwner = SubGraphNode->GetFlowAsset();
 	UFlowAsset* AssetInstance = nullptr;
 
-	// Instance finished by the previous run of this node is replaced, so every run starts with fresh node instances.
-	// Preloaded instance is kept, as it hasn't started yet.
+	// A finished instance is replaced on rerun unless its policy is Reuse.
+	// A preloaded instance is kept, as it hasn't started yet.
 	if (const UFlowAsset* PreviousInstance = InstancedSubFlows.FindRef(SubGraphNode))
 	{
-		if (PreviousInstance->HasStartedFlow() && (!SubGraphOwner || !SubGraphOwner->ActiveSubGraphs.Contains(SubGraphNode)))
+		if (PreviousInstance->HasStartedFlow()
+			&& (!SubGraphOwner || !SubGraphOwner->ActiveSubGraphs.Contains(SubGraphNode))
+			&& PreviousInstance->GetSubGraphFinishPolicy() != ESubGraphFinishPolicy::Reuse)
 		{
 			FinishSubFlow(SubGraphNode, EFlowFinishPolicy::Keep, true);
 		}
@@ -216,7 +218,8 @@ UFlowAsset* UFlowSubsystem::CreateSubFlow(UFlowNode_SubGraph* SubGraphNode, cons
 	if (!InstancedSubFlows.Contains(SubGraphNode))
 	{
 		const TWeakObjectPtr<UObject> Owner = SubGraphOwner ? SubGraphOwner->GetOwner() : nullptr;
-		AssetInstance = CreateFlowInstance(Owner, SubGraphNode->Asset.LoadSynchronous(), SavedInstanceName);
+		AssetInstance = CreateFlowInstance(Owner, SubGraphNode->Asset.LoadSynchronous(), SavedInstanceName,
+			SubGraphOwner ? SubGraphOwner->GetOwningRootFlowInstance() : nullptr);
 
 		if (AssetInstance)
 		{
@@ -276,7 +279,8 @@ void UFlowSubsystem::FinishSubFlow(UFlowNode_SubGraph* SubGraphNode, const EFlow
 	}
 }
 
-UFlowAsset* UFlowSubsystem::CreateFlowInstance(const TWeakObjectPtr<UObject> Owner, UFlowAsset* LoadedFlowAsset, FString NewInstanceName)
+UFlowAsset* UFlowSubsystem::CreateFlowInstance(const TWeakObjectPtr<UObject> Owner, UFlowAsset* LoadedFlowAsset,
+	FString NewInstanceName, UFlowAsset* OwningFlowInstance)
 {
 	if (!IsValid(LoadedFlowAsset) || !HasValidNodesForInstancing(*LoadedFlowAsset, *LoadedFlowAsset, Owner.Get()))
 	{
@@ -310,6 +314,17 @@ UFlowAsset* UFlowSubsystem::CreateFlowInstance(const TWeakObjectPtr<UObject> Own
 		return nullptr;
 	}
 
+	// Every instance under a root Flow graph shares that root's component injection manager, so the root is
+	// assigned before InitializeInstance, which can already preload subgraphs that inject components through it.
+	// - Created for another instance: use that instance's root. 
+	// - That instance has no root (never initialized, or already deinitialized): use the instance itself.
+	// - Created without an owning instance (a root flow): the new instance is its own root.
+	UFlowAsset* ResolvedRoot = IsValid(OwningFlowInstance) ? OwningFlowInstance->GetOwningRootFlowInstance() : nullptr;
+	if (!IsValid(ResolvedRoot))
+	{
+		ResolvedRoot = IsValid(OwningFlowInstance) ? OwningFlowInstance : NewInstance;
+	}
+	NewInstance->OwningRootFlowInstance = ResolvedRoot;
 	NewInstance->InitializeInstance(Owner, *LoadedFlowAsset);
 
 	LoadedFlowAsset->AddInstance(NewInstance);

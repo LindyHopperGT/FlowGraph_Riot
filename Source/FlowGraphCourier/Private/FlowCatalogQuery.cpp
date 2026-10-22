@@ -1976,20 +1976,11 @@ void UFlowCatalogQuery::GatherAllAddOnClasses(TArray<UClass*>& OutAddOnClasses)
 
 FString UFlowCatalogQuery::GetNodeKeywords(const UClass* NodeClass)
 {
-	if (!NodeClass)
-	{
-		return TEXT("");
-	}
-
 #if WITH_EDITOR
-	static const FName NAME_Keywords(TEXT("Keywords"));
-	if (NodeClass->HasMetaData(NAME_Keywords))
-	{
-		return NodeClass->GetMetaData(NAME_Keywords);
-	}
-#endif
-
+	return UFlowNodeBase::GetInheritedNodeKeywords(NodeClass);
+#else
 	return TEXT("");
+#endif
 }
 
 void UFlowCatalogQuery::GatherAllKeywords(
