@@ -81,11 +81,9 @@ protected:
 	bool FindPinCenter(const UEdGraphPin* Pin, FVector2D& OutCenter) const;
 	bool GetAverageConnectedPosition(class UFlowGraphNode_Reroute* Reroute, EEdGraphPinDirection Direction, FVector2D& OutPos) const;
 
-	/** The edges of a node's arranged geometry, in the same absolute/panel space as pin geometry. */
-	struct FNodeExtent
+	/** The top and bottom edges of a node's arranged geometry, in the same absolute/panel space as pin geometry. */
+	struct FNodeVerticalExtent
 	{
-		float Left = 0.0f;
-		float Right = 0.0f;
 		float Top = 0.0f;
 		float Bottom = 0.0f;
 	};

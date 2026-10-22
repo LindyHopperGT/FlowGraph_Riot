@@ -43,10 +43,11 @@ void UFlowGraph::CreateGraph(UFlowAsset* InFlowAsset, TSubclassOf<UFlowGraphSche
 	InFlowAsset->FlowGraph = NewGraph;
 	InFlowAsset->OnValidateGraph.BindUObject(NewGraph, &UFlowGraph::ValidateGraphNodes);
 
-	if (bCreateDefaultNodes)
-	{
-		InFlowAsset->FlowGraph->GetSchema()->CreateDefaultNodesForGraph(*InFlowAsset->FlowGraph);
-	}
+	// Policies are otherwise initialized only when the asset editor opens the graph.
+	// Nodes read them while being reconstructed, so this must precede creating any node.
+	InFlowAsset->SetupForEditing();
+
+	InFlowAsset->FlowGraph->GetSchema()->CreateDefaultNodesForGraph(*InFlowAsset->FlowGraph);
 }
 
 void UFlowGraph::RefreshGraph()

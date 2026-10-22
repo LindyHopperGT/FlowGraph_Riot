@@ -55,22 +55,7 @@ void UFlowNodeBase::InitializeInstance()
 
 	if (!AddOns.IsEmpty())
 	{
-		TArray<UFlowNodeAddOn*> SourceAddOns = AddOns;
-		AddOns.Reset();
-
-		for (UFlowNodeAddOn* SourceAddOn : SourceAddOns)
-		{
-			// Create a new instance of each AddOn
-			if (IsValid(SourceAddOn))
-			{
-				UFlowNodeAddOn* NewAddOnInstance = NewObject<UFlowNodeAddOn>(this, SourceAddOn->GetClass(), NAME_None, RF_Transient, SourceAddOn, false, nullptr);
-				AddOns.Add(NewAddOnInstance);
-			}
-			else
-			{
-				LogError(FString::Printf(TEXT("Null AddOn found in node %s"), *GetName()), EFlowOnScreenMessageType::Permanent);
-			}
-		}
+		InstantiateAddOns();
 
 		for (UFlowNodeAddOn* AddOn : AddOns)
 		{
@@ -355,6 +340,26 @@ TArray<UFlowNodeBase*> UFlowNodeBase::BuildFlowNodeBaseAncestorChain(UFlowNodeBa
 	return AncestorChain;
 }
 
+void UFlowNodeBase::InstantiateAddOns()
+{
+	TArray<UFlowNodeAddOn*> SourceAddOns = AddOns;
+	AddOns.Reset();
+
+	for (UFlowNodeAddOn* SourceAddOn : SourceAddOns)
+	{
+		// Create a new instance of each AddOn
+		if (IsValid(SourceAddOn))
+		{
+			UFlowNodeAddOn* NewAddOnInstance = NewObject<UFlowNodeAddOn>(this, SourceAddOn->GetClass(), NAME_None, RF_Transient, SourceAddOn, false, nullptr);
+			AddOns.Add(NewAddOnInstance);
+		}
+		else
+		{
+			LogError(FString::Printf(TEXT("Null AddOn found in node %s"), *GetName()), EFlowOnScreenMessageType::Permanent);
+		}
+	}
+}
+
 EFlowAddOnAcceptResult UFlowNodeBase::AcceptFlowNodeAddOnChild_Implementation(
 	const UFlowNodeAddOn* AddOnTemplate,
 	const TArray<UFlowNodeAddOn*>& AdditionalAddOnsToAssumeAreChildren) const
@@ -363,10 +368,7 @@ EFlowAddOnAcceptResult UFlowNodeBase::AcceptFlowNodeAddOnChild_Implementation(
 	return EFlowAddOnAcceptResult::Undetermined;
 }
 
-bool UFlowNodeBase::HasOtherDirectAddOnChildMatching(
-	const UClass& ClassOrInterface,
-	const UFlowNodeAddOn* IgnoredAddOn,
-	const TArray<UFlowNodeAddOn*>& AdditionalAddOnsToAssumeAreChildren) const
+bool UFlowNodeBase::HasOtherDirectAddOnChildMatching(const UClass& ClassOrInterface, const UFlowNodeAddOn* IgnoredAddOn, const TArray<UFlowNodeAddOn*>& AdditionalAddOnsToAssumeAreChildren) const
 {
 	const auto IsOtherMatchingAddOn = [&ClassOrInterface, IgnoredAddOn](const UFlowNodeAddOn* AddOn)
 	{
@@ -393,9 +395,7 @@ bool UFlowNodeBase::HasOtherDirectAddOnChildMatching(
 }
 
 #if WITH_EDITOR
-EFlowAddOnAcceptResult UFlowNodeBase::CheckAcceptFlowNodeAddOnChild(
-	const UFlowNodeAddOn* AddOnTemplate,
-	const TArray<UFlowNodeAddOn*>& AdditionalAddOnsToAssumeAreChildren) const
+EFlowAddOnAcceptResult UFlowNodeBase::CheckAcceptFlowNodeAddOnChild(const UFlowNodeAddOn* AddOnTemplate, const TArray<UFlowNodeAddOn*>& AdditionalAddOnsToAssumeAreChildren) const
 {
 	if (!IsValid(AddOnTemplate))
 	{
@@ -470,9 +470,7 @@ EFlowForEachAddOnFunctionReturnValue UFlowNodeBase::ForEachAddOnConst(
 	return ReturnValue;
 }
 
-EFlowForEachAddOnFunctionReturnValue UFlowNodeBase::ForEachAddOn(
-	const FFlowNodeAddOnFunction& Function,
-	EFlowForEachAddOnChildRule AddOnChildRule) const
+EFlowForEachAddOnFunctionReturnValue UFlowNodeBase::ForEachAddOn(const FFlowNodeAddOnFunction& Function, const EFlowForEachAddOnChildRule AddOnChildRule) const
 {
 	FLOW_ASSERT_ENUM_MAX(EFlowForEachAddOnFunctionReturnValue, 3);
 
@@ -507,10 +505,7 @@ EFlowForEachAddOnFunctionReturnValue UFlowNodeBase::ForEachAddOn(
 	return ReturnValue;
 }
 
-EFlowForEachAddOnFunctionReturnValue UFlowNodeBase::ForEachAddOnForClassConst(
-	const UClass& InterfaceOrClass,
-	const FConstFlowNodeAddOnFunction& Function,
-	EFlowForEachAddOnChildRule AddOnChildRule) const
+EFlowForEachAddOnFunctionReturnValue UFlowNodeBase::ForEachAddOnForClassConst(const UClass& InterfaceOrClass, const FConstFlowNodeAddOnFunction& Function, const EFlowForEachAddOnChildRule AddOnChildRule) const
 {
 	FLOW_ASSERT_ENUM_MAX(EFlowForEachAddOnFunctionReturnValue, 3);
 
@@ -654,6 +649,7 @@ FString UFlowNodeBase::GetStatusString() const
 #if WITH_EDITOR
 FString UFlowNodeBase::GetNodeCategory() const
 {
+	// Category declared in class metadata, for script-defined nodes (e.g. AngelScript) that have no UBlueprint to hold BlueprintCategory.
 	const FString& MetadataCategory = GetClass()->GetMetaData(TEXT("BlueprintCategoryName"));
 	if (!MetadataCategory.IsEmpty())
 	{
@@ -820,8 +816,7 @@ FString UFlowNodeBase::GetAddOnDescriptions() const
 	FString Result;
 
 	for (const UFlowNodeBase* Addon : AddOns)
-	{
-		const FString& Description = Addon->GetNodeDescription();
+	{const FString& Description = Addon->GetNodeDescription();
 		if (!Description.IsEmpty())
 		{
 			Result.Append(Description).Append(LINE_TERMINATOR);
@@ -829,6 +824,27 @@ FString UFlowNodeBase::GetAddOnDescriptions() const
 	}
 
 	return Result;
+}
+
+void UFlowNodeBase::InitializeReplica()
+{
+	InstantiateAddOns();
+
+	for (UFlowNodeAddOn* AddOn : AddOns)
+	{
+		AddOn->InitializeReplica();
+	}
+}
+
+void UFlowNodeBase::MarkReplicatedPropertiesDirty()
+{
+	if (UFlowNode* FlowNode = GetFlowNodeSelfOrOwner())
+	{
+		if (UFlowAsset* FlowAsset = FlowNode->GetFlowAsset())
+		{
+			FlowAsset->WriteReplicatedNodeState(*FlowNode);
+		}
+	}
 }
 
 bool UFlowNodeBase::CanModifyFlowDataPinType() const

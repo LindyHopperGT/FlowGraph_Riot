@@ -7,7 +7,7 @@
 
 /**
  * Waits for CompletionTime seconds then fires the Completed output.
- * Optionally fires the Step output repeatedly every StepTime seconds during the wait 
+ * Optionally fires the Step output repeatedly every StepTime seconds during the wait
  * CompletionTime can be overridden via a data pin at runtime.
  */
 UCLASS(NotBlueprintable, meta = (DisplayName = "Timer", Keywords = "delay step tick"))
@@ -75,6 +75,11 @@ public:
 public:
 	virtual FString GetStatusString() const override;
 	virtual void UpdateNodeConfigText_Implementation() override;
+	virtual const FFlowAgentDoc& GetAgentDoc() const override;
+#endif
+
+#if WITH_EDITOR
+public:
 	virtual const FFlowAgentDoc& GetAgentDoc() const override;
 #endif
 };

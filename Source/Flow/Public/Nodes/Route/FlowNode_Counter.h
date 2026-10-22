@@ -5,7 +5,7 @@
 #include "FlowNode_Counter.generated.h"
 
 /**
- * Counts the number of times its input pin is triggered and fires its output when the count reaches Goal. 
+ * Counts the number of times its input pin is triggered and fires its output when the count reaches Goal.
  * Useful for gating flow until a fixed number of events have occurred (e.g. "after 3 enemies die").
  * Resets automatically via Cleanup.
  */
@@ -32,6 +32,11 @@ public:
 #if WITH_EDITOR
 	virtual FString GetNodeDescription() const override;
 	virtual FString GetStatusString() const override;
+	virtual const FFlowAgentDoc& GetAgentDoc() const override;
+#endif
+
+#if WITH_EDITOR
+public:
 	virtual const FFlowAgentDoc& GetAgentDoc() const override;
 #endif
 };

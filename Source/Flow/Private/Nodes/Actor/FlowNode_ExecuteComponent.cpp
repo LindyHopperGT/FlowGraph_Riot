@@ -587,9 +587,9 @@ EDataValidationResult UFlowNode_ExecuteComponent::ValidateNode()
 
 FString UFlowNode_ExecuteComponent::GetStatusString() const
 {
-	if (ActivationState != EFlowNodeState::NeverActivated)
+	if (GetActivationState() != EFlowNodeState::NeverActivated)
 	{
-		return UEnum::GetDisplayValueAsText(ActivationState).ToString();
+		return UEnum::GetDisplayValueAsText(GetActivationState()).ToString();
 	}
 
 	return Super::GetStatusString();
@@ -731,3 +731,14 @@ const FFlowAgentDoc& UFlowNode_ExecuteComponent::GetAgentDoc() const
 #endif
 
 #undef LOCTEXT_NAMESPACE
+
+#if WITH_EDITOR
+const FFlowAgentDoc& UFlowNode_ExecuteComponent::GetAgentDoc() const
+{
+	static const FFlowAgentDoc Doc = MakeAgentDoc(
+		/*Guidance*/ TEXT("Set exactly one of ComponentRef (bind to an existing component), ComponentTemplate (inject from template) or ComponentClass (inject by class) - the node derives its component source from whichever is set. The component must implement IFlowCoreExecutableInterface or IFlowExternalExecutableInterface, or nothing will run."),
+		/*Tags*/     { TEXT("actor"), TEXT("component"), TEXT("subgraph") },
+		/*Articles*/ {  });
+	return Doc;
+}
+#endif

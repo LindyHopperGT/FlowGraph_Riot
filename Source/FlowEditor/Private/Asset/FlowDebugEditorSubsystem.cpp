@@ -133,6 +133,13 @@ EFlowBreakAction UFlowDebugEditorSubsystem::HaltUntilReleased(const FFlowBreakCo
 		return EFlowBreakAction::Continue;
 	}
 
+	if (GUnrealEd->ShouldEndPlayMap())
+	{
+		// The session is already being stopped, e.g. the PIE window was closed during an earlier halt in this call stack.
+		// Unwind instead of halting again on every remaining breakpoint.
+		return EFlowBreakAction::Abort;
+	}
+
 	{
 		TGuardValue<bool> HaltedGuard(bIsHaltedAtBreakpoint, true);
 		TGuardValue<bool> DebuggingGuard(GIntraFrameDebuggingGameThread, true);
@@ -172,6 +179,17 @@ void UFlowDebugEditorSubsystem::ReleaseHalt()
 	FSlateApplication::Get().LeaveDebuggingMode();
 }
 
+void UFlowDebugEditorSubsystem::RequestStop()
+{
+	if (bIsHaltedAtBreakpoint && GUnrealEd)
+	{
+		// Mirrors the level toolbar's Stop, which the engine disables during an in-stack halt.
+		// HaltUntilReleased() sees the queued end of play and returns Abort.
+		GUnrealEd->RequestEndPlayMap();
+		ReleaseHalt();
+	}
+}
+
 void UFlowDebugEditorSubsystem::ShowHaltNotification(const FFlowBreakContext& Context)
 {
 	DismissHaltNotification();
@@ -189,6 +207,11 @@ void UFlowDebugEditorSubsystem::ShowHaltNotification(const FFlowBreakContext& Co
 
 	Info.HyperlinkText = LOCTEXT("ContinueFlowExecution", "Continue");
 	Info.Hyperlink = FSimpleDelegate::CreateUObject(this, &ThisClass::RequestContinue);
+
+	Info.ButtonDetails.Add(FNotificationButtonInfo(
+		LOCTEXT("StopFlowExecution", "Stop"),
+		LOCTEXT("StopFlowExecutionToolTip", "Stop the play session without executing the pin halted at"),
+		FSimpleDelegate::CreateUObject(this, &ThisClass::RequestStop)));
 
 	HaltNotification = FSlateNotificationManager::Get().AddNotification(Info);
 

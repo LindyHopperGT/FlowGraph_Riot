@@ -61,6 +61,13 @@ void UFlowNodeAddOn::DeinitializeInstance()
 	FlowNode = nullptr;
 }
 
+void UFlowNodeAddOn::InitializeReplica()
+{
+	CacheFlowNode();
+
+	Super::InitializeReplica();
+}
+
 void UFlowNodeAddOn::TriggerFirstOutput(const bool bFinish)
 {
 	if (ensure(FlowNode))

@@ -20,38 +20,35 @@
 
 void FFlowNode_Details::CustomizeDetails(IDetailLayoutBuilder& DetailLayout)
 {
-	// Hide class-level category when editing an instance (not the CDO)
+	// Merged AddOn list, shown on instances only
 	if (!DetailLayout.HasClassDefaultObject())
 	{
-		if (GetDefault<UFlowGraphEditorSettings>()->bMergeAddOnDetails)
+		if (GetDefault<UFlowGraphEditorSettings>()->bShowAddOnsInNodeDetails)
 		{
 			IDetailCategoryBuilder& AddOnDetailsCategory = DetailLayout.EditCategory(
 				TEXT("AddOnDetails"),
 				LOCTEXT("AddOnDetailsCategory", "AddOn Details"),
 				ECategoryPriority::Uncommon);
 
+			TArray<TWeakObjectPtr<UObject>> EditedObjects;
+			DetailLayout.GetObjectsBeingCustomized(EditedObjects);
+
 			TSharedRef<IPropertyHandle> AddOnsProperty = DetailLayout.GetProperty(TEXT("AddOns"), UFlowNodeBase::StaticClass());
-			const TSharedRef<FDetailArrayBuilder> AddOnsArrayBuilder = MakeShared<FDetailArrayBuilder>(
-				AddOnsProperty,
-				/*InGenerateHeader=*/true,
-				/*InDisplayResetToDefault=*/false);
-			AddOnsArrayBuilder->SetDisplayName(LOCTEXT("AddOnDetailsProperty", "AddOns"));
-			AddOnsArrayBuilder->OnGenerateArrayElementWidget(FOnGenerateArrayElementWidget::CreateLambda(
-				[](TSharedRef<IPropertyHandle> ElementHandle, int32 /*ElementIndex*/, IDetailChildrenBuilder& ChildrenBuilder)
+			IDetailPropertyRow& AddOnsRow = AddOnDetailsCategory.AddProperty(AddOnsProperty);
+			AddOnsRow.CustomWidget(true)
+				.Visibility(TAttribute<EVisibility>::CreateLambda([EditedObjects]()
 				{
-					IDetailPropertyRow& AddOnRow = ChildrenBuilder.AddProperty(ElementHandle);
-
-					UObject* AddOnObject = nullptr;
-					if (ElementHandle->GetValue(AddOnObject) == FPropertyAccess::Success)
-					{
-						if (const UFlowNodeAddOn* AddOn = Cast<UFlowNodeAddOn>(AddOnObject))
-						{
-							AddOnRow.DisplayName(AddOn->GetNodeTitle());
-						}
-					}
-				}));
-
-			AddOnDetailsCategory.AddCustomBuilder(AddOnsArrayBuilder);
+					return FFlowDetailsAddOnUI::GetAddOnsVisibility(EditedObjects);
+				}))
+				.NameContent()
+				[
+					AddOnsProperty->CreatePropertyNameWidget(LOCTEXT("AddOnDetailsProperty", "AddOns"))
+				]
+				.ValueContent()
+				[
+					AddOnsProperty->CreatePropertyValueWidget(false)
+				];
+			AddOnsRow.ShouldAutoExpand(true);
 		}
 	}
 

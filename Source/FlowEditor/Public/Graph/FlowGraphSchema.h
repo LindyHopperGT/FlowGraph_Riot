@@ -3,6 +3,7 @@
 
 #include "EdGraph/EdGraphSchema.h"
 #include "Templates/SubclassOf.h"
+#include "Templates/SharedPointer.h"
 
 #include "Templates/SharedPointer.h"
 
@@ -40,6 +41,7 @@ private:
 	static TMap<TSubclassOf<UFlowNodeBase>, TSubclassOf<UEdGraphNode>> GraphNodesByFlowNodes;
 
 	static bool bBlueprintCompilationPending;
+	static bool bGatherNodesPendingAfterPIE;
 
 public:
 	static void SubscribeToAssetChanges();
@@ -73,6 +75,9 @@ public:
 	
 	// Lets a schema substitute its own widget for a pin, checked by FFlowGraphPinFactory before it falls back to
 	// the default Flow pin widgets (e.g. SFlowGraphPinExec). Returns null by default, meaning no substitution.
+	virtual TSharedPtr<SGraphPin> CreatePinWidget(UEdGraphPin* InPin) const { return nullptr; }
+
+	// Lets a schema substitute its own widget for a pin before Flow falls back to its default pin widgets.
 	virtual TSharedPtr<SGraphPin> CreatePinWidget(UEdGraphPin* InPin) const { return nullptr; }
 
 	static const FFlowPinType* LookupDataPinTypeForPinCategory(const FName& PinCategory);
@@ -110,11 +115,8 @@ public:
 	virtual const FPinConnectionResponse DetermineConnectionResponseOfCompatibleTypedPins(const UEdGraphPin* PinA, const UEdGraphPin* PinB, const UEdGraphPin* InputPin, const UEdGraphPin* OutputPin) const;
 
 	virtual void GetGraphNodeContextActions(FGraphContextMenuBuilder& ContextMenuBuilder, int32 SubNodeFlags) const;
-
 	virtual bool ShouldAlwaysPurgeOnModification() const override { return false; }
-	
 	static bool IsAddOnAllowedForSelectedObjects(const TArray<UObject*>& SelectedObjects, const UFlowNodeAddOn* AddOnTemplate);
-
 	// --
 
 	static void UpdateGeneratedDisplayNames();
@@ -129,7 +131,6 @@ public:
 	static const UFlowAsset* GetFlowAssetForPin(const UEdGraphPin& EdGraphPin);
 
 protected:
-
 	static UFlowGraphNode* CreateDefaultNode(UEdGraph& Graph, const TSubclassOf<UFlowNode>& NodeClass, const FVector2f& Offset, bool bPlacedAsGhostNode);
 
 	/* Helper to break incompatible connections on a set of pins. */
@@ -151,7 +152,13 @@ private:
 	static void OnBlueprintPreCompile(UBlueprint* Blueprint);
 	static void OnBlueprintCompiled();
 	static void OnHotReload(EReloadCompleteReason ReloadCompleteReason);
+	static void OnShutdownPIE(const bool bIsSimulating);
 
+public:	
+	/** Rebuilds cached native Flow node and AddOn classes after a class reload. */
+	static void RefreshNativeNodeCache();
+
+private:	
 	static void GatherNativeNodesOrAddOns(const TSubclassOf<UFlowNodeBase>& FlowNodeBaseClass, TArray<UClass*>& InOutNodesOrAddOnsArray);
 	static void GatherNodes();
 

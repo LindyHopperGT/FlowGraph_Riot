@@ -117,8 +117,21 @@ void SFlowAssetInstanceList::RefreshInstances()
 	// add empty instance as default
 	Instances.Add(MakeShareable(new FObjectKey(nullptr)));
 
-	// gather all instances of given UFlowAsset
+	// gather all instances of given UFlowAsset, including replicas on clients
+	TArray<const UFlowAsset*> AllInstances;
 	for (const UFlowAsset* ActiveInstance : TemplateAsset->GetActiveInstances())
+	{
+		AllInstances.Add(ActiveInstance);
+	}
+	for (const TWeakObjectPtr<UFlowAsset>& ReplicaInstance : TemplateAsset->GetReplicaInstances())
+	{
+		if (const UFlowAsset* Replica = ReplicaInstance.Get())
+		{
+			AllInstances.Add(Replica);
+		}
+	}
+
+	for (const UFlowAsset* ActiveInstance : AllInstances)
 	{
 		Instances.Add(MakeShareable(new FObjectKey(ActiveInstance)));
 
@@ -358,27 +371,28 @@ FFlowAssetToolbar::FFlowAssetToolbar(const TSharedPtr<FFlowAssetEditor> InAssetE
 	BuildDebuggerToolbar(ToolbarMenu);
 }
 
-void FFlowAssetToolbar::BuildAssetToolbar(UToolMenu* ToolbarMenu) const
+void FFlowAssetToolbar::BuildAssetToolbar(UToolMenu* ToolbarMenu)
 {
 	{
 		FToolMenuSection& Section = ToolbarMenu->AddSection("FlowAsset");
 		Section.InsertPosition = FToolMenuInsert("Asset", EToolMenuInsertType::After);
 
+		Section.AddEntry(FToolMenuEntry::InitToolBarButton(FFlowToolbarCommands::Get().AssetDefaults));
+	}
+
+	{
+		FToolMenuSection& Section = ToolbarMenu->AddSection("Automation");
+		Section.InsertPosition = FToolMenuInsert("FlowAsset", EToolMenuInsertType::After);
+
 		// add buttons
 		Section.AddEntry(FToolMenuEntry::InitToolBarButton(FFlowToolbarCommands::Get().RefreshAsset));
 		Section.AddEntry(FToolMenuEntry::InitToolBarButton(FFlowToolbarCommands::Get().ValidateAsset));
-		Section.AddEntry(FToolMenuEntry::InitToolBarButton(FFlowToolbarCommands::Get().EditAssetDefaults));
-		Section.AddEntry(FToolMenuEntry::InitToolBarButton(
-			FFlowToolbarCommands::Get().AutoFormatGraph,
-			TAttribute<FText>(),
-			TAttribute<FText>(),
-			FSlateIcon(FAppStyle::GetAppStyleSetName(), "GraphEditor.StraightenConnections")
-		));
+		Section.AddEntry(FToolMenuEntry::InitToolBarButton(FFlowToolbarCommands::Get().AutoFormatGraph));
 	}
 
 	{
 		FToolMenuSection& Section = ToolbarMenu->AddSection("View");
-		Section.InsertPosition = FToolMenuInsert("FlowAsset", EToolMenuInsertType::After);
+		Section.InsertPosition = FToolMenuInsert("Automation", EToolMenuInsertType::After);
 
 		// Visual Diff: menu to choose asset revision compared with the current one 
 		Section.AddDynamicEntry("SourceControlCommands", FNewToolMenuSectionDelegate::CreateLambda([](FToolMenuSection& InSection)
@@ -400,12 +414,7 @@ void FFlowAssetToolbar::BuildAssetToolbar(UToolMenu* ToolbarMenu) const
 			}
 		}));
 
-		Section.AddEntry(FToolMenuEntry::InitToolBarButton(
-			FFlowToolbarCommands::Get().SearchInAsset,
-			TAttribute<FText>(),
-			TAttribute<FText>(),
-			FSlateIcon(FAppStyle::GetAppStyleSetName(), "Kismet.Tabs.FindResults")
-		));
+		Section.AddEntry(FToolMenuEntry::InitToolBarButton(FFlowToolbarCommands::Get().SearchInAsset));
 	}
 }
 
@@ -463,7 +472,7 @@ TSharedRef<SWidget> FFlowAssetToolbar::MakeDiffMenu(const UFlowAssetEditorContex
 		if (FlowAsset)
 		{
 			FString Filename = SourceControlHelpers::PackageFilename(FlowAsset->GetPathName());
-			TWeakObjectPtr<UObject> AssetPtr = FlowAsset;
+			const TWeakObjectPtr<UObject> AssetPtr = FlowAsset;
 
 			// Add our async SCC task widget
 			return SNew(SAssetRevisionMenu, Filename)
@@ -483,7 +492,7 @@ TSharedRef<SWidget> FFlowAssetToolbar::MakeDiffMenu(const UFlowAssetEditorContex
 	return MenuBuilder.MakeWidget();
 }
 
-void FFlowAssetToolbar::BuildDebuggerToolbar(UToolMenu* ToolbarMenu) const
+void FFlowAssetToolbar::BuildDebuggerToolbar(UToolMenu* ToolbarMenu)
 {
 	FToolMenuSection& Section = ToolbarMenu->AddSection("Debug");
 	Section.InsertPosition = FToolMenuInsert("View", EToolMenuInsertType::After);
@@ -493,15 +502,11 @@ void FFlowAssetToolbar::BuildDebuggerToolbar(UToolMenu* ToolbarMenu) const
 		const UFlowAssetEditorContext* Context = InSection.FindContext<UFlowAssetEditorContext>();
 		if (Context && Context->GetFlowAsset())
 		{
-			// First, and only visible while halted: the level toolbar's Resume does not work while a
-			// Flow breakpoint holds the game thread, so this is the way to continue.
-			InSection.AddEntry(FToolMenuEntry::InitToolBarButton(
-				FFlowToolbarCommands::Get().ContinueFlowExecution,
-				TAttribute<FText>(),
-				TAttribute<FText>(),
-				FSlateIcon(FAppStyle::GetAppStyleSetName(), "PlayWorld.PlayInViewport")
-			));
-		
+			// First, and only visible while halted: the level toolbar's Resume and Stop do not work while a
+			// Flow breakpoint holds the game thread, so these are the way to continue or stop.
+			InSection.AddEntry(FToolMenuEntry::InitToolBarButton(FFlowToolbarCommands::Get().ContinueFlowExecution));
+			InSection.AddEntry(FToolMenuEntry::InitToolBarButton(FFlowToolbarCommands::Get().StopFlowExecution));
+
 			FPlayWorldCommands::BuildToolbar(InSection);
 
 			InSection.AddEntry(FToolMenuEntry::InitWidget("AssetInstances", SNew(SFlowAssetInstanceList, Context->GetFlowAsset()), FText(), true));

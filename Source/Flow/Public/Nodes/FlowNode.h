@@ -71,12 +71,13 @@ public:
 #endif
 
 public:
-	// UObject	
+	// UObject
 	virtual void PostLoad() override;
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 	// --
 
 #if WITH_EDITOR
-	// UObject	
+	// UObject
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 	// --
 #endif
@@ -166,7 +167,7 @@ public:
 protected:
 	UFUNCTION(BlueprintImplementableEvent, Category = "FlowNode", meta = (DisplayName = "Can Finish Graph"))
 	bool K2_CanFinishGraph() const;
-	
+
 	UFUNCTION(BlueprintImplementableEvent, Category = "FlowNode", meta = (DisplayName = "Can User Add Input"))
 	bool K2_CanUserAddInput() const;
 
@@ -233,7 +234,7 @@ protected:
 
 	/* Helper templates for Find*PinConnection* functions */
 	template <bool bExecIsCached>
-	bool FindFirstPinConnection(const FFlowPin& FlowPin, const TArray<FFlowPin>& FlowPinArray, FConnectedPin& FirstConnectedPin) const;		
+	bool FindFirstPinConnection(const FFlowPin& FlowPin, const TArray<FFlowPin>& FlowPinArray, FConnectedPin& FirstConnectedPin) const;
 	template <bool bExecIsCached>
 	bool FindPinConnections(const FFlowPin& FlowPin, const TArray<FFlowPin>& FlowPinArray, TArray<FConnectedPin>* ConnectedPins) const;
 
@@ -267,7 +268,7 @@ public:
 	TMap<FName, FFlowPinPropertySource> MapDataPinNameToPropertySource;
 
 #if WITH_EDITORONLY_DATA
-protected:	
+protected:
 	UPROPERTY(VisibleDefaultsOnly, AdvancedDisplay, Category = "FlowNode", meta = (GetByRef))
 	TArray<FFlowPin> AutoInputDataPins;
 
@@ -334,6 +335,17 @@ protected:
 //////////////////////////////////////////////////////////////////////////
 // Executing node instance
 
+protected:
+#if !UE_BUILD_SHIPPING
+	TMap<FName, TArray<FPinRecord>> InputRecords;
+	TMap<FName, TArray<FPinRecord>> OutputRecords;
+#endif
+	
+	/* True, if this node or any of its AddOns has a custom property marked as UPROPERTY(Replicated). */
+	bool bHasReplicatedProperties = false;
+
+	virtual bool ShouldReplicateProperties() const { return true; }
+
 public:
 	// IFlowCoreExecutableInterface
 	virtual void InitializeInstance() override;
@@ -344,20 +356,20 @@ public:
 	virtual void ExecuteInput(const FName& PinName) override;
 	// --
 
-protected:
-	UPROPERTY(SaveGame)
+private:
+	UPROPERTY(SaveGame, ReplicatedUsing = OnRep_ActivationState)
 	EFlowNodeState ActivationState = EFlowNodeState::NeverActivated;
 
 public:
+	void SetActivationState(const EFlowNodeState NewActivationState);
 	EFlowNodeState GetActivationState() const { return ActivationState; }
 	bool HasFinished() const { return EFlowNodeState_Classifiers::IsFinishedState(ActivationState); }
 
-#if !UE_BUILD_SHIPPING
-
 protected:
-	TMap<FName, TArray<FPinRecord>> InputRecords;
-	TMap<FName, TArray<FPinRecord>> OutputRecords;
-#endif
+	/* Called on clients after ActivationState replicated from the server changed. */
+	UFUNCTION(BlueprintNativeEvent, Category = "FlowNode")
+	void OnRep_ActivationState(const EFlowNodeState PreviousActivationState);
+	virtual void OnRep_ActivationState_Implementation(const EFlowNodeState PreviousActivationState) {}
 
 protected:
 	/* Trigger execution of input pin. */

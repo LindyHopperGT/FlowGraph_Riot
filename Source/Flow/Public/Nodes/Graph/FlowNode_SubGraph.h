@@ -99,15 +99,8 @@ protected:
 
 #if WITH_EDITOR
 public:
-	/**
-	 * Assigns the child asset directly, for tooling that generates a sub-graph rather than going through
-	 * the details panel. Subscribes to the asset so an interface change still reconstructs this node.
-	 */
-	void SetAsset(UFlowAsset* InAsset)
-	{
-		Asset = InAsset;
-		SubscribeToAssetChanges();
-	}
+	/* Used by utility extracting selected nodes to the SubGraph. */
+	void SetAsset(UFlowAsset* InAsset);
 
 	virtual FText K2_GetNodeTitle_Implementation() const override;
 	virtual FString GetNodeDescription() const override;
@@ -139,4 +132,9 @@ private:
 #endif
 
 	static const FName AssetParams_MemberName;
+
+#if WITH_EDITOR
+public:
+	virtual const FFlowAgentDoc& GetAgentDoc() const override;
+#endif
 };

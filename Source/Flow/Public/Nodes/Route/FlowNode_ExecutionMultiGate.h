@@ -17,7 +17,7 @@ class FLOW_API UFlowNode_ExecutionMultiGate final : public UFlowNode
 public:
 	UFlowNode_ExecutionMultiGate();
 
-protected:	
+protected:
 	/* When true, outputs are selected randomly each activation instead of in order. */
 	UPROPERTY(EditAnywhere, Category = "MultiGate")
 	bool bRandom = false;
@@ -48,6 +48,11 @@ public:
 
 #if WITH_EDITOR
 	virtual FString GetNodeDescription() const override;
+	virtual const FFlowAgentDoc& GetAgentDoc() const override;
+#endif
+
+#if WITH_EDITOR
+public:
 	virtual const FFlowAgentDoc& GetAgentDoc() const override;
 #endif
 };

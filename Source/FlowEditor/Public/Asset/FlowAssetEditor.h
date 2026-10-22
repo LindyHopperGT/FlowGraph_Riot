@@ -22,6 +22,7 @@ class SGraphEditor;
 class UEdGraphNode;
 class UEdGraphPin;
 struct FSlateBrush;
+struct FPropertyAndParent;
 struct FPropertyChangedEvent;
 struct Rect;
 
@@ -137,17 +138,24 @@ protected:
 	virtual void CreateToolbar();
 	virtual void BindToolbarCommands();
 	
-	virtual void RefreshAsset();
 	virtual void RefreshDetails();
+	void ShowAssetDefaults() const;
+
+	virtual void RefreshAsset();
+	virtual void ValidateAsset(FFlowMessageLog& MessageLog);
 
 private:
 	void ValidateAsset_Internal();
 
 protected:
-	virtual void ValidateAsset(FFlowMessageLog& MessageLog);
+	virtual void AutoFormatGraph();
+	
 	virtual void SearchInAsset();
 
-	void EditAssetDefaults_Clicked() const;
+	static void ContinueFlowExecution();
+	static void StopFlowExecution();
+	static bool IsFlowExecutionHalted();
+	static class UFlowDebugEditorSubsystem* GetFlowDebugEditorSubsystem();
 
 	virtual void AutoFormatGraph();
 
@@ -159,8 +167,8 @@ protected:
 	virtual void CreateWidgets();
 	virtual void CreateGraphWidget();
 
-	bool CanEdit();
-	void SetCanEditInPIE(bool value);
+	static bool CanEdit();
+	static bool IsPropertyVisible(const FPropertyAndParent& PropertyAndParent);
 
 public:
 	void SetUISelectionState(const FName SelectionOwner);

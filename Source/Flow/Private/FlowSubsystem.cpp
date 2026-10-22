@@ -218,8 +218,7 @@ UFlowAsset* UFlowSubsystem::CreateSubFlow(UFlowNode_SubGraph* SubGraphNode, cons
 	if (!InstancedSubFlows.Contains(SubGraphNode))
 	{
 		const TWeakObjectPtr<UObject> Owner = SubGraphOwner ? SubGraphOwner->GetOwner() : nullptr;
-		AssetInstance = CreateFlowInstance(Owner, SubGraphNode->Asset.LoadSynchronous(), SavedInstanceName,
-			SubGraphOwner ? SubGraphOwner->GetOwningRootFlowInstance() : nullptr);
+		AssetInstance = CreateFlowInstance(Owner, SubGraphNode->Asset.LoadSynchronous(), SavedInstanceName, false);
 
 		if (AssetInstance)
 		{
@@ -239,10 +238,10 @@ UFlowAsset* UFlowSubsystem::CreateSubFlow(UFlowNode_SubGraph* SubGraphNode, cons
 		}
 		check(AssetInstance->NodeOwningThisAssetInstance == SubGraphNode);
 
-		if (SubGraphOwner)
-		{
-			SubGraphOwner->ActiveSubGraphs.Add(SubGraphNode, AssetInstance);
-		}
+		// clients receive SubGraph instance from its activation, not from preload
+		AssetInstance->StartReplication();
+
+		SubGraphOwner->ActiveSubGraphs.Add(SubGraphNode, AssetInstance);
 
 		// don't activate Start Node if we're loading Sub Graph from SaveGame
 		if (SavedInstanceName.IsEmpty())
@@ -276,11 +275,15 @@ void UFlowSubsystem::FinishSubFlow(UFlowNode_SubGraph* SubGraphNode, const EFlow
 			// Keep the owning node available during finish and deinitialize callbacks.
 			AssetInstance->NodeOwningThisAssetInstance = nullptr;
 		}
+		else
+		{
+			// clients receive SubGraph instance only while it's active, the finished instance is kept on the server only
+			AssetInstance->StopReplication();
+		}
 	}
 }
 
-UFlowAsset* UFlowSubsystem::CreateFlowInstance(const TWeakObjectPtr<UObject> Owner, UFlowAsset* LoadedFlowAsset,
-	FString NewInstanceName, UFlowAsset* OwningFlowInstance)
+UFlowAsset* UFlowSubsystem::CreateFlowInstance(const TWeakObjectPtr<UObject> Owner, UFlowAsset* LoadedFlowAsset, FString NewInstanceName, const bool bStartReplication)
 {
 	if (!IsValid(LoadedFlowAsset) || !HasValidNodesForInstancing(*LoadedFlowAsset, *LoadedFlowAsset, Owner.Get()))
 	{
@@ -326,6 +329,10 @@ UFlowAsset* UFlowSubsystem::CreateFlowInstance(const TWeakObjectPtr<UObject> Own
 	}
 	NewInstance->OwningRootFlowInstance = ResolvedRoot;
 	NewInstance->InitializeInstance(Owner, *LoadedFlowAsset);
+	if (bStartReplication)
+	{
+		NewInstance->StartReplication();
+	}
 
 	LoadedFlowAsset->AddInstance(NewInstance);
 

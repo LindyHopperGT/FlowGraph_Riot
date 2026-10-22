@@ -7,7 +7,7 @@
 
 /**
  * Evaluates all attached predicate AddOns (IFlowPredicateInterface) and fires the True or False
- *  output pin based on the result. 
+ *  output pin based on the result.
  */
 UCLASS(MinimalApi, NotBlueprintable, meta = (DisplayName = "Branch", Keywords = "branch predicate"))
 class UFlowNode_Branch : public UFlowNode
@@ -35,6 +35,7 @@ public:
 	static const FName OUTPIN_False;
 
 #if WITH_EDITOR
+public:
 	virtual const FFlowAgentDoc& GetAgentDoc() const override;
 #endif
 };
