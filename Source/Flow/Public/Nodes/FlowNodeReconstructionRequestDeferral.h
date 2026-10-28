@@ -8,15 +8,15 @@
  * Temporarily suspends reconstruction notifications while a caller applies a batch of properties.
  *
  * AddOn property callbacks can request reconstruction immediately. During a multi-AddOn update,
- * that would rebuild the parent against a partially updated tree and stale pin caches. Courier
- * uses this scope around callback dispatch after attachment is complete, then reconstructs the
+ * that would rebuild the parent against a partially updated tree and stale pin caches. Batch
+ * updates use this scope around callback dispatch after attachment is complete, then reconstruct
  * parent once the final pin state is ready. The scope restores both original delegate bindings
  * when it ends and does not request reconstruction itself.
  */
 class FLOW_API FScopedFlowNodeReconstructionRequestDeferral
 {
 public:
-	explicit FScopedFlowNodeReconstructionRequestDeferral(UFlowNodeBase& FlowNodeBase);
+	explicit FScopedFlowNodeReconstructionRequestDeferral(UFlowNodeBase& InFlowNodeBase);
 	~FScopedFlowNodeReconstructionRequestDeferral();
 
 	FScopedFlowNodeReconstructionRequestDeferral(const FScopedFlowNodeReconstructionRequestDeferral&) = delete;

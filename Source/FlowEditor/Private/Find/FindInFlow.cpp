@@ -1,15 +1,17 @@
 // Copyright https://github.com/MothCocoon/FlowGraph/graphs/contributors
-
 #include "Find/FindInFlow.h"
+
 #include "Asset/FlowAssetEditor.h"
 #include "Find/SFindInFlowFilterPopup.h"
 #include "Graph/FlowGraphUtils.h"
 #include "Graph/Nodes/FlowGraphNode.h"
 #include "FlowAsset.h"
 #include "FlowEditorModule.h"
-#include "Graph/FlowGraphEditorSettings.h"
+#include "Nodes/FlowNode.h"
+#include "Nodes/FlowNodeBase.h"
 #include "Nodes/Graph/FlowNode_SubGraph.h"
 
+#include "AssetRegistry/ARFilter.h"
 #include "EdGraph/EdGraph.h"
 #include "EdGraph/EdGraphNode.h"
 #include "Framework/Application/SlateApplication.h"
@@ -57,7 +59,7 @@ FFindInFlowResult::FFindInFlowResult(const FString& InValue, UFlowAsset* InOwnin
 {
 }
 
-FFindInFlowResult::FFindInFlowResult(const FString& InValue, TSharedPtr<FFindInFlowResult> InParent, UEdGraphNode* InNode, bool bInIsSubGraphNode, UFlowAsset* InOwningFlowAsset)
+FFindInFlowResult::FFindInFlowResult(const FString& InValue, const TSharedPtr<FFindInFlowResult>& InParent, UEdGraphNode* InNode, const bool bInIsSubGraphNode, UFlowAsset* InOwningFlowAsset)
 	: Value(InValue)
 	, GraphNode(InNode)
 	, OwningFlowAsset(InOwningFlowAsset)
@@ -66,53 +68,47 @@ FFindInFlowResult::FFindInFlowResult(const FString& InValue, TSharedPtr<FFindInF
 {
 }
 
-TSharedRef<SWidget> FFindInFlowResult::CreateIcon() const
+FReply FFindInFlowResult::OnClick(TWeakPtr<class FFlowAssetEditor> FlowAssetEditorPtr) const
 {
-	const FSlateColor IconColor = FSlateColor::UseForeground();
-	const FSlateBrush* Brush = FAppStyle::GetBrush(TEXT("GraphEditor.FIB_Event"));
-
-	return SNew(SImage)
-		.Image(Brush)
-		.ColorAndOpacity(IconColor);
-}
-
-FReply FFindInFlowResult::OnClick(TWeakPtr<class FFlowAssetEditor> FlowAssetEditorPtr)
-{
-	if (GraphNode.IsValid())
+	if (const UEdGraphNode* GraphNodePtr = GraphNode.Get())
 	{
-		if (UEdGraph* Graph = GraphNode->GetGraph())
+		if (const UEdGraph* Graph = GraphNodePtr->GetGraph())
 		{
 			if (UFlowAsset* Asset = Cast<UFlowAsset>(Graph->GetOuter()))
 			{
 				GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(Asset);
-				if (TSharedPtr<FFlowAssetEditor> Editor = FFlowGraphUtils::GetFlowAssetEditor(Graph))
+				if (const TSharedPtr<FFlowAssetEditor> Editor = FFlowGraphUtils::GetFlowAssetEditor(Graph))
 				{
-					Editor->JumpToNode(GraphNode.Get());
+					Editor->JumpToNode(GraphNodePtr);
 				}
 			}
 		}
 	}
-	else if (OwningFlowAsset.IsValid())
+	else if (UFlowAsset* OwningFlowAssetPtr = OwningFlowAsset.Get())
 	{
-		GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(OwningFlowAsset.Get());
+		GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(OwningFlowAssetPtr);
 	}
 	return FReply::Handled();
 }
 
 FReply FFindInFlowResult::OnDoubleClick() const
 {
-	if (bIsSubGraphNode && Parent.IsValid())
+	const TSharedPtr<FFindInFlowResult> ParentPtr = Parent.Pin();
+	if (bIsSubGraphNode && ParentPtr)
 	{
-		if (const UFlowGraphNode* ParentNode = Cast<UFlowGraphNode>(Parent.Pin()->GraphNode.Get()))
+		if (const UFlowGraphNode* ParentNode = Cast<UFlowGraphNode>(ParentPtr->GraphNode.Get()))
 		{
 			if (UFlowNode_SubGraph* SubGraph = Cast<UFlowNode_SubGraph>(ParentNode->GetFlowNodeBase()))
 			{
 				if (UObject* Target = SubGraph->GetAssetToEdit())
 				{
 					GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(Target);
-					if (TSharedPtr<FFlowAssetEditor> Editor = FFlowGraphUtils::GetFlowAssetEditor(GraphNode->GetGraph()))
+					if (const UEdGraphNode* GraphNodePtr = GraphNode.Get())
 					{
-						Editor->JumpToNode(GraphNode.Get());
+						if (const TSharedPtr<FFlowAssetEditor> Editor = FFlowGraphUtils::GetFlowAssetEditor(GraphNodePtr->GetGraph()))
+						{
+							Editor->JumpToNode(GraphNodePtr);
+						}
 					}
 				}
 			}
@@ -120,6 +116,16 @@ FReply FFindInFlowResult::OnDoubleClick() const
 	}
 
 	return FReply::Handled();
+}
+
+TSharedRef<SWidget> FFindInFlowResult::CreateIcon()
+{
+	const FSlateColor IconColor = FSlateColor::UseForeground();
+	const FSlateBrush* Brush = FAppStyle::GetBrush(TEXT("GraphEditor.FIB_Event"));
+
+	return SNew(SImage)
+		.Image(Brush)
+		.ColorAndOpacity(IconColor);
 }
 
 FString FFindInFlowResult::GetDescriptionText() const
@@ -134,34 +140,37 @@ FString FFindInFlowResult::GetDescriptionText() const
 
 FString FFindInFlowResult::GetCommentText() const
 {
-	return GraphNode.IsValid() ? GraphNode->NodeComment : FString();
+	const UEdGraphNode* GraphNodePtr = GraphNode.Get();
+	return GraphNodePtr ? GraphNodePtr->NodeComment : FString();
 }
 
 FString FFindInFlowResult::GetNodeTypeText() const
 {
-	if (!GraphNode.IsValid())
+	const UEdGraphNode* GraphNodePtr = GraphNode.Get();
+	if (!GraphNodePtr)
 	{
 		return FString();
 	}
 
-	if (const UFlowGraphNode* FlowGraphNode = Cast<UFlowGraphNode>(GraphNode.Get()))
+	if (const UFlowGraphNode* FlowGraphNode = Cast<UFlowGraphNode>(GraphNodePtr))
 	{
-		if (UFlowNodeBase* Base = FlowGraphNode->GetFlowNodeBase())
+		if (const UFlowNodeBase* Base = FlowGraphNode->GetFlowNodeBase())
 		{
 			return Base->GetClass()->GetDisplayNameText().ToString();
 		}
 	}
 
-	return GraphNode->GetClass()->GetDisplayNameText().ToString();
+	return GraphNodePtr->GetClass()->GetDisplayNameText().ToString();
 }
 
 FText FFindInFlowResult::GetToolTipText() const
 {
 	FString Tip = GetNodeTypeText() + TEXT("\n") + GetDescriptionText();
 
-	if (!GetCommentText().IsEmpty())
+	const FString CommentText = GetCommentText();
+	if (!CommentText.IsEmpty())
 	{
-		Tip += TEXT("\n") + GetCommentText();
+		Tip += TEXT("\n") + CommentText;
 	}
 
 	if (!MatchedPropertySnippet.IsEmpty())
@@ -186,7 +195,7 @@ FText FFindInFlowResult::GetMatchedCategoriesText() const
 
 	TArray<FText> DisplayNames;
 
-	for (EFlowSearchFlags Flag : MakeFlagsRange(EFlowSearchFlags::All))
+	for (const EFlowSearchFlags Flag : MakeFlagsRange(EFlowSearchFlags::All))
 	{
 		if (EnumHasAnyFlags(MatchedFlags, Flag))
 		{
@@ -209,7 +218,7 @@ FText FFindInFlowResult::GetMatchedCategoriesText() const
 //////////////////////////////////////////////////////////////////////////
 // SFindInFlow
 
-void SFindInFlow::Construct(const FArguments& InArgs, TSharedPtr<class FFlowAssetEditor> InFlowAssetEditor)
+void SFindInFlow::Construct(const FArguments& InArgs, const TSharedPtr<class FFlowAssetEditor>& InFlowAssetEditor)
 {
 	FlowAssetEditorPtr = InFlowAssetEditor;
 	SearchResults.Setup();
@@ -219,19 +228,14 @@ void SFindInFlow::Construct(const FArguments& InArgs, TSharedPtr<class FFlowAsse
 	if (ensure(Settings))
 	{
 		MaxSearchDepth = Settings->DefaultMaxSearchDepth;
-		SearchFlags = static_cast<EFlowSearchFlags>(Settings->DefaultSearchFlags);
-		PinDirection = static_cast<EFlowSearchPinDirection>(Settings->DefaultSearchPinDirection);
-		PinConnection = static_cast<EFlowSearchPinConnectionState>(Settings->DefaultSearchPinConnection);
-		if (!EnumHasAnyFlags(SearchFlags, EFlowSearchFlags::PinNames))
-		{
-			PinDirection = EFlowSearchPinDirection::Any;
-			PinConnection = EFlowSearchPinConnectionState::Any;
-		}
+		SearchFlags = EFlowSearchFlags::All & ~static_cast<EFlowSearchFlags>(Settings->DisabledSearchFlags);
+		PinDirection = Settings->DefaultSearchPinDirection;
+		PinConnection = Settings->DefaultSearchPinConnection;
 	}
 
 	// Populate scope options
 	FLOW_ASSERT_ENUM_MAX(EFlowSearchScope, 3);
-	for (EFlowSearchScope Scope : TEnumRange<EFlowSearchScope>())
+	for (const EFlowSearchScope Scope : TEnumRange<EFlowSearchScope>())
 	{
 		if (FlowEnum::IsValidEnumValue(Scope))
 		{
@@ -257,9 +261,9 @@ void SFindInFlow::Construct(const FArguments& InArgs, TSharedPtr<class FFlowAsse
 	SAssignNew(TreeView, STreeViewType)
 		.TreeItemsSource(&SearchResults.ItemsFound)
 		.OnGenerateRow(this, &SFindInFlow::OnGenerateRow)
-		.OnGetChildren(this, &SFindInFlow::OnGetChildren)
+		.OnGetChildren_Static(&SFindInFlow::OnGetChildren)
 		.OnSelectionChanged(this, &SFindInFlow::OnTreeSelectionChanged)
-		.OnMouseButtonDoubleClick(this, &SFindInFlow::OnTreeSelectionDoubleClicked);
+		.OnMouseButtonDoubleClick_Static(&SFindInFlow::OnTreeSelectionDoubleClicked);
 
 	ChildSlot
 		[
@@ -299,33 +303,17 @@ void SFindInFlow::Construct(const FArguments& InArgs, TSharedPtr<class FFlowAsse
 								.ToolTipText(LOCTEXT("EditFiltersTooltip", "Edit search filters"))
 								.OnClicked_Lambda([this]()
 									{
-										const FFindInFlowApplyDelegate OnSaveAsDefault = FFindInFlowApplyDelegate::CreateLambda([](EFlowSearchFlags Flags)
-											{
-												if (UFlowGraphEditorSettings* GraphEditorSettings = GetMutableDefault<UFlowGraphEditorSettings>())
-												{
-													GraphEditorSettings->DefaultSearchFlags = static_cast<uint32>(Flags);
-													GraphEditorSettings->SaveConfig();
-												}
-											});
-
 										const TSharedRef<SFindInFlowFilterPopup> FilterPopup = SNew(SFindInFlowFilterPopup)
 											.OnApply(FFindInFlowApplyDelegate::CreateLambda([this](EFlowSearchFlags NewSearchFlags)
 												{
 													SearchFlags = NewSearchFlags;
-													if (!EnumHasAnyFlags(SearchFlags, EFlowSearchFlags::PinNames))
+													if (UFlowGraphEditorSettings* GraphEditorSettings = GetMutableDefault<UFlowGraphEditorSettings>())
 													{
-														PinDirection = EFlowSearchPinDirection::Any;
-														PinConnection = EFlowSearchPinConnectionState::Any;
-														if (UFlowGraphEditorSettings* GraphEditorSettings = GetMutableDefault<UFlowGraphEditorSettings>())
-														{
-															GraphEditorSettings->DefaultSearchPinDirection = 0;
-															GraphEditorSettings->DefaultSearchPinConnection = 0;
-															GraphEditorSettings->SaveConfig();
-														}
+														GraphEditorSettings->DisabledSearchFlags = static_cast<uint32>(EFlowSearchFlags::All & ~NewSearchFlags);
+														GraphEditorSettings->SaveConfig();
 													}
 													InitiateSearch();
 												}))
-											.OnSaveAsDefault(OnSaveAsDefault)
 											.InitialFlags(SearchFlags);
 
 										FSlateApplication::Get().PushMenu(
@@ -339,11 +327,11 @@ void SFindInFlow::Construct(const FArguments& InArgs, TSharedPtr<class FFlowAsse
 									})
 								[
 									SNew(STextBlock)
-									    .Text_Lambda([this]()
-										   {
-											  int32 ActiveCount = FMath::CountBits(static_cast<uint32>(SearchFlags));
-										       return FText::Format(LOCTEXT("ActiveFilters", "{0} Active"), FText::AsNumber(ActiveCount));
-										   })
+										.Text_Lambda([this]()
+											{
+												const int32 ActiveCount = FMath::CountBits(static_cast<uint32>(SearchFlags));
+												return FText::Format(LOCTEXT("ActiveFilters", "{0} Active"), FText::AsNumber(ActiveCount));
+											})
 								]
 						]
 					+ SHorizontalBox::Slot()
@@ -368,7 +356,7 @@ void SFindInFlow::Construct(const FArguments& InArgs, TSharedPtr<class FFlowAsse
 						[
 							SNew(SComboBox<TSharedPtr<EFlowSearchScope>>)
 								.OptionsSource(&ScopeOptionList)
-								.OnGenerateWidget(this, &SFindInFlow::GenerateScopeWidget)
+								.OnGenerateWidget_Static(&SFindInFlow::GenerateScopeWidget)
 								.OnSelectionChanged(this, &SFindInFlow::OnScopeChanged)
 								[
 									SNew(STextBlock).Text(this, &SFindInFlow::GetCurrentScopeText)
@@ -428,13 +416,34 @@ FReply SFindInFlow::OnSearchButtonClicked()
 	return FReply::Handled();
 }
 
+void SFindInFlow::OnGetChildren(FSearchResult InItem, TArray<FSearchResult>& OutChildren)
+{
+	OutChildren = InItem->Children;
+}
+
+void SFindInFlow::OnTreeSelectionChanged(FSearchResult Item, ESelectInfo::Type) const
+{
+	if (Item.IsValid())
+	{
+		(void)Item->OnClick(FlowAssetEditorPtr);
+	}
+}
+
+void SFindInFlow::OnTreeSelectionDoubleClicked(FSearchResult Item)
+{
+	if (Item.IsValid())
+	{
+		(void)Item->OnDoubleClick();
+	}
+}
+
 void SFindInFlow::OnScopeChanged(TSharedPtr<EFlowSearchScope> NewSelection, ESelectInfo::Type)
 {
 	SelectedScopeOption = NewSelection;
 	SearchScope = *NewSelection;
 }
 
-void SFindInFlow::OnMaxDepthChanged(int32 NewDepth)
+void SFindInFlow::OnMaxDepthChanged(const int32 NewDepth)
 {
 	MaxSearchDepth = NewDepth;
 
@@ -446,7 +455,48 @@ void SFindInFlow::OnMaxDepthChanged(int32 NewDepth)
 	}
 }
 
-TSharedRef<SWidget> SFindInFlow::GenerateScopeWidget(TSharedPtr<EFlowSearchScope> Item) const
+TSharedRef<ITableRow> SFindInFlow::OnGenerateRow(FSearchResult InItem, const TSharedRef<STableViewBase>& OwnerTable) const
+{
+	return SNew(STableRow<FSearchResult>, OwnerTable)
+		.ToolTip(SNew(SToolTip).Text(InItem->GetToolTipText()))
+		[
+			SNew(SHorizontalBox)
+				+ SHorizontalBox::Slot()
+				.AutoWidth()
+				.VAlign(VAlign_Center)
+				.Padding(2, 0)
+				[
+					InItem->CreateIcon()
+				]
+				+ SHorizontalBox::Slot()
+				.VAlign(VAlign_Center)
+				.Padding(4, 0)
+				[
+					SNew(STextBlock)
+						.Text(FText::FromString(InItem->Value))
+						.HighlightText(HighlightText)
+				]
+				+ SHorizontalBox::Slot()
+				.VAlign(VAlign_Center)
+				.Padding(4, 0)
+				[
+					SNew(STextBlock)
+						.Text(FText::FromString(InItem->GetNodeTypeText()))
+						.ColorAndOpacity(FSlateColor(FLinearColor(0.6f, 0.8f, 1.0f)))
+				]
+				+ SHorizontalBox::Slot()
+				.HAlign(HAlign_Right)
+				.VAlign(VAlign_Center)
+				.Padding(4, 0)
+				[
+					SNew(STextBlock)
+						.Text(InItem->GetMatchedCategoriesText())
+						.ColorAndOpacity(FSlateColor(FLinearColor(0.8f, 0.8f, 0.8f)))
+				]
+		];
+}
+
+TSharedRef<SWidget> SFindInFlow::GenerateScopeWidget(TSharedPtr<EFlowSearchScope> Item)
 {
 	return SNew(STextBlock)
 		.Text(UEnum::GetDisplayValueAsText(*Item.Get()));
@@ -586,7 +636,7 @@ void SFindInFlow::OnPinDirectionChanged(EFlowSearchPinDirection NewDirection)
 	PinDirection = NewDirection;
 	if (UFlowGraphEditorSettings* GraphEditorSettings = GetMutableDefault<UFlowGraphEditorSettings>())
 	{
-		GraphEditorSettings->DefaultSearchPinDirection = static_cast<uint8>(NewDirection);
+		GraphEditorSettings->DefaultSearchPinDirection = NewDirection;
 		GraphEditorSettings->SaveConfig();
 	}
 	InitiateSearch();
@@ -597,7 +647,7 @@ void SFindInFlow::OnPinConnectionChanged(EFlowSearchPinConnectionState NewConnec
 	PinConnection = NewConnection;
 	if (UFlowGraphEditorSettings* GraphEditorSettings = GetMutableDefault<UFlowGraphEditorSettings>())
 	{
-		GraphEditorSettings->DefaultSearchPinConnection = static_cast<uint8>(NewConnection);
+		GraphEditorSettings->DefaultSearchPinConnection = NewConnection;
 		GraphEditorSettings->SaveConfig();
 	}
 	InitiateSearch();
@@ -620,7 +670,7 @@ void SFindInFlow::InitiateSearch()
 		return;
 	}
 
-	TSharedPtr<FFlowAssetEditor> Editor = FlowAssetEditorPtr.Pin();
+	const TSharedPtr<FFlowAssetEditor> Editor = FlowAssetEditorPtr.Pin();
 	if (!Editor.IsValid())
 	{
 		return;
@@ -634,7 +684,7 @@ void SFindInFlow::InitiateSearch()
 
 	if (GCompilingBlueprint && SearchScope != EFlowSearchScope::ThisAssetOnly)
 	{
-		FSearchResult CompilePending = MakeShareable(new FFindInFlowResult(TEXT("Search deferred while Blueprints are compiling")));
+		const FSearchResult CompilePending = MakeShareable(new FFindInFlowResult(TEXT("Search deferred while Blueprints are compiling")));
 		SearchResults.ItemsFound.Add(CompilePending);
 		TreeView->RequestTreeRefresh();
 		return;
@@ -667,126 +717,90 @@ void SFindInFlow::InitiateSearch()
 	TArray<FFlowSearchResultItem> RawResults;
 	FFlowSearch::Search(Query, RawResults);
 
-	// Group flat results by asset into per-asset root nodes (same visual layout as before).
+	// Each result goes under the root of its searched asset, nested in one row per SubGraph node on its path.
 	TMap<FSoftObjectPath, FSearchResult> AssetRoots;
+	TMap<TPair<FFindInFlowResult*, FGuid>, FSearchResult> SubgraphRows;
 	for (const FFlowSearchResultItem& Item : RawResults)
 	{
-		FSearchResult& AssetRoot = AssetRoots.FindOrAdd(Item.AssetPath);
+		const FSoftObjectPath& RootAssetPath = Item.SubgraphPath.IsEmpty() ? Item.AssetPath : Item.SubgraphPath[0].OwnerAssetPath;
+		FSearchResult& AssetRoot = AssetRoots.FindOrAdd(RootAssetPath);
 		if (!AssetRoot.IsValid())
 		{
-			UFlowAsset* Asset = Cast<UFlowAsset>(Item.AssetPath.TryLoad());
-			const FString AssetName = Asset ? Asset->GetName() : Item.AssetPath.GetAssetName();
+			UFlowAsset* Asset = Cast<UFlowAsset>(RootAssetPath.TryLoad());
+			const FString AssetName = Asset ? Asset->GetName() : RootAssetPath.GetAssetName();
 			AssetRoot = MakeShareable(new FFindInFlowResult(AssetName, Asset));
 		}
 
+		FSearchResult ParentRow = AssetRoot;
+		for (int32 LinkIndex = 0; LinkIndex < Item.SubgraphPath.Num(); ++LinkIndex)
+		{
+			const FFlowSearchSubgraphLink& Link = Item.SubgraphPath[LinkIndex];
+			FSearchResult& SubgraphRow = SubgraphRows.FindOrAdd(MakeTuple(ParentRow.Get(), Link.SubGraphNodeGuid));
+			if (!SubgraphRow.IsValid())
+			{
+				const FSoftObjectPath& SubAssetPath = Item.SubgraphPath.IsValidIndex(LinkIndex + 1)
+					? Item.SubgraphPath[LinkIndex + 1].OwnerAssetPath
+					: Item.AssetPath;
+				UFlowAsset* SubAsset = Cast<UFlowAsset>(SubAssetPath.TryLoad());
+				const FString SubAssetName = SubAsset ? SubAsset->GetName() : SubAssetPath.GetAssetName();
+				UEdGraphNode* SubGraphNode = FindGraphNode(Cast<UFlowAsset>(Link.OwnerAssetPath.TryLoad()), Link.SubGraphNodeGuid);
+
+				SubgraphRow = MakeShareable(new FFindInFlowResult(SubAssetName + TEXT(" (SubGraph)"), ParentRow, SubGraphNode, true, SubAsset));
+				ParentRow->Children.Add(SubgraphRow);
+			}
+			ParentRow = SubgraphRow;
+		}
+
 		FSearchResult ResultItem = MakeResultItem(Item);
-		ResultItem->Parent = AssetRoot;
-		AssetRoot->Children.Add(ResultItem);
+		ResultItem->Parent = ParentRow;
+		ParentRow->Children.Add(ResultItem);
 	}
 
-	for (auto& KV : AssetRoots)
+	for (TPair<FSoftObjectPath, FSearchResult>& AssetRoot : AssetRoots)
 	{
-		SearchResults.ItemsFound.Add(KV.Value);
+		SearchResults.ItemsFound.Add(AssetRoot.Value);
 
 		// Auto-expand the current asset's group.
-		if (KV.Key == FSoftObjectPath(CurrentAsset))
+		if (AssetRoot.Key == FSoftObjectPath(CurrentAsset))
 		{
-			TreeView->SetItemExpansion(KV.Value, true);
+			TreeView->SetItemExpansion(AssetRoot.Value, true);
 		}
 	}
 
 	if (SearchResults.ItemsFound.IsEmpty())
 	{
-		FSearchResult NoResults = MakeShareable(new FFindInFlowResult(TEXT("No results found")));
+		const FSearchResult NoResults = MakeShareable(new FFindInFlowResult(TEXT("No results found")));
 		SearchResults.ItemsFound.Add(NoResults);
 	}
 
 	TreeView->RequestTreeRefresh();
 }
 
-SFindInFlow::FSearchResult SFindInFlow::MakeResultItem(const FFlowSearchResultItem& Item) const
+SFindInFlow::FSearchResult SFindInFlow::MakeResultItem(const FFlowSearchResultItem& Item)
 {
 	UFlowAsset* Asset   = Cast<UFlowAsset>(Item.AssetPath.TryLoad());
-	UEdGraphNode* EdNode = nullptr;
-	if (Asset && Asset->GetGraph())
-	{
-		for (UEdGraphNode* Node : Asset->GetGraph()->Nodes)
-		{
-			if (Node && Node->NodeGuid == Item.NodeGuid)
-			{
-				EdNode = Node;
-				break;
-			}
-		}
-	}
+	UEdGraphNode* EdNode = FindGraphNode(Asset, Item.NodeGuid);
 
-	FSearchResult Result = MakeShareable(
-		new FFindInFlowResult(Item.NodeTitle, nullptr, EdNode, Item.bIsSubGraphNode, Asset));
+	FSearchResult Result = MakeShareable(new FFindInFlowResult(Item.NodeTitle, nullptr, EdNode, Item.bIsSubGraphNode, Asset));
 	Result->MatchedFlags          = Item.MatchedFlags;
 	Result->MatchedPropertySnippet = Item.MatchedSnippet;
 	return Result;
 }
 
-TSharedRef<ITableRow> SFindInFlow::OnGenerateRow(FSearchResult InItem, const TSharedRef<STableViewBase>& OwnerTable)
+UEdGraphNode* SFindInFlow::FindGraphNode(const UFlowAsset* Asset, const FGuid& NodeGuid)
 {
-	return SNew(STableRow<FSearchResult>, OwnerTable)
-		.ToolTip(SNew(SToolTip).Text(InItem->GetToolTipText()))
-		[
-			SNew(SHorizontalBox)
-				+ SHorizontalBox::Slot()
-				.AutoWidth()
-				.VAlign(VAlign_Center)
-				.Padding(2, 0)
-				[
-					InItem->CreateIcon()
-				]
-				+ SHorizontalBox::Slot()
-				.VAlign(VAlign_Center)
-				.Padding(4, 0)
-				[
-					SNew(STextBlock)
-						.Text(FText::FromString(InItem->Value))
-						.HighlightText(HighlightText)
-				]
-				+ SHorizontalBox::Slot()
-				.VAlign(VAlign_Center)
-				.Padding(4, 0)
-				[
-					SNew(STextBlock)
-						.Text(FText::FromString(InItem->GetNodeTypeText()))
-						.ColorAndOpacity(FSlateColor(FLinearColor(0.6f, 0.8f, 1.0f)))
-				]
-				+ SHorizontalBox::Slot()
-				.HAlign(HAlign_Right)
-				.VAlign(VAlign_Center)
-				.Padding(4, 0)
-				[
-					SNew(STextBlock)
-						.Text(InItem->GetMatchedCategoriesText())
-						.ColorAndOpacity(FSlateColor(FLinearColor(0.8f, 0.8f, 0.8f)))
-				]
-		];
-}
-
-void SFindInFlow::OnGetChildren(FSearchResult InItem, TArray<FSearchResult>& OutChildren)
-{
-	OutChildren = InItem->Children;
-}
-
-void SFindInFlow::OnTreeSelectionChanged(FSearchResult Item, ESelectInfo::Type)
-{
-	if (Item.IsValid())
+	if (Asset && Asset->GetGraph())
 	{
-		Item->OnClick(FlowAssetEditorPtr);
+		for (UEdGraphNode* Node : Asset->GetGraph()->Nodes)
+		{
+			if (Node && Node->NodeGuid == NodeGuid)
+			{
+				return Node;
+			}
+		}
 	}
-}
 
-void SFindInFlow::OnTreeSelectionDoubleClicked(FSearchResult Item)
-{
-	if (Item.IsValid())
-	{
-		Item->OnDoubleClick();
-	}
+	return nullptr;
 }
 
 #undef LOCTEXT_NAMESPACE

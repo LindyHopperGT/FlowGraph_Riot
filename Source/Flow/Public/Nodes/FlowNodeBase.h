@@ -97,6 +97,28 @@ public:
 // Node
 
 public:
+	/* Stable identity persisted across saves.
+	 * Nodes inherit it from the graph node.
+	 * AddOns mint their identity at construction. */
+	UPROPERTY()
+	FGuid NodeGuid;
+
+	UFUNCTION(BlueprintCallable, Category = "FlowNode")
+	void SetGuid(const FGuid& NewGuid);
+
+	UFUNCTION(BlueprintPure, Category = "FlowNode")
+	const FGuid& GetGuid() const { return NodeGuid; }
+
+#if WITH_EDITOR
+private:
+	FGuid PreviousGuidForPinRemapping;
+	
+public:	
+	const FGuid& GetPreviousGuidForPinRemapping() const { return PreviousGuidForPinRemapping; }
+	void ClearPreviousGuidForPinRemapping() { PreviousGuidForPinRemapping.Invalidate(); }
+#endif
+
+public:
 	// UObject
 	virtual UWorld* GetWorld() const override;
 	// --
@@ -227,7 +249,7 @@ public:
 
 protected:
 	/* Flow Node AddOn attachments. */
-	UPROPERTY(VisibleInstanceOnly, EditFixedSize, BlueprintReadOnly, Instanced, Category = "AddOn Details", meta = (EditFixedOrder, NoResetToDefault))
+	UPROPERTY(VisibleInstanceOnly, EditFixedSize, BlueprintReadOnly, Instanced, TextExportTransient, Category = "AddOn Details", meta = (EditFixedOrder, NoResetToDefault))
 	TArray<TObjectPtr<UFlowNodeAddOn>> AddOns;
 
 	/* Replaces AddOns copied from the template with new instances of them. */
@@ -446,10 +468,9 @@ protected:
 
 	/* If this node is deprecated, it might be replaced by another node. */
 	UPROPERTY(EditDefaultsOnly, Category = "FlowNode")
-	TSubclassOf<UFlowNode> ReplacedBy;
+	TSoftClassPtr<UFlowNode> ReplacedBy;
 
-	// AddOn callbacks can request reconstruction after each property change. Courier batches the
-	// complete AddOn tree before rebuilding the parent graph.
+	friend class FScopedFlowNodeReconstructionRequestDeferral;
 	FFlowNodeEvent OnReconstructionRequested;
 	FFlowNodeEvent OnAddOnRequestedParentReconstruction;
 
@@ -531,11 +552,11 @@ public:
 	virtual FText GetNodeTitle() const;
 	virtual FText GetNodeToolTip() const;
 
-	/* Keywords metadata of NodeClass and every superclass up to UFlowNodeBase, deduplicated case-insensitively, most-derived first.
-	 * Classes outside the UFlowNodeBase hierarchy return only their own Keywords. */
-	static FString GetInheritedNodeKeywords(const UClass* NodeClass);
+	bool IsDeprecated() const { return bNodeDeprecated; }
+	const TSoftClassPtr<UFlowNode>& GetReplacedByClass() const { return ReplacedBy; }
 
 	FText GetGeneratedDisplayName() const;
+	static FString GetInheritedNodeKeywords(const UClass* NodeClass);
 
 	/**
 	 * Returns overlay icons to display on this node instance in the editor.
@@ -554,20 +575,11 @@ public:
 	 */
 	virtual bool GetCornerIcon(FName& OutBrushName, FName& OutStyleSetName) const { return false; }
 
-	/** The title border padding SFlowGraphNode applies to a node that does not override it.
-	 * The Right value is deliberately generous: it makes the title color spill stretch well past the title text.
-	 */
+	/** The title border padding used when a node does not override its margin. */
 	static FMargin GetDefaultTitleBorderMargin() { return FMargin(10.0f, 5.0f, 30.0f, 3.0f); }
 
-	/**
-	 * Returns the padding SFlowGraphNode applies to this node instance's title border.
-	 * Can override in a sub-class to produce a different margin.
-	 * This can be particularly useful for Nodes that want to draw several overlay icons in the title bar.
-	 */
+	/** Returns the title border padding for this node instance. */
 	virtual FMargin GetTitleBorderMargin() const { return GetDefaultTitleBorderMargin(); }
-
-	/** Returns the agent-facing guidance authored on this class or supplied by a native override. */
-	virtual const FFlowAgentDoc& GetAgentDoc() const { return AgentDoc; }
 
 	/* Persists documentation for classes whose defaults serialize AgentDoc. Native overrides should
 	 * return their compiled-in documentation directly. */
@@ -588,6 +600,11 @@ public:
 	 */
 	virtual void GetCatalogPins(TArray<FFlowPin>& OutInputPins, TArray<FFlowPin>& OutOutputPins) const {}
 	
+	/** Returns the agent-facing guidance authored on this class or supplied by a native override. */
+	virtual const FFlowAgentDoc& GetAgentDoc() const { return AgentDoc; }
+
+	virtual void GetCatalogPins(TArray<FFlowPin>& OutInputPins, TArray<FFlowPin>& OutOutputPins) const {}
+
 protected:
 	void EnsureNodeDisplayStyle();
 #endif // WITH_EDITOR

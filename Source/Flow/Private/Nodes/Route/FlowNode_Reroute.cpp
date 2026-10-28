@@ -19,33 +19,6 @@ void UFlowNode_Reroute::ExecuteInput(const FName& PinName)
 	TriggerFirstOutput(true);
 }
 
-#if WITH_EDITOR
-void UFlowNode_Reroute::ConfigureInputPin(const UFlowNode& ConnectedNode, const FEdGraphPinType& EdGraphPinType)
-{
-	FFlowPin* InputPin = FindInputPinByName(UFlowNode::DefaultInputPin.PinName);
-	check(InputPin);
-
-	InputPin->ConfigureFromEdGraphPin(EdGraphPinType);
-}
-
-void UFlowNode_Reroute::ConfigureOutputPin(const UFlowNode& ConnectedNode, const FEdGraphPinType& EdGraphPinType)
-{
-	FFlowPin* OutputPin = FindOutputPinByName(UFlowNode::DefaultOutputPin.PinName);
-	check(OutputPin);
-
-	OutputPin->ConfigureFromEdGraphPin(EdGraphPinType);
-}
-
-const FFlowAgentDoc& UFlowNode_Reroute::GetAgentDoc() const
-{
-	static const FFlowAgentDoc Doc = MakeAgentDoc(
-		/*Guidance*/ TEXT("Purely cosmetic - use it to tidy up long or crossing wires in a graph. It adds no logic and does not need pins added or removed by hand; its pin type configures itself from whatever it is connected to."),
-		/*Tags*/     { TEXT("route"), TEXT("reroute"), TEXT("cosmetic") },
-		/*Articles*/ {  });
-	return Doc;
-}
-#endif
-
 FFlowDataPinResult UFlowNode_Reroute::TrySupplyDataPin(const FName PinName) const
 {
 	const FFlowPin* InputPin = FindInputPinByName(UFlowNode::DefaultInputPin.PinName);
@@ -71,3 +44,32 @@ FFlowDataPinResult UFlowNode_Reroute::TrySupplyDataPin(const FName PinName) cons
 	// Hand-off to the connected flow node to supply the value
 	return ConnectedFlowNodeSupplier->TrySupplyDataPin(ConnectedPin.PinName);
 }
+
+#if WITH_EDITOR
+void UFlowNode_Reroute::ConfigureInputPin(const UFlowNode& ConnectedNode, const FEdGraphPinType& EdGraphPinType)
+{
+	FFlowPin* InputPin = FindInputPinByName(UFlowNode::DefaultInputPin.PinName);
+	check(InputPin);
+
+	InputPin->ConfigureFromEdGraphPin(EdGraphPinType);
+}
+
+void UFlowNode_Reroute::ConfigureOutputPin(const UFlowNode& ConnectedNode, const FEdGraphPinType& EdGraphPinType)
+{
+	FFlowPin* OutputPin = FindOutputPinByName(UFlowNode::DefaultOutputPin.PinName);
+	check(OutputPin);
+
+	OutputPin->ConfigureFromEdGraphPin(EdGraphPinType);
+}
+#endif
+
+#if WITH_EDITOR
+const FFlowAgentDoc& UFlowNode_Reroute::GetAgentDoc() const
+{
+	static const FFlowAgentDoc Doc = MakeAgentDoc(
+		/*Guidance*/ TEXT("Purely cosmetic - use it to tidy up long or crossing wires in a graph. It adds no logic and does not need pins added or removed by hand; its pin type configures itself from whatever it is connected to."),
+		/*Tags*/     { TEXT("route"), TEXT("reroute"), TEXT("cosmetic") },
+		/*Articles*/ {  });
+	return Doc;
+}
+#endif

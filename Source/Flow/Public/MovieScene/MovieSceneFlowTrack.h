@@ -20,25 +20,31 @@ public:
 	UMovieSceneFlowTrack()
 		: bFireEventsWhenForwards(true)
 		, bFireEventsWhenBackwards(true)
-		, EventPosition(EFireEventsAtPosition::AfterSpawn)
 	{
 #if WITH_EDITOR
 		TrackTint = FColor(91, 75, 57);
 #endif
 	}
 
+protected:
 	// UMovieSceneTrack interface
 	virtual void AddSection(UMovieSceneSection& Section) override;
+
+public:
 	virtual bool SupportsType(TSubclassOf<UMovieSceneSection> SectionClass) const override;
 	virtual UMovieSceneSection* CreateNewSection() override;
 	virtual const TArray<UMovieSceneSection*>& GetAllSections() const override;
 	virtual bool HasSection(const UMovieSceneSection& Section) const override;
 	virtual bool IsEmpty() const override;
 	virtual void RemoveAllAnimationData() override;
+
+protected:
 	virtual void RemoveSection(UMovieSceneSection& Section) override;
 	virtual void RemoveSectionAt(int32 SectionIndex) override;
 	virtual FMovieSceneEvalTemplatePtr CreateTemplateForSection(const UMovieSceneSection& InSection) const override;
 	virtual void PostCompile(FMovieSceneEvaluationTrack& Track, const FMovieSceneTrackCompilerArgs& Args) const override;
+
+public:
 	virtual bool SupportsMultipleRows() const override { return true; }
 	virtual FMovieSceneTrackSegmentBlenderPtr GetTrackSegmentBlender() const override;
 	// --
@@ -57,7 +63,7 @@ public:
 
 	/* Defines where in the evaluation to trigger events. */
 	UPROPERTY(EditAnywhere, Category=TrackEvent)
-	EFireEventsAtPosition EventPosition;
+	EFireEventsAtPosition EventPosition = EFireEventsAtPosition::AfterSpawn;
 
 private:
 	/* The track's sections. */

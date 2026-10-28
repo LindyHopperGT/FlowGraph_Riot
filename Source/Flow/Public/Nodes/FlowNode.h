@@ -162,6 +162,8 @@ public:
 
 	void RemoveUserInput(const FName& PinName);
 	void RemoveUserOutput(const FName& PinName);
+
+	virtual void GetCatalogPins(TArray<FFlowPin>& OutInputPins, TArray<FFlowPin>& OutOutputPins) const override;
 #endif
 
 protected:
@@ -313,7 +315,7 @@ protected:
 	// --
 
 //////////////////////////////////////////////////////////////////////////
-// Debugger
+// Data validation
 
 protected:
 	static FString MissingIdentityTag;
@@ -322,11 +324,6 @@ protected:
 	static FString NoActorsFound;
 
 #if WITH_EDITOR
-public:
-	// UObject
-	virtual EDataValidationResult IsDataValid(FDataValidationContext& Context) const override;
-	// --
-
 protected:
 	virtual EDataValidationResult ValidateNode() override;
 	void ValidateFlowPinArrayIsUnique(const TArray<FFlowPin>& FlowPins, TSet<FName>& InOutUniquePinNames, EDataValidationResult& InOutResult);
@@ -337,8 +334,8 @@ protected:
 
 protected:
 #if !UE_BUILD_SHIPPING
-	TMap<FName, TArray<FPinRecord>> InputRecords;
-	TMap<FName, TArray<FPinRecord>> OutputRecords;
+	TMap<FName, FPinRecordBuffer> InputRecords;
+	TMap<FName, FPinRecordBuffer> OutputRecords;
 #endif
 	
 	/* True, if this node or any of its AddOns has a custom property marked as UPROPERTY(Replicated). */
@@ -447,7 +444,7 @@ public:
 	UFlowNode* GetInspectedInstance() const;
 
 	TMap<uint8, FPinRecord> GetWireRecords() const;
-	TArray<FPinRecord> GetPinRecords(const FName& PinName, const EEdGraphPinDirection PinDirection) const;
+	TArray<FPinRecord> GetPinRecords(const FName& PinName, const EEdGraphPinDirection PinDirection, int32& OutTotalPinRecords) const;
 #endif
 
 	/* Information displayed while node is working - displayed over node as NodeInfoPopup. */

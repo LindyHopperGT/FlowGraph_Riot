@@ -25,7 +25,6 @@
 class UFlowNode_SubGraph;
 class UFlowNode_CustomOutput;
 class UFlowNode_CustomInput;
-class UFlowNode_SubGraph;
 class UFlowInjectComponentsManager;
 struct FFlowPreloadPolicy;
 struct FFlowPinConnectionPolicy;
@@ -67,7 +66,7 @@ public:
 	/* Set it to False, if this asset is instantiated as Root Flow for owner that doesn't live in the world.
 	 * This allows to SaveGame support works properly, if owner of Root Flow would be Game Instance or its subsystem. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Flow Asset")
-	bool bWorldBound;
+	bool bWorldBound = true;
 
 //////////////////////////////////////////////////////////////////////////
 // Graph (editor-only)
@@ -124,16 +123,21 @@ protected:
 	bool IsFlowNodeClassInDeniedClasses(const UClass& FlowNodeClass) const;
 
 public:
+	/* Allow subclasses to override the project-wide validation on save. */
+	virtual bool ShouldValidateOnSave() const;
+	
 	FFlowGraphValidationEvent OnValidateGraph;
 	virtual EDataValidationResult IsDataValid(FDataValidationContext& Context) const override;
 	virtual EDataValidationResult ValidateAsset(FFlowMessageLog& MessageLog) const;
 
 private:
+	static EDataValidationResult ValidateNode(UFlowNodeBase& FlowNodeBase, FFlowMessageLog& MessageLog);
+
 	/* Validates every direct child attachment on OwnerNode and recursively validates child trees. */
-	void ValidateAddOnChildren(UFlowNodeBase& OwnerNode, FFlowMessageLog& MessageLog) const;
+	EDataValidationResult ValidateAddOnChildren(UFlowNodeBase& OwnerNode, FFlowMessageLog& MessageLog) const;
 
 	/* Recursively validates the given addon and its children. */
-	void ValidateAddOnTree(UFlowNodeAddOn& AddOn, FFlowMessageLog& MessageLog) const;
+	EDataValidationResult ValidateAddOnTree(UFlowNodeAddOn& AddOn, FFlowMessageLog& MessageLog) const;
 #endif
 
 //////////////////////////////////////////////////////////////////////////
@@ -146,7 +150,7 @@ protected:
 	TArray<TSubclassOf<UFlowNodeBase>> AllowedInSubgraphNodeClasses;
 	TArray<TSubclassOf<UFlowNodeBase>> DeniedInSubgraphNodeClasses;
 
-	bool bStartNodePlacedAsGhostNode;
+	bool bStartNodePlacedAsGhostNode = false;
 
 private:
 	UPROPERTY()
@@ -351,7 +355,7 @@ public:
 	const TArray<TWeakObjectPtr<UFlowAsset>>& GetReplicaInstances() const { return ReplicaInstances; }
 
 	void SetInspectedInstance(TWeakObjectPtr<const UFlowAsset> NewInspectedInstance);
-	const UFlowAsset* GetInspectedInstance() const { return InspectedInstance.IsValid() ? InspectedInstance.Get() : nullptr; }
+	const UFlowAsset* GetInspectedInstance() const { return InspectedInstance.Get(); }
 
 	DECLARE_EVENT(UFlowAsset, FRefreshDebuggerEvent);
 
@@ -400,7 +404,7 @@ protected:
 	TArray<TObjectPtr<UFlowNode>> RecordedNodes;
 
 	UPROPERTY(Transient)
-	EFlowFinishPolicy FinishPolicy;
+	EFlowFinishPolicy FinishPolicy = EFlowFinishPolicy::Keep;
 
 	 /* Receiver that will be given a snapshot of OutputDataPinValues when this graph finishes.
 	  * Typically, the SubGraph node that created this instance. */
@@ -411,8 +415,16 @@ protected:
 	 * Initialized from OutputDataPinDeclarations defaults at StartFlow; updated by SetGraphOutput/Finish nodes. */
 	UPROPERTY(Transient)
 	FFlowOutputDataPinValues OutputDataPinValues;
+	
+private:
+	UPROPERTY(Transient)
+	TObjectPtr<UFlowAsset> OwningRootFlowInstance;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UFlowInjectComponentsManager> ComponentInjector;
 
 public:
+	virtual bool CanBeInstanced(const UFlowAsset& InTemplateAsset, const UObject* InOwner) const;
 	virtual void InitializeInstance(const TWeakObjectPtr<UObject> InOwner, UFlowAsset& InTemplateAsset);
 	bool IsInstanceInitialized() const { return IsValid(TemplateAsset.Get()); }
 
@@ -429,7 +441,7 @@ public:
 	template <class T>
 	TWeakObjectPtr<T> GetOwner() const
 	{
-		return Owner.IsValid() ? Cast<T>(Owner) : nullptr;
+		return Cast<T>(Owner.Get());
 	}
 
 	/* Returns the Owner as an Actor, or if Owner is a Component, return its Owner as an Actor. */
@@ -460,6 +472,9 @@ protected:
 	void ResetNodes();
 
 public:
+	UE_DEPRECATED(5.7, "Method replaced with FinishFlowInstance and (if bRemoveInstance == true) separate call to DeinitializeInstance.")
+	void FinishFlow(const EFlowFinishPolicy InFinishPolicy, const bool bRemoveInstance = true);
+
 	virtual void FinishFlowInstance(const EFlowFinishPolicy InFinishPolicy);
 	virtual void DeinitializeInstance();
 
@@ -487,34 +502,13 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Flow")
 	const TArray<UFlowNode*>& GetRecordedNodes() const { return RecordedNodes; }
 
-	/** Returns the root Flow graph instance this instance runs under. A root instance returns itself.
-	 * Returns null before initialization and after deinitialization. */
 	UFUNCTION(BlueprintPure, Category = "Flow|Components")
 	UFlowAsset* GetOwningRootFlowInstance() const;
 
-	/** Returns the injection manager owned by this instance, or null if none was created. Never creates a manager. */
-	UFlowInjectComponentsManager* FindComponentInjectionManager() const;
-
-	/** Returns the injection manager owned by this instance's root, or null if there is no root or no manager.
-	 * Never creates a manager and never asserts; use it in release and teardown paths. */
-	UFlowInjectComponentsManager* FindComponentInjectionManagerInRootFlow() const;
-
-	/** Returns the injection manager owned by this instance, creating and initializing it on first use. */
 	UFlowInjectComponentsManager* GetOrCreateComponentInjectionManager();
-
-	/** Returns the injection manager shared by every instance under this instance's root Flow graph,
-	 * creating it on first use.
-	 * Asserts when called on an instance without a root; only call it while injecting or registering users. */
-	UFlowInjectComponentsManager* GetOrCreateComponentInjectionManagerInRootFlow();
-
-private:
-	/* Root Flow graph instance this instance runs under. Assigned before InitializeInstance, cleared by DeinitializeInstance. */
-	UPROPERTY(Transient)
-	TObjectPtr<UFlowAsset> OwningRootFlowInstance = nullptr;
-
-	/* Injection manager owned by this instance. Created on demand, shut down by DeinitializeInstance. */
-	UPROPERTY(Transient)
-	TObjectPtr<UFlowInjectComponentsManager> ComponentInjector = nullptr;
+	UFlowInjectComponentsManager* GetOrCreateComponentInjectionManagerInRootFlow() const;
+	UFlowInjectComponentsManager* FindComponentInjectionManager() const;
+	UFlowInjectComponentsManager* FindComponentInjectionManagerInRootFlow() const;
 
 //////////////////////////////////////////////////////////////////////////
 // Network replication
@@ -651,10 +645,10 @@ protected:
 	/* Expects to be owned (at runtime) by an object with this class (or one of its subclasses).
 	 * If the class is an AActor, and the Flow Asset is owned by a component, it will consider the component's owner for the AActor. */
 	UPROPERTY(EditAnywhere, Category = "Flow")
-	TSubclassOf<UObject> ExpectedOwnerClass;
+	TSoftClassPtr<UObject> ExpectedOwnerClass;
 
 public:
-	UClass* GetExpectedOwnerClass() const { return ExpectedOwnerClass; }
+	const TSoftClassPtr<UObject>& GetExpectedOwnerClass() const { return ExpectedOwnerClass; }
 
 //////////////////////////////////////////////////////////////////////////
 // SaveGame support

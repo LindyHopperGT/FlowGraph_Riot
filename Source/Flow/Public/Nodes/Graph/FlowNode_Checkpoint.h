@@ -1,4 +1,4 @@
-﻿// Copyright https://github.com/MothCocoon/FlowGraph/graphs/contributors
+// Copyright https://github.com/MothCocoon/FlowGraph/graphs/contributors
 #pragma once
 
 #include "Nodes/FlowNode.h"
@@ -25,6 +25,8 @@ protected:
 
 public:
 	virtual void ExecuteInput(const FName& PinName) override;
+
+protected:
 	virtual void OnLoad_Implementation() override;
 
 #if WITH_EDITOR

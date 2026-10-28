@@ -266,9 +266,12 @@ public:
 	virtual void DestroyNode() override;
 	virtual void NodeConnectionListChanged() override;
 	virtual void FindDiffs(class UEdGraphNode* OtherNode, struct FDiffResults& Results) override;
+
+protected:
 	virtual FString GetPropertyNameAndValueForDiff(const FProperty* Prop, const uint8* PropertyAddr) const override;
 	// --
 
+public:
 	void SetParentNodeForSubNode(UFlowGraphNode* InParentNode);
 	UFlowGraphNode* GetParentNode() const { return ParentNode; }
 
@@ -287,9 +290,7 @@ public:
 	static void DiffSubNodes(const FText& NodeTypeDisplayName, const TArray<UFlowGraphNode*>& LhsSubNodes, const TArray<UFlowGraphNode*>& RhsSubNodes, FDiffResults& Results);
 
 	// UObject
-#if WITH_EDITOR
 	virtual void PostEditUndo() override;
-#endif
 	// --
 
 	virtual UEdGraphPin* GetInputPin(int32 InputIndex = 0) const;
