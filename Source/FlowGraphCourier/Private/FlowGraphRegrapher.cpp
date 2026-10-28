@@ -37,11 +37,13 @@ namespace FlowGraphRegrapherDetail
 
 	void BreakPinLinksWithoutNotification(UEdGraphPin& Pin)
 	{
+		Pin.Modify();
 		const TArray<UEdGraphPin*> LinkedPins = Pin.LinkedTo;
 		for (UEdGraphPin* const LinkedPin : LinkedPins)
 		{
 			if (LinkedPin != nullptr)
 			{
+				LinkedPin->Modify();
 				LinkedPin->LinkedTo.RemoveSingle(&Pin);
 			}
 		}
@@ -61,6 +63,8 @@ namespace FlowGraphRegrapherDetail
 
 	void LinkPinsWithoutNotification(UEdGraphPin& First, UEdGraphPin& Second)
 	{
+		First.Modify();
+		Second.Modify();
 		First.LinkedTo.AddUnique(&Second);
 		Second.LinkedTo.AddUnique(&First);
 	}
