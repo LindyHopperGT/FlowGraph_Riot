@@ -77,8 +77,7 @@ void UFlowGraphExporter::BuildDocumentHeader(const UFlowAsset* FlowAsset, FFlowC
 	OutDocument.AssetClass = FlowAsset->GetClass()->GetPathName();
 	OutDocument.bWorldBound = FlowAsset->bWorldBound;
 
-	const UClass* ExpectedOwnerClass = FlowAsset->GetExpectedOwnerClass();
-	OutDocument.ExpectedOwnerClass = ExpectedOwnerClass ? ExpectedOwnerClass->GetName() : FString();
+	OutDocument.ExpectedOwnerClass = FlowAsset->GetExpectedOwnerClass().ToSoftObjectPath().GetAssetName();
 
 	TArray<FName> AssetPropertyNames;
 	FFlowAssetPropertyPolicy::GetRegisteredObjectReferenceProperties(FlowAsset->GetClass(), AssetPropertyNames);

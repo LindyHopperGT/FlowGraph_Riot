@@ -419,12 +419,6 @@ void UFlowNode::RemoveUserOutput(const FName& PinName)
 	}
 }
 
-void UFlowNode::GetCatalogPins(TArray<FFlowPin>& OutInputPins, TArray<FFlowPin>& OutOutputPins) const
-{
-	OutInputPins = InputPins;
-	OutOutputPins = OutputPins;
-}
-
 void UFlowNode::SetConnections(const TMap<FName, FConnectedPin>& InConnections)
 {
 	const TMap<FName, FConnectedPin> OldConnections = Connections;
@@ -1221,8 +1215,6 @@ void UFlowNode::InitializeInstance()
 	Super::InitializeInstance();
 
 	TryInitializePreloadHelper();
-
-	bHasReplicatedProperties = ShouldReplicateProperties() && FlowNodeReplication::HasReplicatedProperties(*this);
 }
 
 void UFlowNode::DeinitializeInstance()

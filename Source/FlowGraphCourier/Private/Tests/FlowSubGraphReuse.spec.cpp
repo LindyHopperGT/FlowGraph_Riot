@@ -24,7 +24,7 @@
 #include "UObject/UnrealType.h"
 #include "UObject/Package.h"
 
-#include "FlowSubGraphReuseTestTypes.h"
+#include "FlowGraphCourierSubGraphReuseTestTypes.h"
 
 struct FFlowSubGraphReuseGameInstanceAccess : UGameInstance
 {
@@ -35,7 +35,7 @@ struct FFlowSubGraphReuseGameInstanceAccess : UGameInstance
 	}
 };
 
-BEGIN_DEFINE_SPEC(FFlowSubGraphReuseSpec, "FlowGraphCourier.EditorGame.SubGraphReuse",
+BEGIN_DEFINE_SPEC(FFlowGraphCourierSubGraphReuseSpec, "FlowGraphCourier.EditorGame.SubGraphReuse",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 	TStrongObjectPtr<UGameInstance> GameInstance;
 	TStrongObjectPtr<UFlowSubsystem> Subsystem;
@@ -54,8 +54,8 @@ BEGIN_DEFINE_SPEC(FFlowSubGraphReuseSpec, "FlowGraphCourier.EditorGame.SubGraphR
 		UFlowAsset* Template = NewObject<UFlowAsset>(GetTransientPackage(), AssetClass);
 		const FGuid ChildStartGuid = FGuid::NewGuid();
 		const FGuid ChildFinishGuid = FGuid::NewGuid();
-		UFlowSubGraphReuseTestStartNode* ChildStart = NewObject<UFlowSubGraphReuseTestStartNode>(Template);
-		UFlowSubGraphReuseTestFinishNode* ChildFinish = NewObject<UFlowSubGraphReuseTestFinishNode>(Template);
+		UFlowGraphCourierSubGraphReuseTestStartNode* ChildStart = NewObject<UFlowGraphCourierSubGraphReuseTestStartNode>(Template);
+		UFlowGraphCourierSubGraphReuseTestFinishNode* ChildFinish = NewObject<UFlowGraphCourierSubGraphReuseTestFinishNode>(Template);
 		Template->RegisterNode(ChildStartGuid, ChildStart);
 		Template->RegisterNode(ChildFinishGuid, ChildFinish);
 
@@ -84,7 +84,7 @@ BEGIN_DEFINE_SPEC(FFlowSubGraphReuseSpec, "FlowGraphCourier.EditorGame.SubGraphR
 		return nullptr;
 	}
 
-	UFlowSubGraphReuseTestStartNode* FindStartNode(UFlowAsset* FlowAsset) const
+	UFlowGraphCourierSubGraphReuseTestStartNode* FindStartNode(UFlowAsset* FlowAsset) const
 	{
 		if (!IsValid(FlowAsset))
 		{
@@ -93,7 +93,7 @@ BEGIN_DEFINE_SPEC(FFlowSubGraphReuseSpec, "FlowGraphCourier.EditorGame.SubGraphR
 
 		for (const TPair<FGuid, UFlowNode*>& Node : FlowAsset->GetNodes())
 		{
-			if (UFlowSubGraphReuseTestStartNode* StartNode = Cast<UFlowSubGraphReuseTestStartNode>(Node.Value))
+			if (UFlowGraphCourierSubGraphReuseTestStartNode* StartNode = Cast<UFlowGraphCourierSubGraphReuseTestStartNode>(Node.Value))
 			{
 				return StartNode;
 			}
@@ -102,7 +102,7 @@ BEGIN_DEFINE_SPEC(FFlowSubGraphReuseSpec, "FlowGraphCourier.EditorGame.SubGraphR
 		return nullptr;
 	}
 
-	UFlowSubGraphReuseTestFinishNode* FindFinishNode(UFlowAsset* FlowAsset) const
+	UFlowGraphCourierSubGraphReuseTestFinishNode* FindFinishNode(UFlowAsset* FlowAsset) const
 	{
 		if (!IsValid(FlowAsset))
 		{
@@ -111,7 +111,7 @@ BEGIN_DEFINE_SPEC(FFlowSubGraphReuseSpec, "FlowGraphCourier.EditorGame.SubGraphR
 
 		for (const TPair<FGuid, UFlowNode*>& Node : FlowAsset->GetNodes())
 		{
-			if (UFlowSubGraphReuseTestFinishNode* FinishNode = Cast<UFlowSubGraphReuseTestFinishNode>(Node.Value))
+			if (UFlowGraphCourierSubGraphReuseTestFinishNode* FinishNode = Cast<UFlowGraphCourierSubGraphReuseTestFinishNode>(Node.Value))
 			{
 				return FinishNode;
 			}
@@ -146,7 +146,7 @@ BEGIN_DEFINE_SPEC(FFlowSubGraphReuseSpec, "FlowGraphCourier.EditorGame.SubGraphR
 
 	void FinishSubFlow(UFlowAsset* FlowAsset)
 	{
-		if (UFlowSubGraphReuseTestFinishNode* FinishNode = FindFinishNode(FlowAsset))
+		if (UFlowGraphCourierSubGraphReuseTestFinishNode* FinishNode = FindFinishNode(FlowAsset))
 		{
 			FinishNode->FinishGraph();
 		}
@@ -166,9 +166,9 @@ BEGIN_DEFINE_SPEC(FFlowSubGraphReuseSpec, "FlowGraphCourier.EditorGame.SubGraphR
 	{
 		GetMutableDefault<UFlowSettings>()->SubGraphFinishPolicy = Policy;
 	}
-END_DEFINE_SPEC(FFlowSubGraphReuseSpec)
+END_DEFINE_SPEC(FFlowGraphCourierSubGraphReuseSpec)
 
-void FFlowSubGraphReuseSpec::Define()
+void FFlowGraphCourierSubGraphReuseSpec::Define()
 {
 	BeforeEach([this]()
 	{
@@ -259,7 +259,7 @@ void FFlowSubGraphReuseSpec::Define()
 		TestTrue(TEXT("Subgraph instance initialized"), SubFlow->IsInstanceInitialized());
 		TestTrue(TEXT("Finished subgraph remains tracked under Keep"), Subsystem->GetInstancedSubFlows().Contains(FindSubGraphNode()));
 
-		UFlowSubGraphReuseTestFinishNode* FinishNode = FindFinishNode(SubFlow);
+		UFlowGraphCourierSubGraphReuseTestFinishNode* FinishNode = FindFinishNode(SubFlow);
 		TestNotNull(TEXT("Activation-recording node"), FinishNode);
 		if (FinishNode)
 		{
@@ -366,7 +366,7 @@ void FFlowSubGraphReuseSpec::Define()
 			return;
 		}
 
-		UFlowSubGraphReuseTestStartNode* StartNode = FindStartNode(SecondInstance);
+		UFlowGraphCourierSubGraphReuseTestStartNode* StartNode = FindStartNode(SecondInstance);
 		if (!TestNotNull(TEXT("Restarted Start node"), StartNode))
 		{
 			return;
@@ -420,13 +420,13 @@ void FFlowSubGraphReuseSpec::Define()
 		}
 
 		TStrongObjectPtr<UFlowAsset> FirstInstanceKeepAlive(FirstInstance);
-		UFlowSubGraphReuseTestFinishNode* FirstFinishNode = FindFinishNode(FirstInstance);
+		UFlowGraphCourierSubGraphReuseTestFinishNode* FirstFinishNode = FindFinishNode(FirstInstance);
 		if (!TestNotNull(TEXT("First activation node"), FirstFinishNode))
 		{
 			return;
 		}
 
-		UFlowSubGraphReuseTestComponent* FirstComponent = FirstFinishNode->InjectedComponent;
+		UFlowGraphCourierSubGraphReuseTestComponent* FirstComponent = FirstFinishNode->InjectedComponent;
 		if (!TestNotNull(TEXT("Injected component"), FirstComponent))
 		{
 			return;
@@ -440,7 +440,7 @@ void FFlowSubGraphReuseSpec::Define()
 			return;
 		}
 
-		UFlowSubGraphReuseTestFinishNode* SecondFinishNode = FindFinishNode(SecondInstance);
+		UFlowGraphCourierSubGraphReuseTestFinishNode* SecondFinishNode = FindFinishNode(SecondInstance);
 		if (!TestNotNull(TEXT("Restarted activation node"), SecondFinishNode))
 		{
 			return;
@@ -464,7 +464,7 @@ void FFlowSubGraphReuseSpec::Define()
 
 		TStrongObjectPtr<UFlowAsset> FirstInstanceKeepAlive(FirstInstance);
 		UFlowInjectComponentsManager* RootManager = RootInstance->GetOrCreateComponentInjectionManager();
-		UFlowSubGraphReuseTestComponent* Component = NewObject<UFlowSubGraphReuseTestComponent>(OwnerActor);
+		UFlowGraphCourierSubGraphReuseTestComponent* Component = NewObject<UFlowGraphCourierSubGraphReuseTestComponent>(OwnerActor);
 		RootManager->InjectComponentOnActor(*OwnerActor, *Component, FirstInstance);
 		RootManager->RegisterComponentUser(*RootInstance, *Component);
 
@@ -517,7 +517,7 @@ void FFlowSubGraphReuseSpec::Define()
 	{
 		SetFinishPolicy(ESubGraphFinishPolicy::Reuse);
 		TStrongObjectPtr<UFlowAsset> OverrideTemplate(
-			CreateChildTemplate(UFlowSubGraphReusePolicyOverrideAsset::StaticClass()));
+			CreateChildTemplate(UFlowGraphCourierSubGraphReusePolicyOverrideAsset::StaticClass()));
 		SetSubGraphAsset(FindSubGraphNode(), OverrideTemplate.Get());
 
 		UFlowAsset* FirstInstance = StartSubFlow();
@@ -542,10 +542,9 @@ void FFlowSubGraphReuseSpec::Define()
 		TestNotEqual(TEXT("Override policy creates a new instance"), SecondInstance, FirstInstance);
 	});
 
-	It("uses the project default for a child asset without a policy override", [this]()
+	It("uses the configured project default for a child asset without a policy override", [this]()
 	{
-		TestEqual(TEXT("Flow project default is Reuse"),
-			GetDefault<UFlowSettings>()->SubGraphFinishPolicy, ESubGraphFinishPolicy::Reuse);
+		const ESubGraphFinishPolicy ProjectDefault = GetDefault<UFlowSettings>()->SubGraphFinishPolicy;
 
 		UFlowAsset* FirstInstance = StartSubFlow();
 		if (!TestNotNull(TEXT("First child instance"), FirstInstance))
@@ -553,9 +552,14 @@ void FFlowSubGraphReuseSpec::Define()
 			return;
 		}
 
+		TestEqual(TEXT("Child uses the configured project default"),
+			FirstInstance->GetSubGraphFinishPolicy(), ProjectDefault);
+
 		TStrongObjectPtr<UFlowAsset> FirstInstanceKeepAlive(FirstInstance);
 		FinishSubFlow(FirstInstance);
-		TestTrue(TEXT("Default Reuse keeps the first instance initialized"), FirstInstance->IsInstanceInitialized());
+		const bool bShouldRemainInitialized = ProjectDefault != ESubGraphFinishPolicy::Deinitialize;
+		TestEqual(TEXT("Configured policy controls whether the child stays initialized"),
+			FirstInstance->IsInstanceInitialized(), bShouldRemainInitialized);
 
 		UFlowAsset* SecondInstance = StartSubFlow();
 		if (!TestNotNull(TEXT("Second child instance"), SecondInstance))
@@ -563,7 +567,9 @@ void FFlowSubGraphReuseSpec::Define()
 			return;
 		}
 
-		TestEqual(TEXT("Project default reuses the same child instance"), SecondInstance, FirstInstance);
+		const bool bShouldReuseInstance = ProjectDefault == ESubGraphFinishPolicy::Reuse;
+		TestEqual(TEXT("Only the Reuse policy preserves the child instance"),
+			SecondInstance == FirstInstance, bShouldReuseInstance);
 	});
 }
 

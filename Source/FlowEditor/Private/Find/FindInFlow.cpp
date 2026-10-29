@@ -4,6 +4,7 @@
 #include "Asset/FlowAssetEditor.h"
 #include "Find/SFindInFlowFilterPopup.h"
 #include "Graph/FlowGraphUtils.h"
+#include "Graph/FlowGraphEditorSettings.h"
 #include "Graph/Nodes/FlowGraphNode.h"
 #include "FlowAsset.h"
 #include "FlowEditorModule.h"

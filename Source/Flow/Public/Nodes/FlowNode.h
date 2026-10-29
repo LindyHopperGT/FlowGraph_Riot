@@ -163,7 +163,6 @@ public:
 	void RemoveUserInput(const FName& PinName);
 	void RemoveUserOutput(const FName& PinName);
 
-	virtual void GetCatalogPins(TArray<FFlowPin>& OutInputPins, TArray<FFlowPin>& OutOutputPins) const override;
 #endif
 
 protected:

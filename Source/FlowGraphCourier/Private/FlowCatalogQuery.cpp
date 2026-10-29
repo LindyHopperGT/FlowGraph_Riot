@@ -563,9 +563,10 @@ FString UFlowCatalogQuery::GetReplacedByClassName(const UClass* NodeOrAddOnClass
 #if WITH_EDITORONLY_DATA
 	if (const UFlowNodeBase* DefaultNode = NodeOrAddOnClass ? Cast<UFlowNodeBase>(NodeOrAddOnClass->GetDefaultObject()) : nullptr)
 	{
-		if (const UClass* Successor = DefaultNode->GetReplacedByClass())
+		const FSoftObjectPath SuccessorPath = DefaultNode->GetReplacedByClass().ToSoftObjectPath();
+		if (!SuccessorPath.IsNull())
 		{
-			return Successor->GetName();
+			return SuccessorPath.GetAssetName();
 		}
 	}
 #endif

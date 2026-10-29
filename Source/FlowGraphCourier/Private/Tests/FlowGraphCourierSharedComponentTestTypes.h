@@ -6,10 +6,10 @@
 #include "Types/FlowInjectComponentsManager.h"
 #include "UObject/WeakObjectPtrTemplates.h"
 
-#include "FlowSharedComponentTestTypes.generated.h"
+#include "FlowGraphCourierSharedComponentTestTypes.generated.h"
 
 UCLASS()
-class UFlowSharedComponentTestComponent : public UActorComponent
+class UFlowGraphCourierSharedComponentTestComponent : public UActorComponent
 {
 	GENERATED_BODY()
 
@@ -17,12 +17,14 @@ public:
 	int32 RegistrationCount = 0;
 	int32 DestructionCount = 0;
 
+protected:
 	virtual void OnRegister() override
 	{
 		Super::OnRegister();
 		++RegistrationCount;
 	}
 
+public:
 	virtual void OnComponentDestroyed(bool bDestroyingHierarchy) override
 	{
 		++DestructionCount;
@@ -31,7 +33,7 @@ public:
 };
 
 UCLASS()
-class UFlowSharedComponentTestObserver : public UObject
+class UFlowGraphCourierSharedComponentTestObserver : public UObject
 {
 	GENERATED_BODY()
 
@@ -52,7 +54,7 @@ public:
 
 /** Removes another actor's injections from inside the manager's actor-removed notification. */
 UCLASS()
-class UFlowSharedComponentReentrantObserver : public UObject
+class UFlowGraphCourierSharedComponentReentrantObserver : public UObject
 {
 	GENERATED_BODY()
 
@@ -64,16 +66,18 @@ public:
 	UFUNCTION()
 	void OnActorRemoved(AActor* RemovedActor)
 	{
-		if (RemovedActor == TriggerActor.Get() && Manager.IsValid() && OtherActor.IsValid())
+		UFlowInjectComponentsManager* ManagerPtr = Manager.Get();
+		AActor* OtherActorPtr = OtherActor.Get();
+		if (RemovedActor == TriggerActor.Get() && ManagerPtr && OtherActorPtr)
 		{
-			Manager->RemoveAllInjectedComponentsAndStopMonitoringActor(*OtherActor.Get());
+			ManagerPtr->RemoveAllInjectedComponentsAndStopMonitoringActor(*OtherActorPtr);
 		}
 	}
 };
 
 /** Exposes AActor::EndPlay, which RouteEndPlay skips for actors in a world not initialized for play. */
 UCLASS()
-class AFlowSharedComponentTestActor : public AActor
+class AFlowGraphCourierSharedComponentTestActor : public AActor
 {
 	GENERATED_BODY()
 

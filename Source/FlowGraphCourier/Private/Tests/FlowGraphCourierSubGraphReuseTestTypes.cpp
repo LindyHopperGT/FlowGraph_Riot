@@ -1,14 +1,14 @@
 // Copyright https://github.com/MothCocoon/FlowGraph/graphs/contributors
 
-#include "FlowSubGraphReuseTestTypes.h"
+#include "FlowGraphCourierSubGraphReuseTestTypes.h"
 
 #include "FlowAsset.h"
 #include "GameFramework/Actor.h"
 #include "Types/FlowInjectComponentsManager.h"
 
-#include UE_INLINE_GENERATED_CPP_BY_NAME(FlowSubGraphReuseTestTypes)
+#include UE_INLINE_GENERATED_CPP_BY_NAME(FlowGraphCourierSubGraphReuseTestTypes)
 
-void UFlowSubGraphReuseTestStartNode::TriggerFirstOutput(const bool bFinish)
+void UFlowGraphCourierSubGraphReuseTestStartNode::TriggerFirstOutput(const bool bFinish)
 {
 	bAllNodesNeverActivatedBeforeStart = true;
 
@@ -32,7 +32,7 @@ void UFlowSubGraphReuseTestStartNode::TriggerFirstOutput(const bool bFinish)
 	Super::TriggerFirstOutput(bFinish);
 }
 
-void UFlowSubGraphReuseTestFinishNode::ExecuteInput(const FName& /*PinName*/)
+void UFlowGraphCourierSubGraphReuseTestFinishNode::ExecuteInput(const FName& /*PinName*/)
 {
 	++ActivationCount;
 
@@ -40,7 +40,7 @@ void UFlowSubGraphReuseTestFinishNode::ExecuteInput(const FName& /*PinName*/)
 	{
 		if (AActor* ActorOwner = GetFlowAsset()->TryFindActorOwner())
 		{
-			InjectedComponent = NewObject<UFlowSubGraphReuseTestComponent>(ActorOwner);
+			InjectedComponent = NewObject<UFlowGraphCourierSubGraphReuseTestComponent>(ActorOwner);
 			InjectedComponentsManager = NewObject<UFlowInjectComponentsManager>(this);
 			InjectedComponentsManager->InitializeRuntime();
 			InjectedComponentsManager->InjectComponentOnActor(*ActorOwner, *InjectedComponent);
@@ -48,12 +48,12 @@ void UFlowSubGraphReuseTestFinishNode::ExecuteInput(const FName& /*PinName*/)
 	}
 }
 
-void UFlowSubGraphReuseTestFinishNode::FinishGraph()
+void UFlowGraphCourierSubGraphReuseTestFinishNode::FinishGraph()
 {
 	UFlowNode_Finish::ExecuteInput(UFlowNode::DefaultInputPin.PinName);
 }
 
-void UFlowSubGraphReuseTestFinishNode::DeinitializeInstance()
+void UFlowGraphCourierSubGraphReuseTestFinishNode::DeinitializeInstance()
 {
 	if (IsValid(InjectedComponentsManager))
 	{

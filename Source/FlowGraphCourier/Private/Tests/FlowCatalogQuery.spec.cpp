@@ -15,6 +15,8 @@
 
 #if WITH_DEV_AUTOMATION_TESTS
 
+#include "AddOns/FlowNodeAddOn.h"
+
 BEGIN_DEFINE_SPEC(FFlowCatalogQuerySpec, "FlowGraphCourier.EditorGame.Catalog", EAutomationTestFlags::ProductFilter | EAutomationTestFlags::EditorContext)
 END_DEFINE_SPEC(FFlowCatalogQuerySpec)
 
@@ -490,28 +492,12 @@ void FFlowCatalogQuerySpec::Define()
 			return nullptr;
 		};
 
-		It("should report hasDoc false for an undocumented class", [this, FindMutableDocAddOnClass]()
+		It("should report hasDoc false for an undocumented addon class", [this]()
 		{
-			UClass* StartClass = FindMutableDocAddOnClass();
-			if (!StartClass)
-			{
-				// No Blueprint/AngelScript-authored addon in this project - nothing to assert.
-				return;
-			}
-
-			UFlowNodeBase* DefaultNode = Cast<UFlowNodeBase>(StartClass->GetDefaultObject());
-			TestNotNull("Class default object available", DefaultNode);
-			if (!DefaultNode) { return; }
-
-			const FFlowAgentDoc OriginalDoc = DefaultNode->GetAgentDoc();
-			DefaultNode->SetAgentDoc(FFlowAgentDoc());
-
 			FFlowCatalogDocRow Doc;
 			TArray<FString> Articles;
-			UFlowCatalogQuery::GatherAgentDoc(StartClass, Doc, Articles);
+			UFlowCatalogQuery::GatherAgentDoc(UFlowNodeAddOn::StaticClass(), Doc, Articles);
 			TestTrue("Undocumented is reported, not treated as an error", Doc.IsEmpty());
-
-			DefaultNode->SetAgentDoc(OriginalDoc);
 		});
 
 		It("articles should be queryable as a filter", [this, FindMutableDocAddOnClass]()

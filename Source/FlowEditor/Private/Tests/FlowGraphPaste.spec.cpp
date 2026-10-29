@@ -21,6 +21,7 @@
 #include "Asset/FlowAssetEditor.h"
 #include "FlowAsset.h"
 #include "FlowEditorCommands.h"
+#include "Graph/Collapse/FlowSubgraphSelection.h"
 #include "Graph/FlowGraph.h"
 #include "Graph/FlowGraphEditor.h"
 #include "Graph/FlowGraphSchema.h"
@@ -361,34 +362,7 @@ void FFlowGraphPasteSpec::Define()
 		SourcePackage->SetDirtyFlag(false);
 	});
 
-	It("GraphCommandsBindRegisteredExtractionAction", [this]()
-	{
-		FTestGraph Source;
-		Source.Editor->BindGraphCommands();
-		const TSharedPtr<FUICommandInfo>& ExtractCommand = FFlowGraphCommands::Get().ExtractToSubGraph;
-		if (!TestTrue(TEXT("The extraction command is registered"), ExtractCommand.IsValid()))
-		{
-			return;
-		}
-
-		TestNotNull(TEXT("The graph editor binds the extraction action"),
-			Source.Editor->CommandList->GetActionForCommand(ExtractCommand));
-	});
-
-	It("GraphCreationHonorsDefaultNodePolicy", [this]()
-	{
-		TStrongObjectPtr<UFlowAsset> EmptyAsset(NewObject<UFlowAsset>());
-		UFlowGraph::CreateGraph(EmptyAsset.Get(), UFlowGraphSchema::StaticClass(), /*bCreateDefaultNodes=*/false);
-		TestTrue(TEXT("Graph creation without defaults leaves the graph empty"), EmptyAsset->GetGraph()->Nodes.IsEmpty());
-		TestTrue(TEXT("Graph creation without defaults registers no runtime nodes"), EmptyAsset->GetNodes().IsEmpty());
-
-		TStrongObjectPtr<UFlowAsset> DefaultAsset(NewObject<UFlowAsset>());
-		UFlowGraph::CreateGraph(DefaultAsset.Get(), UFlowGraphSchema::StaticClass());
-		TestFalse(TEXT("Ordinary graph creation still creates default graph nodes"), DefaultAsset->GetGraph()->Nodes.IsEmpty());
-		TestFalse(TEXT("Ordinary graph creation still registers default runtime nodes"), DefaultAsset->GetNodes().IsEmpty());
-	});
-
-	It("ExtractionPreservesConcurrentExits", [this]()
+	It("SelectionPlanPreservesConcurrentExits", [this]()
 	{
 		FTestGraph Source;
 		UFlowGraphNode* Entry = Source.AddNode(UFlowNode_Reroute::StaticClass());

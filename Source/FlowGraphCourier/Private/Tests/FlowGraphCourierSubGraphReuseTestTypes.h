@@ -6,18 +6,18 @@
 #include "Nodes/Graph/FlowNode_Finish.h"
 #include "Nodes/Graph/FlowNode_Start.h"
 
-#include "FlowSubGraphReuseTestTypes.generated.h"
+#include "FlowGraphCourierSubGraphReuseTestTypes.generated.h"
 
 class UFlowInjectComponentsManager;
 
 UCLASS(Hidden, NotBlueprintable)
-class UFlowSubGraphReuseTestComponent : public UActorComponent
+class UFlowGraphCourierSubGraphReuseTestComponent : public UActorComponent
 {
 	GENERATED_BODY()
 };
 
 UCLASS(Hidden, NotBlueprintable, meta = (ExcludeFromFlowCatalog))
-class UFlowSubGraphReusePolicyOverrideAsset : public UFlowAsset
+class UFlowGraphCourierSubGraphReusePolicyOverrideAsset : public UFlowAsset
 {
 	GENERATED_BODY()
 
@@ -29,7 +29,7 @@ public:
 };
 
 UCLASS(Hidden, NotBlueprintable, NotPlaceable, meta = (ExcludeFromFlowCatalog))
-class UFlowSubGraphReuseTestStartNode : public UFlowNode_Start
+class UFlowGraphCourierSubGraphReuseTestStartNode : public UFlowNode_Start
 {
 	GENERATED_BODY()
 
@@ -42,7 +42,7 @@ public:
 };
 
 UCLASS(Hidden, NotBlueprintable, NotPlaceable, meta = (ExcludeFromFlowCatalog))
-class UFlowSubGraphReuseTestFinishNode : public UFlowNode_Finish
+class UFlowGraphCourierSubGraphReuseTestFinishNode : public UFlowNode_Finish
 {
 	GENERATED_BODY()
 
@@ -58,7 +58,7 @@ public:
 	bool bInjectComponentOnActivation = false;
 
 	UPROPERTY(Transient)
-	TObjectPtr<UFlowSubGraphReuseTestComponent> InjectedComponent;
+	TObjectPtr<UFlowGraphCourierSubGraphReuseTestComponent> InjectedComponent;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UFlowInjectComponentsManager> InjectedComponentsManager;

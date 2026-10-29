@@ -11,6 +11,7 @@
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "FlowAsset.h"
+#include "FlowSettings.h"
 #include "FlowSubsystem.h"
 #include "Kismet2/KismetEditorUtilities.h"
 #include "Misc/ScopeExit.h"
@@ -31,7 +32,7 @@ struct FFlowInstanceSafetyGameInstanceAccess : UGameInstance
 	}
 };
 
-BEGIN_DEFINE_SPEC(FFlowInstanceSafetySpec, "FlowGraphCourier.EditorGame.InstanceSafety",
+BEGIN_DEFINE_SPEC(FFlowGraphCourierInstanceSafetySpec, "FlowGraphCourier.EditorGame.InstanceSafety",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 	TStrongObjectPtr<UGameInstance> GameInstance;
 	TStrongObjectPtr<UFlowAsset> Asset;
@@ -39,6 +40,7 @@ BEGIN_DEFINE_SPEC(FFlowInstanceSafetySpec, "FlowGraphCourier.EditorGame.Instance
 	FGuid NodeGuid;
 	FNativeFlowAssetEvent PreviousAdded;
 	FNativeFlowAssetEvent PreviousRemoved;
+	bool bPreviousRejectInvalidNodes = false;
 
 	TMap<FGuid, TObjectPtr<UFlowNode>>& MutableNodes()
 	{
@@ -51,9 +53,9 @@ BEGIN_DEFINE_SPEC(FFlowInstanceSafetySpec, "FlowGraphCourier.EditorGame.Instance
 		const FArrayProperty* Property = FindFProperty<FArrayProperty>(UFlowSubsystem::StaticClass(), TEXT("InstancedTemplates"));
 		return Property->ContainerPtrToValuePtr<TArray<TObjectPtr<UFlowAsset>>>(Subsystem.Get())->Contains(Asset.Get());
 	}
-END_DEFINE_SPEC(FFlowInstanceSafetySpec)
+END_DEFINE_SPEC(FFlowGraphCourierInstanceSafetySpec)
 
-void FFlowInstanceSafetySpec::Define()
+void FFlowGraphCourierInstanceSafetySpec::Define()
 {
 	BeforeEach([this]()
 	{
@@ -61,6 +63,8 @@ void FFlowInstanceSafetySpec::Define()
 		PreviousRemoved = UFlowSubsystem::OnInstancedTemplateRemoved;
 		UFlowSubsystem::OnInstancedTemplateAdded.Unbind();
 		UFlowSubsystem::OnInstancedTemplateRemoved.Unbind();
+		bPreviousRejectInvalidNodes = GetDefault<UFlowSettings>()->bRejectFlowInstancesWithInvalidNodes;
+		GetMutableDefault<UFlowSettings>()->bRejectFlowInstancesWithInvalidNodes = true;
 		GameInstance.Reset(NewObject<UGameInstance>(GEngine));
 		UWorld* World = UWorld::CreateWorld(EWorldType::Game, false);
 		World->SetGameInstance(GameInstance.Get());
@@ -80,6 +84,7 @@ void FFlowInstanceSafetySpec::Define()
 		Subsystem->AbortActiveFlows();
 		UFlowSubsystem::OnInstancedTemplateAdded = PreviousAdded;
 		UFlowSubsystem::OnInstancedTemplateRemoved = PreviousRemoved;
+		GetMutableDefault<UFlowSettings>()->bRejectFlowInstancesWithInvalidNodes = bPreviousRejectInvalidNodes;
 		UWorld* World = GameInstance->GetWorld();
 		FFlowInstanceSafetyGameInstanceAccess::SetWorldContext(*GameInstance.Get(), nullptr);
 		GEngine->DestroyWorldContext(World);

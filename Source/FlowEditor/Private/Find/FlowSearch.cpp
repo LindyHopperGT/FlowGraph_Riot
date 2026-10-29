@@ -199,7 +199,6 @@ bool FFlowSearch::ProcessAsset(
 			Item.MatchedPins  = MoveTemp(MatchedPins);
 			Item.bIsSubGraphNode     = bIsSubGraphNode;
 			Item.SubgraphOwnerAssetPath = SubgraphOwnerPath;
-			Item.MatchedSnippet = BuildMatchedSnippet(*CategoryStrings, NodeMatchedFlags, Ctx.Tokens);
 			Item.SubgraphPath = Context.SubgraphPath;
 			Item.MatchedSnippet = BuildMatchedSnippet(*CategoryStrings, NodeMatchedFlags, Context.Tokens);
 

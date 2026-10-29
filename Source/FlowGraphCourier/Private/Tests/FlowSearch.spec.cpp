@@ -21,7 +21,7 @@
 
 // Exercises FFlowSearch without a Slate widget: token AND-matching, per-flag categories,
 // search scope, subgraph recursion and cycle detection, and the maximum depth cutoff.
-BEGIN_DEFINE_SPEC(FFlowSearchSpec, "FlowGraphCourier.EditorGame.Search", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+BEGIN_DEFINE_SPEC(FFlowGraphCourierSearchSpec, "FlowGraphCourier.EditorGame.Search", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 	TArray<UFlowAsset*> TestAssets;
 
 	UFlowAsset* ImportAsset(const FString& PackagePath, const FString& Json)
@@ -56,9 +56,9 @@ BEGIN_DEFINE_SPEC(FFlowSearchSpec, "FlowGraphCourier.EditorGame.Search", EAutoma
 		}
 		return Asset;
 	}
-END_DEFINE_SPEC(FFlowSearchSpec)
+END_DEFINE_SPEC(FFlowGraphCourierSearchSpec)
 
-void FFlowSearchSpec::Define()
+void FFlowGraphCourierSearchSpec::Define()
 {
 	Describe("FlowSearch", [this]()
 	{

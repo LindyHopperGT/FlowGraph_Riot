@@ -738,7 +738,7 @@ void SFlowGraphEditor::PasteNodesHere(const FVector2f& Location)
 {
 	// Start the transaction and protect the graph update lock.
 	FScopedTransaction Transaction(LOCTEXT("PasteNode", "Paste Node"));
-	UFlowAsset* FlowAssetPtr =FlowAsset.Get();
+	UFlowAsset* FlowAssetPtr = FlowAsset.Get();
 	UFlowGraph* FlowGraph = CastChecked<UFlowGraph>(FlowAssetPtr->GetGraph());
 	FlowGraph->Modify();
 	FlowAssetPtr->Modify();

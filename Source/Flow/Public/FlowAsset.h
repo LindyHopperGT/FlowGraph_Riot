@@ -463,10 +463,6 @@ public:
 protected:
 	void InitializeOutputDataReceiverAndValues(IFlowGraphOutputDataReceiverInterface* InOutputDataReceiver);
 
-public:
-	UE_DEPRECATED(5.6, "Method replaced with FinishFlowInstance and (if bRemoveInstance == true) separate call to DeinitializeInstance.")
-	virtual void FinishFlow(const EFlowFinishPolicy InFinishPolicy, const bool bRemoveInstance = true);
-
 protected:
 	virtual void FinishNode(UFlowNode* Node);
 	void ResetNodes();
@@ -514,6 +510,11 @@ public:
 // Network replication
 
 protected:
+	/* Set it to False, if instances of this asset shouldn't replicate to clients.
+	 * Instances of SubGraphs started by this asset don't replicate either. */
+	UPROPERTY(EditAnywhere, Category = "Networking")
+	bool bReplicateInstances = true;
+
 	/* True on the server, if this instance is registered as a replicated subobject of its Owner. */
 	bool bReplicatedToClients = false;
 
@@ -546,7 +547,7 @@ public:
 	// --
 
 	/* Decides if this instance is replicated to clients as a subobject of its Owner. */
-	virtual bool ShouldReplicate() const { return true; }
+	virtual bool ShouldReplicate() const;
 
 protected:
 	/* Registers this instance as a replicated subobject of its Owner.

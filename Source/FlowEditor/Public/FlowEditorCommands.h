@@ -18,6 +18,7 @@ public:
 
 	TSharedPtr<FUICommandInfo> SearchInAsset;
 
+	TSharedPtr<FUICommandInfo> ContinueFlowExecution;
 	TSharedPtr<FUICommandInfo> StopFlowExecution;
 
 	// Public despite protected base, TCommands::Register calls it through the derived type

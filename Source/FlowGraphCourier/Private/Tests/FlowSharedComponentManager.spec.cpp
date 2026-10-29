@@ -9,7 +9,7 @@
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "FlowAsset.h"
-#include "FlowSharedComponentTestTypes.h"
+#include "FlowGraphCourierSharedComponentTestTypes.h"
 #include "FlowSubsystem.h"
 #include "GameFramework/Actor.h"
 #include "Nodes/Graph/FlowNode_Start.h"
@@ -29,7 +29,7 @@ struct FFlowSharedComponentGameInstanceAccess : UGameInstance
 	}
 };
 
-BEGIN_DEFINE_SPEC(FFlowSharedComponentManagerSpec, "FlowGraphCourier.EditorGame.SharedComponents",
+BEGIN_DEFINE_SPEC(FFlowGraphCourierSharedComponentManagerSpec, "FlowGraphCourier.EditorGame.SharedComponents",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 	TStrongObjectPtr<UGameInstance> GameInstance;
 	TStrongObjectPtr<UFlowSubsystem> Subsystem;
@@ -42,12 +42,12 @@ BEGIN_DEFINE_SPEC(FFlowSharedComponentManagerSpec, "FlowGraphCourier.EditorGame.
 	AActor* Actor = nullptr;
 	FNativeFlowAssetEvent PreviousAdded;
 	FNativeFlowAssetEvent PreviousRemoved;
-	UFlowSharedComponentTestComponent* Inject(UObject* User, UFlowAsset* Flow = nullptr);
+	UFlowGraphCourierSharedComponentTestComponent* Inject(UObject* User, UFlowAsset* Flow = nullptr);
 	static bool HasInjectionManagerWithOuter(UObject& Outer);
 	static UFlowInjectComponentsManager* GetAssignedInjectionManager(const UFlowAsset& Flow);
-END_DEFINE_SPEC(FFlowSharedComponentManagerSpec)
+END_DEFINE_SPEC(FFlowGraphCourierSharedComponentManagerSpec)
 
-bool FFlowSharedComponentManagerSpec::HasInjectionManagerWithOuter(UObject& Outer)
+bool FFlowGraphCourierSharedComponentManagerSpec::HasInjectionManagerWithOuter(UObject& Outer)
 {
 	bool bFound = false;
 	ForEachObjectWithOuter(&Outer, [&bFound](UObject* Object)
@@ -57,22 +57,22 @@ bool FFlowSharedComponentManagerSpec::HasInjectionManagerWithOuter(UObject& Oute
 	return bFound;
 }
 
-UFlowInjectComponentsManager* FFlowSharedComponentManagerSpec::GetAssignedInjectionManager(const UFlowAsset& Flow)
+UFlowInjectComponentsManager* FFlowGraphCourierSharedComponentManagerSpec::GetAssignedInjectionManager(const UFlowAsset& Flow)
 {
 	const FObjectProperty* Property = FindFProperty<FObjectProperty>(UFlowAsset::StaticClass(), TEXT("ComponentInjector"));
 	return Cast<UFlowInjectComponentsManager>(Property->GetObjectPropertyValue_InContainer(&Flow));
 }
 
-UFlowSharedComponentTestComponent* FFlowSharedComponentManagerSpec::Inject(UObject* User, UFlowAsset* Flow)
+UFlowGraphCourierSharedComponentTestComponent* FFlowGraphCourierSharedComponentManagerSpec::Inject(UObject* User, UFlowAsset* Flow)
 {
-	UFlowSharedComponentTestComponent* Component = NewObject<UFlowSharedComponentTestComponent>(Actor);
+	UFlowGraphCourierSharedComponentTestComponent* Component = NewObject<UFlowGraphCourierSharedComponentTestComponent>(Actor);
 	Component->ComponentTags.Add(TEXT("PreservedState"));
 	(Flow ? Flow : Root.Get())->GetOrCreateComponentInjectionManagerInRootFlow()->InjectComponentOnActor(*Actor, *Component, User);
 	TestTrue(TEXT("Injection registered"), Component->IsRegistered());
 	return Component;
 }
 
-void FFlowSharedComponentManagerSpec::Define()
+void FFlowGraphCourierSharedComponentManagerSpec::Define()
 {
 	BeforeEach([this]()
 	{
@@ -92,8 +92,8 @@ void FFlowSharedComponentManagerSpec::Define()
 		Template.Reset(NewObject<UFlowAsset>());
 		Root.Reset(Subsystem->CreateFlowInstance(Actor, Template.Get()));
 		Manager.Reset(Root->GetOrCreateComponentInjectionManager());
-		FirstUser.Reset(NewObject<UFlowSharedComponentTestObserver>());
-		SecondUser.Reset(NewObject<UFlowSharedComponentTestObserver>());
+		FirstUser.Reset(NewObject<UFlowGraphCourierSharedComponentTestObserver>());
+		SecondUser.Reset(NewObject<UFlowGraphCourierSharedComponentTestObserver>());
 	});
 
 	AfterEach([this]()
@@ -116,7 +116,7 @@ void FFlowSharedComponentManagerSpec::Define()
 	It("injects on the root actor and keeps the instance until its last user unregisters", [this]()
 	{
 		TestEqual(TEXT("No injection before request"), Manager->GetInjectedComponentCount(), 0);
-		UFlowSharedComponentTestComponent* Component = Inject(FirstUser.Get());
+		UFlowGraphCourierSharedComponentTestComponent* Component = Inject(FirstUser.Get());
 		TestEqual(TEXT("Root actor is the target"), Component->GetOwner(), Actor);
 		TestEqual(TEXT("Injection automatically registers its user"), Manager->GetComponentUserCount(Component), 1);
 		Manager->RegisterComponentUser(*SecondUser.Get(), *Component);
@@ -158,7 +158,7 @@ void FFlowSharedComponentManagerSpec::Define()
 
 	It("uses the manager as the user when omitted or null", [this]()
 	{
-		UFlowSharedComponentTestComponent* Component = NewObject<UFlowSharedComponentTestComponent>(Actor);
+		UFlowGraphCourierSharedComponentTestComponent* Component = NewObject<UFlowGraphCourierSharedComponentTestComponent>(Actor);
 		Manager->InjectComponentOnActor(*Actor, *Component);
 		Manager->InjectComponentOnActor(*Actor, *Component, nullptr);
 		TestEqual(TEXT("Both overloads register the same manager user"), Manager->GetComponentUserCount(Component), 1);
@@ -172,7 +172,7 @@ void FFlowSharedComponentManagerSpec::Define()
 
 	It("adds users through injection without reinjecting the same component", [this]()
 	{
-		UFlowSharedComponentTestComponent* Component = Inject(FirstUser.Get());
+		UFlowGraphCourierSharedComponentTestComponent* Component = Inject(FirstUser.Get());
 		Manager->InjectComponentOnActor(*Actor, *Component, SecondUser.Get());
 		Manager->InjectComponentOnActor(*Actor, *Component, FirstUser.Get());
 		TestEqual(TEXT("Both users registered"), Manager->GetComponentUserCount(Component), 2);
@@ -271,8 +271,8 @@ void FFlowSharedComponentManagerSpec::Define()
 
 	It("keeps monitoring an actor until all independently used components are removed", [this]()
 	{
-		TStrongObjectPtr<UFlowSharedComponentTestObserver> Observer(NewObject<UFlowSharedComponentTestObserver>());
-		Manager->BeforeActorRemovedDelegate.AddDynamic(Observer.Get(), &UFlowSharedComponentTestObserver::OnActorRemoved);
+		TStrongObjectPtr<UFlowGraphCourierSharedComponentTestObserver> Observer(NewObject<UFlowGraphCourierSharedComponentTestObserver>());
+		Manager->BeforeActorRemovedDelegate.AddDynamic(Observer.Get(), &UFlowGraphCourierSharedComponentTestObserver::OnActorRemoved);
 		UActorComponent* First = Inject(FirstUser.Get());
 		UActorComponent* Second = Inject(SecondUser.Get());
 		Manager->UnregisterComponentUser(*FirstUser.Get(), *First);
@@ -290,11 +290,11 @@ void FFlowSharedComponentManagerSpec::Define()
 
 	It("notifies actor removal only after the last component released by its user is destroyed", [this]()
 	{
-		TStrongObjectPtr<UFlowSharedComponentTestObserver> Observer(NewObject<UFlowSharedComponentTestObserver>());
+		TStrongObjectPtr<UFlowGraphCourierSharedComponentTestObserver> Observer(NewObject<UFlowGraphCourierSharedComponentTestObserver>());
 		UActorComponent* First = Inject(FirstUser.Get());
 		UActorComponent* Last = Inject(SecondUser.Get());
 		Observer->WatchedComponent = Last;
-		Manager->BeforeActorRemovedDelegate.AddDynamic(Observer.Get(), &UFlowSharedComponentTestObserver::OnActorRemoved);
+		Manager->BeforeActorRemovedDelegate.AddDynamic(Observer.Get(), &UFlowGraphCourierSharedComponentTestObserver::OnActorRemoved);
 		Manager->UnregisterComponentUser(*FirstUser.Get(), *First);
 		TestEqual(TEXT("No notification while a component remains"), Observer->RemovalCount, 0);
 		Manager->UnregisterComponentUser(*SecondUser.Get(), *Last);
@@ -304,10 +304,10 @@ void FFlowSharedComponentManagerSpec::Define()
 
 	It("notifies actor removal only after all of the actor's components are destroyed in bulk", [this]()
 	{
-		TStrongObjectPtr<UFlowSharedComponentTestObserver> Observer(NewObject<UFlowSharedComponentTestObserver>());
+		TStrongObjectPtr<UFlowGraphCourierSharedComponentTestObserver> Observer(NewObject<UFlowGraphCourierSharedComponentTestObserver>());
 		UActorComponent* First = Inject(FirstUser.Get());
 		UActorComponent* Second = Inject(SecondUser.Get());
-		Manager->BeforeActorRemovedDelegate.AddDynamic(Observer.Get(), &UFlowSharedComponentTestObserver::OnActorRemoved);
+		Manager->BeforeActorRemovedDelegate.AddDynamic(Observer.Get(), &UFlowGraphCourierSharedComponentTestObserver::OnActorRemoved);
 		// Bulk removal walks the records from the end, so First is the last record removed for the actor
 		Observer->WatchedComponent = First;
 		Manager->RemoveAllInjectedComponentsAndStopMonitoringActor(*Actor);
@@ -336,9 +336,9 @@ void FFlowSharedComponentManagerSpec::Define()
 
 	It("removes an actor's injections when it ends play without being destroyed", [this]()
 	{
-		AFlowSharedComponentTestActor* PlayingActor = World->SpawnActor<AFlowSharedComponentTestActor>();
-		TStrongObjectPtr<UFlowSharedComponentTestObserver> Observer(NewObject<UFlowSharedComponentTestObserver>());
-		PlayingActor->OnDestroyed.AddDynamic(Observer.Get(), &UFlowSharedComponentTestObserver::OnActorRemoved);
+		AFlowGraphCourierSharedComponentTestActor* PlayingActor = World->SpawnActor<AFlowGraphCourierSharedComponentTestActor>();
+		TStrongObjectPtr<UFlowGraphCourierSharedComponentTestObserver> Observer(NewObject<UFlowGraphCourierSharedComponentTestObserver>());
+		PlayingActor->OnDestroyed.AddDynamic(Observer.Get(), &UFlowGraphCourierSharedComponentTestObserver::OnActorRemoved);
 		USceneComponent* Component = NewObject<USceneComponent>(PlayingActor);
 		Manager->InjectComponentOnActor(*PlayingActor, *Component, FirstUser.Get());
 		PlayingActor->DispatchBeginPlay();
@@ -410,7 +410,7 @@ void FFlowSharedComponentManagerSpec::Define()
 
 	It("does not count or keep alive a garbage-collected user", [this]()
 	{
-		const TWeakObjectPtr<UFlowSharedComponentTestObserver> CollectedUser(NewObject<UFlowSharedComponentTestObserver>());
+		const TWeakObjectPtr<UFlowGraphCourierSharedComponentTestObserver> CollectedUser(NewObject<UFlowGraphCourierSharedComponentTestObserver>());
 		UActorComponent* Component = Inject(CollectedUser.Get());
 		Manager->RegisterComponentUser(*SecondUser.Get(), *Component);
 		CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
@@ -431,11 +431,11 @@ void FFlowSharedComponentManagerSpec::Define()
 		Manager->InjectComponentOnActor(*OtherActor, *OtherFirst, FirstUser.Get());
 		Manager->InjectComponentOnActor(*OtherActor, *OtherSecond, FirstUser.Get());
 		UActorComponent* Component = Inject(FirstUser.Get());
-		TStrongObjectPtr<UFlowSharedComponentReentrantObserver> Observer(NewObject<UFlowSharedComponentReentrantObserver>());
+		TStrongObjectPtr<UFlowGraphCourierSharedComponentReentrantObserver> Observer(NewObject<UFlowGraphCourierSharedComponentReentrantObserver>());
 		Observer->Manager = Manager.Get();
 		Observer->TriggerActor = Actor;
 		Observer->OtherActor = OtherActor;
-		Manager->BeforeActorRemovedDelegate.AddDynamic(Observer.Get(), &UFlowSharedComponentReentrantObserver::OnActorRemoved);
+		Manager->BeforeActorRemovedDelegate.AddDynamic(Observer.Get(), &UFlowGraphCourierSharedComponentReentrantObserver::OnActorRemoved);
 		Manager->RemoveAllInjectedComponentsAndStopMonitoringActor(*Actor);
 		TestFalse(TEXT("Triggering actor's component removed"), IsValid(Component));
 		TestFalse(TEXT("Other actor's first component removed"), IsValid(OtherFirst));
@@ -449,11 +449,11 @@ void FFlowSharedComponentManagerSpec::Define()
 		USceneComponent* OtherComponent = NewObject<USceneComponent>(OtherActor);
 		Manager->InjectComponentOnActor(*OtherActor, *OtherComponent, SecondUser.Get());
 		UActorComponent* Component = Inject(FirstUser.Get());
-		TStrongObjectPtr<UFlowSharedComponentReentrantObserver> Observer(NewObject<UFlowSharedComponentReentrantObserver>());
+		TStrongObjectPtr<UFlowGraphCourierSharedComponentReentrantObserver> Observer(NewObject<UFlowGraphCourierSharedComponentReentrantObserver>());
 		Observer->Manager = Manager.Get();
 		Observer->TriggerActor = Actor;
 		Observer->OtherActor = OtherActor;
-		Manager->BeforeActorRemovedDelegate.AddDynamic(Observer.Get(), &UFlowSharedComponentReentrantObserver::OnActorRemoved);
+		Manager->BeforeActorRemovedDelegate.AddDynamic(Observer.Get(), &UFlowGraphCourierSharedComponentReentrantObserver::OnActorRemoved);
 		Manager->UnregisterAllComponentUsers(*FirstUser.Get());
 		TestFalse(TEXT("Released component removed"), IsValid(Component));
 		TestFalse(TEXT("Other actor's component removed by the notification"), IsValid(OtherComponent));
@@ -462,7 +462,7 @@ void FFlowSharedComponentManagerSpec::Define()
 
 	It("removes a component whose only user was collected without unregistering on the next full release", [this]()
 	{
-		const TWeakObjectPtr<UFlowSharedComponentTestObserver> CollectedUser(NewObject<UFlowSharedComponentTestObserver>());
+		const TWeakObjectPtr<UFlowGraphCourierSharedComponentTestObserver> CollectedUser(NewObject<UFlowGraphCourierSharedComponentTestObserver>());
 		UActorComponent* Component = Inject(CollectedUser.Get());
 		UActorComponent* OtherComponent = Inject(SecondUser.Get());
 		CollectGarbage(GARBAGE_COLLECTION_KEEPFLAGS);
