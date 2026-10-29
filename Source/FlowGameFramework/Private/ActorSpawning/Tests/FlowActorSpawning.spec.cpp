@@ -12,7 +12,7 @@
 
 #include "ActorSpawning/FlowActorSpawningAssistant.h"
 #include "ActorSpawning/FlowActorSpawningSubsystem.h"
-#include "FlowSettings.h"
+#include "FlowGameFrameworkSettings.h"
 #include "FlowAsset.h"
 #include "UObject/StrongObjectPtr.h"
 
@@ -335,9 +335,9 @@ void FFlowActorSpawningSpec::Define()
 		TestTrue(TEXT("Second succeeds next tick"), Second->IsSpawnSuccessful());
 	});
 
-	It("loads staggered and flush budgets from Flow settings", [this]
+	It("loads staggered and flush budgets from FlowGameFramework settings", [this]
 	{
-		UFlowSettings* Settings = GetMutableDefault<UFlowSettings>();
+		UFlowGameFrameworkSettings* Settings = GetMutableDefault<UFlowGameFrameworkSettings>();
 		TGuardValue<EFlowActorSpawnQueueMode> ModeGuard(
 			Settings->DefaultActorSpawnQueueMode, EFlowActorSpawnQueueMode::Staggered);
 		TGuardValue<int32> SuccessBudget(Settings->MaxActorSpawnSuccessesPerTick, 1);
@@ -369,9 +369,9 @@ void FFlowActorSpawningSpec::Define()
 		TestTrue(TEXT("Staggered record completes next tick"), Second->IsSpawnSuccessful());
 	});
 
-	It("honors the Flow setting when a single record is enqueued", [this]
+	It("honors the FlowGameFramework setting when a single record is enqueued", [this]
 	{
-		UFlowSettings* Settings = GetMutableDefault<UFlowSettings>();
+		UFlowGameFrameworkSettings* Settings = GetMutableDefault<UFlowGameFrameworkSettings>();
 		TGuardValue<EFlowActorSpawnQueueMode> ModeGuard(
 			Settings->DefaultActorSpawnQueueMode, EFlowActorSpawnQueueMode::AttemptOnEnqueue);
 		FFixture Fixture;
@@ -386,9 +386,9 @@ void FFlowActorSpawningSpec::Define()
 		TestTrue(TEXT("Spawn succeeds before enqueue returns"), Record->IsSpawnSuccessful());
 	});
 
-	It("keeps an explicit staggered record deferred when the Flow default is immediate", [this]
+	It("keeps an explicit staggered record deferred when the framework default is immediate", [this]
 	{
-		UFlowSettings* Settings = GetMutableDefault<UFlowSettings>();
+		UFlowGameFrameworkSettings* Settings = GetMutableDefault<UFlowGameFrameworkSettings>();
 		TGuardValue<EFlowActorSpawnQueueMode> ModeGuard(
 			Settings->DefaultActorSpawnQueueMode, EFlowActorSpawnQueueMode::AttemptOnEnqueue);
 		FFixture Fixture;
@@ -474,7 +474,7 @@ void FFlowActorSpawningSpec::Define()
 
 	It("queues a complete immediate pass before callbacks can observe outstanding work", [this]
 	{
-		UFlowSettings* Settings = GetMutableDefault<UFlowSettings>();
+		UFlowGameFrameworkSettings* Settings = GetMutableDefault<UFlowGameFrameworkSettings>();
 		TGuardValue<EFlowActorSpawnQueueMode> ModeGuard(
 			Settings->DefaultActorSpawnQueueMode, EFlowActorSpawnQueueMode::AttemptOnEnqueue);
 		FFixture Fixture;
@@ -795,7 +795,7 @@ void FFlowActorSpawningSpec::Define()
 
 	It("submits a complete standalone Spawn Actors pass before immediate callbacks", [this]
 	{
-		UFlowSettings* Settings = GetMutableDefault<UFlowSettings>();
+		UFlowGameFrameworkSettings* Settings = GetMutableDefault<UFlowGameFrameworkSettings>();
 		TGuardValue<EFlowActorSpawnQueueMode> ModeGuard(
 			Settings->DefaultActorSpawnQueueMode, EFlowActorSpawnQueueMode::AttemptOnEnqueue);
 		FFixture Fixture;
@@ -872,7 +872,7 @@ void FFlowActorSpawningSpec::Define()
 	It("reuses a missing record without reusing live or prepared records", [this]
 	{
 		TGuardValue<EFlowActorSpawnQueueMode> ModeGuard(
-			GetMutableDefault<UFlowSettings>()->DefaultActorSpawnQueueMode, EFlowActorSpawnQueueMode::Staggered);
+			GetMutableDefault<UFlowGameFrameworkSettings>()->DefaultActorSpawnQueueMode, EFlowActorSpawnQueueMode::Staggered);
 		FFixture Fixture;
 		UFlowSpawnActorsTestNode* Node = NewObject<UFlowSpawnActorsTestNode>(Fixture.Owner);
 		Node->SetTestOwner(Fixture.Owner);
@@ -899,7 +899,7 @@ void FFlowActorSpawningSpec::Define()
 	It("reuses missing records in immediate mode without sharing a new record between slots", [this]
 	{
 		TGuardValue<EFlowActorSpawnQueueMode> ModeGuard(
-			GetMutableDefault<UFlowSettings>()->DefaultActorSpawnQueueMode, EFlowActorSpawnQueueMode::AttemptOnEnqueue);
+			GetMutableDefault<UFlowGameFrameworkSettings>()->DefaultActorSpawnQueueMode, EFlowActorSpawnQueueMode::AttemptOnEnqueue);
 		FFixture Fixture;
 		UFlowSpawnActorsTestNode* Node = NewObject<UFlowSpawnActorsTestNode>(Fixture.Owner);
 		Node->SetTestOwner(Fixture.Owner);
@@ -922,7 +922,7 @@ void FFlowActorSpawningSpec::Define()
 
 	It("keeps a standalone Spawn Actors pass staggered when the project default is staggered", [this]
 	{
-		UFlowSettings* Settings = GetMutableDefault<UFlowSettings>();
+		UFlowGameFrameworkSettings* Settings = GetMutableDefault<UFlowGameFrameworkSettings>();
 		TGuardValue<EFlowActorSpawnQueueMode> ModeGuard(
 			Settings->DefaultActorSpawnQueueMode, EFlowActorSpawnQueueMode::Staggered);
 		FFixture Fixture;

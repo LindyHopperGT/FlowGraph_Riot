@@ -12,7 +12,6 @@
 class UFlowComponent;
 class UFlowNode;
 class UFlowNodeBase;
-class UFlowNode;
 
 USTRUCT()
 struct FFlowNodeDisplayStyleConfig
@@ -59,6 +58,7 @@ class FLOWEDITOR_API UFlowGraphSettings : public UDeveloperSettings
 {
 	GENERATED_UCLASS_BODY()
 
+public:
 	virtual void PostInitProperties() override;
 
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;

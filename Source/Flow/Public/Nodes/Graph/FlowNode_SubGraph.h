@@ -105,7 +105,6 @@ public:
 	virtual FText K2_GetNodeTitle_Implementation() const override;
 	virtual FString GetNodeDescription() const override;
 	virtual UObject* GetAssetToEdit() override;
-	virtual const FFlowAgentDoc& GetAgentDoc() const override;
 
 protected:
 	virtual EDataValidationResult ValidateNode() override;
@@ -132,4 +131,9 @@ private:
 #endif
 
 	static const FName AssetParams_MemberName;
+
+#if WITH_EDITOR
+public:
+	virtual const FFlowAgentDoc& GetAgentDoc() const override;
+#endif
 };

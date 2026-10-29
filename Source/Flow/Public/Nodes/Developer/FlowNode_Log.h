@@ -64,10 +64,13 @@ public:
 
 protected:
 	virtual void UpdateNodeConfigText_Implementation() override;
-
-	virtual const FFlowAgentDoc& GetAgentDoc() const override;
 #endif
 
 public:
 	EFlowLogVerbosity GetVerbosity() const { return Verbosity; }
+
+#if WITH_EDITOR
+public:
+	virtual const FFlowAgentDoc& GetAgentDoc() const override;
+#endif
 };

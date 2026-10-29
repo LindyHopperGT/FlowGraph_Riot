@@ -102,13 +102,13 @@ public:
 	// --
 
 #if WITH_SERVER_CODE
-	/** Submit one owner-retained record using FlowSettings::DefaultActorSpawnQueueMode. */
+	/** Submit one owner-retained record using FlowGameFrameworkSettings::DefaultActorSpawnQueueMode. */
 	bool TryEnqueueActorSpawnRecord(UFlowActorSpawnRecord& Record);
 
 	/** Override the FlowSettings mode for this record only; AttemptOnEnqueue may invoke callbacks before returning. */
 	bool TryEnqueueActorSpawnRecord(UFlowActorSpawnRecord& Record, EFlowActorSpawnQueueMode ModeOverride);
 
-	/** Submit a complete owner-retained pass using FlowSettings::DefaultActorSpawnQueueMode; return records accepted. */
+	/** Submit a complete owner-retained pass using FlowGameFrameworkSettings::DefaultActorSpawnQueueMode; return records accepted. */
 	int32 SubmitSpawnPass(const UObject& Owner, TConstArrayView<UFlowActorSpawnRecord*> Records);
 
 	/** Override the FlowSettings mode for this pass only; queue all accepted records before invoking callbacks. */

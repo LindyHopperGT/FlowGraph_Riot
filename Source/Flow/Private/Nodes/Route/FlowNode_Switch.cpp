@@ -78,6 +78,8 @@ void UFlowNode_Switch::ExecuteInput(const FName& PinName)
 	}
 }
 
+#undef LOCTEXT_NAMESPACE
+
 #if WITH_EDITOR
 const FFlowAgentDoc& UFlowNode_Switch::GetAgentDoc() const
 {
@@ -88,5 +90,3 @@ const FFlowAgentDoc& UFlowNode_Switch::GetAgentDoc() const
 	return Doc;
 }
 #endif
-
-#undef LOCTEXT_NAMESPACE

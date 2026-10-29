@@ -96,5 +96,3 @@ const FFlowAgentDoc& UFlowNode_FormatText::GetAgentDoc() const
 	return Doc;
 }
 #endif
-
-#undef LOCTEXT_NAMESPACE

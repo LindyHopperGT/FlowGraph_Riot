@@ -378,7 +378,11 @@ void UFlowNode_SubGraph::SubscribeToAssetChanges()
 		});
 	}
 }
+#endif
 
+#undef LOCTEXT_NAMESPACE
+
+#if WITH_EDITOR
 const FFlowAgentDoc& UFlowNode_SubGraph::GetAgentDoc() const
 {
 	static const FFlowAgentDoc Doc = MakeAgentDoc(
@@ -388,5 +392,3 @@ const FFlowAgentDoc& UFlowNode_SubGraph::GetAgentDoc() const
 	return Doc;
 }
 #endif
-
-#undef LOCTEXT_NAMESPACE

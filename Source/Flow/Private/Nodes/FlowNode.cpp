@@ -23,7 +23,6 @@
 
 #if WITH_EDITOR
 #include "Editor.h"
-#include "Misc/DataValidation.h"
 #endif
 
 FFlowPin UFlowNode::DefaultInputPin(TEXT("In"));
@@ -346,12 +345,6 @@ TArray<FFlowPin> UFlowNode::GetContextOutputs() const
 	return ContextOutputs;
 }
 
-void UFlowNode::GetCatalogPins(TArray<FFlowPin>& OutInputPins, TArray<FFlowPin>& OutOutputPins) const
-{
-	OutInputPins = InputPins;
-	OutOutputPins = OutputPins;
-}
-
 bool UFlowNode::CanUserAddInput() const
 {
 	return K2_CanUserAddInput();
@@ -416,6 +409,12 @@ void UFlowNode::RemoveUserOutput(const FName& PinName)
 			}
 		}
 	}
+}
+
+void UFlowNode::GetCatalogPins(TArray<FFlowPin>& OutInputPins, TArray<FFlowPin>& OutOutputPins) const
+{
+	OutInputPins = InputPins;
+	OutOutputPins = OutputPins;
 }
 
 void UFlowNode::SetConnections(const TMap<FName, FConnectedPin>& InConnections)

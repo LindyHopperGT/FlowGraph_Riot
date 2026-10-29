@@ -963,10 +963,23 @@ FText UFlowNodeBase::GetNodeToolTip() const
 	}
 }
 
+FText UFlowNodeBase::GetGeneratedDisplayName() const
+{
+	static const FName NAME_GeneratedDisplayName(TEXT("GeneratedDisplayName"));
+
+	if (GetClass()->ClassGeneratedBy)
+	{
+		UClass* Class = Cast<UBlueprint>(GetClass()->ClassGeneratedBy)->GeneratedClass;
+		return Class->GetMetaDataText(NAME_GeneratedDisplayName);
+	}
+
+	return GetClass()->GetMetaDataText(NAME_GeneratedDisplayName);
+}
+
 FString UFlowNodeBase::GetInheritedNodeKeywords(const UClass* NodeClass)
 {
 	static const FName NAME_Keywords(TEXT("Keywords"));
-	static const TCHAR* Delimiters[] = { TEXT(" "), TEXT(","), TEXT("\t") };
+	static const TCHAR* Delimiters[] = {TEXT(" "), TEXT(","), TEXT("\t")};
 
 	TArray<FString> Keywords;
 	for (const UClass* Class = NodeClass; Class; Class = Class->GetSuperClass())
@@ -992,19 +1005,6 @@ FString UFlowNodeBase::GetInheritedNodeKeywords(const UClass* NodeClass)
 	}
 
 	return FString::Join(Keywords, TEXT(" "));
-}
-
-FText UFlowNodeBase::GetGeneratedDisplayName() const
-{
-	static const FName NAME_GeneratedDisplayName(TEXT("GeneratedDisplayName"));
-
-	if (GetClass()->ClassGeneratedBy)
-	{
-		UClass* Class = Cast<UBlueprint>(GetClass()->ClassGeneratedBy)->GeneratedClass;
-		return Class->GetMetaDataText(NAME_GeneratedDisplayName);
-	}
-
-	return GetClass()->GetMetaDataText(NAME_GeneratedDisplayName);
 }
 
 void UFlowNodeBase::EnsureNodeDisplayStyle()

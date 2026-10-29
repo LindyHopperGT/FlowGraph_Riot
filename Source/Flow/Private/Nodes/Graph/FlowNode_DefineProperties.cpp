@@ -133,7 +133,9 @@ void UFlowNode_DefineProperties::OnPostEditEnsureAllNamedPropertiesPinDirection(
 		}
 	}
 }
+#endif
 
+#if WITH_EDITOR
 const FFlowAgentDoc& UFlowNode_DefineProperties::GetAgentDoc() const
 {
 	static const FFlowAgentDoc Doc = MakeAgentDoc(

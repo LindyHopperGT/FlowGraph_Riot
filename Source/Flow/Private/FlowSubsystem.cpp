@@ -160,6 +160,7 @@ void UFlowSubsystem::FinishAndDeinitializeInstance(UFlowAsset* InstanceToFinish,
 	if (InstanceToFinish)
 	{
 		RootInstances.Remove(InstanceToFinish);
+
 		InstanceToFinish->FinishFlowInstance(FinishPolicy);
 		InstanceToFinish->DeinitializeInstance();
 	}
@@ -177,8 +178,8 @@ UFlowAsset* UFlowSubsystem::CreateSubFlow(UFlowNode_SubGraph* SubGraphNode, cons
 	UFlowAsset* SubGraphOwner = SubGraphNode->GetFlowAsset();
 	UFlowAsset* AssetInstance = nullptr;
 
-	// A finished instance is replaced on rerun unless its policy is Reuse.
-	// A preloaded instance is kept, as it hasn't started yet.
+	// Instance finished by the previous run of this node is replaced, so every run starts with fresh node instances.
+	// Preloaded instance is kept, as it hasn't started yet.
 	if (const UFlowAsset* PreviousInstance = InstancedSubFlows.FindRef(SubGraphNode))
 	{
 		if (PreviousInstance->HasStartedFlow()

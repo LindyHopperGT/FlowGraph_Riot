@@ -718,6 +718,8 @@ TSubclassOf<AActor> UFlowNode_ExecuteComponent::TryGetExpectedActorOwnerClass() 
 }
 #endif // WITH_EDITOR
 
+#undef LOCTEXT_NAMESPACE
+
 #if WITH_EDITOR
 const FFlowAgentDoc& UFlowNode_ExecuteComponent::GetAgentDoc() const
 {
@@ -728,5 +730,3 @@ const FFlowAgentDoc& UFlowNode_ExecuteComponent::GetAgentDoc() const
 	return Doc;
 }
 #endif
-
-#undef LOCTEXT_NAMESPACE

@@ -8,7 +8,7 @@
 #include "ActorSpawning/FlowActorSpawningSubsystem.h"
 #include "ActorSpawning/FlowDefaultActorSpawnRecord.h"
 #include "Containers/Set.h"
-#include "FlowSettings.h"
+#include "FlowGameFrameworkSettings.h"
 #include "Engine/World.h"
 #include "GameFramework/Actor.h"
 
@@ -78,7 +78,7 @@ void UFlowNode_SpawnActors::StartSpawningPass()
 			ActorSpawnSelector,
 			*SpawnRecordTemplate,
 			ActorRecords,
-			GetDefault<UFlowSettings>()->DefaultActorSpawnQueueMode,
+			GetDefault<UFlowGameFrameworkSettings>()->DefaultActorSpawnQueueMode,
 			EFlowActorSpawningMethod::FullSpawn
 		};
 

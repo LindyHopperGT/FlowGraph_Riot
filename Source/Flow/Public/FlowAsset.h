@@ -228,7 +228,7 @@ protected:
 public:
 	UFUNCTION(BlueprintPure, Category = "FlowAsset")
 	virtual UFlowNode* GetDefaultEntryNode() const;
-
+	
 	/* Re-mints the NodeGuid of any UFlowNodeAddOn (at any nesting depth) whose Guid collides with
 	 * one already seen earlier in the walk, keeping the first occurrence of each Guid unchanged.
 	 * Called from PreSaveRoot so every explicit save self-heals, and can be called directly.
@@ -451,18 +451,19 @@ public:
 	virtual void PreStartFlow();
 	virtual void StartFlow(IFlowDataPinValueSupplierInterface* DataPinValueSupplier = nullptr, IFlowGraphOutputDataReceiverInterface* InOutputDataReceiver = nullptr);
 
+	bool HasStartedFlow() const;
+
+protected:
+	void InitializeOutputDataReceiverAndValues(IFlowGraphOutputDataReceiverInterface* InOutputDataReceiver);
+	
+public:	
 	/* Write a single output data pin value into the live store for this running instance.
 	 * Called by SetGraphOutput and Finish nodes for each connected output pin. */
 	void WriteOutputDataPinValue(const FName& PinName, const TInstancedStruct<FFlowDataPinValue>& Value);
 
 	/* Flush all of the OutputDataPinValues to the receiver (if set) */
 	void FlushOutputDataPinValuesToReceiver() const;
-
-	bool HasStartedFlow() const;
-
-protected:
-	void InitializeOutputDataReceiverAndValues(IFlowGraphOutputDataReceiverInterface* InOutputDataReceiver);
-
+	
 protected:
 	virtual void FinishNode(UFlowNode* Node);
 	void ResetNodes();

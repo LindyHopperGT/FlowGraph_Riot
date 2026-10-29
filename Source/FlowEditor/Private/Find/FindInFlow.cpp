@@ -3,8 +3,8 @@
 
 #include "Asset/FlowAssetEditor.h"
 #include "Find/SFindInFlowFilterPopup.h"
-#include "Graph/FlowGraphUtils.h"
 #include "Graph/FlowGraphEditorSettings.h"
+#include "Graph/FlowGraphUtils.h"
 #include "Graph/Nodes/FlowGraphNode.h"
 #include "FlowAsset.h"
 #include "FlowEditorModule.h"
@@ -305,7 +305,7 @@ void SFindInFlow::Construct(const FArguments& InArgs, const TSharedPtr<class FFl
 								.OnClicked_Lambda([this]()
 									{
 										const TSharedRef<SFindInFlowFilterPopup> FilterPopup = SNew(SFindInFlowFilterPopup)
-											.OnApply(FFindInFlowApplyDelegate::CreateLambda([this](EFlowSearchFlags NewSearchFlags)
+											.OnApply(FFindInFlowApplyDelegate::CreateLambda([this](const EFlowSearchFlags NewSearchFlags)
 												{
 													SearchFlags = NewSearchFlags;
 													if (UFlowGraphEditorSettings* GraphEditorSettings = GetMutableDefault<UFlowGraphEditorSettings>())

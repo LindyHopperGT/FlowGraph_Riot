@@ -105,6 +105,11 @@ void UFlowNode_Log::UpdateNodeConfigText_Implementation()
 	}
 }
 
+#endif
+
+#undef LOCTEXT_NAMESPACE
+
+#if WITH_EDITOR
 const FFlowAgentDoc& UFlowNode_Log::GetAgentDoc() const
 {
 	static const FFlowAgentDoc Doc = MakeAgentDoc(
@@ -114,5 +119,3 @@ const FFlowAgentDoc& UFlowNode_Log::GetAgentDoc() const
 	return Doc;
 }
 #endif
-
-#undef LOCTEXT_NAMESPACE

@@ -386,15 +386,6 @@ EDataValidationResult UFlowNode_PlayLevelSequence::ValidateNode()
 
 	return EDataValidationResult::Valid;
 }
-
-const FFlowAgentDoc& UFlowNode_PlayLevelSequence::GetAgentDoc() const
-{
-	static const FFlowAgentDoc Doc = MakeAgentDoc(
-		/*Guidance*/ TEXT("Attach AddOns implementing IFlowPlayLevelSequenceAddOnInterface to apply setup, such as actor binding overrides, after the sequence player is created and before playback begins. The plugin ships no such AddOn, projects provide their own. Enable bUseGraphOwnerAsTransformOrigin to play the sequence relative to the actor that created the root flow instance rather than world origin."),
-		/*Tags*/     { TEXT("actor"), TEXT("sequence"), TEXT("cutscene") },
-		/*Articles*/ {  });
-	return Doc;
-}
 #endif
 
 #if ENABLE_VISUAL_LOG
@@ -403,5 +394,16 @@ void UFlowNode_PlayLevelSequence::GrabDebugSnapshot(struct FVisualLogEntry* Snap
 	FVisualLogStatusCategory NewCategory = FVisualLogStatusCategory(TEXT("Sequence"));
 	NewCategory.Add(*Sequence.ToString(), FString());
 	Snapshot->Status.Add(NewCategory);
+}
+#endif
+
+#if WITH_EDITOR
+const FFlowAgentDoc& UFlowNode_PlayLevelSequence::GetAgentDoc() const
+{
+	static const FFlowAgentDoc Doc = MakeAgentDoc(
+		/*Guidance*/ TEXT("Attach AddOns implementing IFlowPlayLevelSequenceAddOnInterface to apply setup, such as actor binding overrides, after the sequence player is created and before playback begins. The plugin ships no such AddOn, projects provide their own. Enable bUseGraphOwnerAsTransformOrigin to play the sequence relative to the actor that created the root flow instance rather than world origin."),
+		/*Tags*/     { TEXT("actor"), TEXT("sequence"), TEXT("cutscene") },
+		/*Articles*/ {  });
+	return Doc;
 }
 #endif

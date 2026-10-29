@@ -61,7 +61,11 @@ FText UFlowNode_CustomOutput::K2_GetNodeTitle_Implementation() const
 
 	return Super::K2_GetNodeTitle_Implementation();
 }
+#endif
 
+#undef LOCTEXT_NAMESPACE
+
+#if WITH_EDITOR
 const FFlowAgentDoc& UFlowNode_CustomOutput::GetAgentDoc() const
 {
 	static const FFlowAgentDoc Doc = MakeAgentDoc(
@@ -71,5 +75,3 @@ const FFlowAgentDoc& UFlowNode_CustomOutput::GetAgentDoc() const
 	return Doc;
 }
 #endif
-
-#undef LOCTEXT_NAMESPACE

@@ -235,7 +235,11 @@ void UFlowNode_Timer::UpdateNodeConfigText_Implementation()
 		SetNodeConfigText(FText(LOCTEXT("CompletesNextTick", "Completes in next tick")));
 	}
 }
+#endif
 
+#undef LOCTEXT_NAMESPACE
+
+#if WITH_EDITOR
 const FFlowAgentDoc& UFlowNode_Timer::GetAgentDoc() const
 {
 	static const FFlowAgentDoc Doc = MakeAgentDoc(
@@ -245,5 +249,3 @@ const FFlowAgentDoc& UFlowNode_Timer::GetAgentDoc() const
 	return Doc;
 }
 #endif
-
-#undef LOCTEXT_NAMESPACE

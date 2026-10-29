@@ -37,8 +37,6 @@ public:
 	// UObject
 	virtual void PostEditChangeChainProperty(FPropertyChangedChainEvent& PropertyChangedEvent) override;
 	// --
-
-	virtual const FFlowAgentDoc& GetAgentDoc() const override;
 #endif
 
 	// IFlowNamedPropertiesSupplierInterface
@@ -52,5 +50,10 @@ protected:
 	/* Utility function for subclasses, if they want to force a named property to be Input or Output.
 	 * Unused in this class. */
 	void OnPostEditEnsureAllNamedPropertiesPinDirection(const FProperty& Property, bool bIsInput);
+#endif
+
+#if WITH_EDITOR
+public:
+	virtual const FFlowAgentDoc& GetAgentDoc() const override;
 #endif
 };

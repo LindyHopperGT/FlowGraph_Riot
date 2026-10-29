@@ -147,7 +147,6 @@ public:
 	virtual FString GetNodeDescription() const override;
 	virtual FString GetStatusString() const override;
 	virtual UObject* GetAssetToEdit() override;
-	virtual const FFlowAgentDoc& GetAgentDoc() const override;
 	
 protected:	
 	virtual EDataValidationResult ValidateNode() override;
@@ -156,5 +155,10 @@ protected:
 #if ENABLE_VISUAL_LOG
 public:	
 	virtual void GrabDebugSnapshot(struct FVisualLogEntry* Snapshot) const override;
+#endif
+
+#if WITH_EDITOR
+public:
+	virtual const FFlowAgentDoc& GetAgentDoc() const override;
 #endif
 };

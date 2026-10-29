@@ -97,6 +97,29 @@ public:
 // Node
 
 public:
+	/* Stable identity persisted across saves. For UFlowNode, inherits from graph node; for
+	 * UFlowNodeAddOn, auto-minted in constructor. Used by Flow Courier to upsert/delete individual
+	 * addons. Name-keyed serialization means no CoreRedirect needed. */
+	UPROPERTY()
+	FGuid NodeGuid;
+
+	UFUNCTION(BlueprintCallable, Category = "FlowNode")
+	void SetGuid(const FGuid& NewGuid);
+
+	UFUNCTION(BlueprintPure, Category = "FlowNode")
+	const FGuid& GetGuid() const { return NodeGuid; }
+
+#if WITH_EDITOR
+private:
+	// Deliberately not serialized or copied: each duplication records its own source identity in SetGuid.
+	FGuid PreviousGuidForPinRemapping;
+	/** Original provider identity before editor duplication/import changed it, until pins are rebuilt. */
+public:
+	const FGuid& GetPreviousGuidForPinRemapping() const { return PreviousGuidForPinRemapping; }
+	void ClearPreviousGuidForPinRemapping() { PreviousGuidForPinRemapping.Invalidate(); }
+#endif
+
+public:
 	// UObject
 	virtual UWorld* GetWorld() const override;
 	// --
@@ -139,29 +162,6 @@ public:
 	/* Returns a random seed suitable for this flow node base. */
 	UFUNCTION(BlueprintPure, Category = "FlowNode")
 	virtual int32 GetRandomSeed() const PURE_VIRTUAL(GetRandomSeed, return 0;);
-
-	/* Stable identity persisted across saves. For UFlowNode, inherits from graph node; for
-	 * UFlowNodeAddOn, auto-minted in constructor. Used by Flow Courier to upsert/delete individual
-	 * addons. Name-keyed serialization means no CoreRedirect needed. */
-	UPROPERTY()
-	FGuid NodeGuid;
-
-public:
-	UFUNCTION(BlueprintCallable, Category = "FlowNode")
-	void SetGuid(const FGuid& NewGuid);
-
-	UFUNCTION(BlueprintPure, Category = "FlowNode")
-	const FGuid& GetGuid() const { return NodeGuid; }
-
-#if WITH_EDITOR
-	/** Original provider identity before editor duplication/import changed it, until pins are rebuilt. */
-	const FGuid& GetPreviousGuidForPinRemapping() const { return PreviousGuidForPinRemapping; }
-	void ClearPreviousGuidForPinRemapping() { PreviousGuidForPinRemapping.Invalidate(); }
-
-private:
-	// Deliberately not serialized or copied: each duplication records its own source identity in SetGuid.
-	FGuid PreviousGuidForPinRemapping;
-#endif
 
 private:
 	/* Releases this node's users on its Flow instance's local and root injection managers, if those exist. */

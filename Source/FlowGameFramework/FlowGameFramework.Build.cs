@@ -11,11 +11,11 @@ public class FlowGameFramework : ModuleRules
 		[
 			"Core",
 			"CoreUObject",
+			"DeveloperSettings",
 			"Engine",
 			"Flow",
 			"NavigationSystem",
 		]);
 
-		PrivateDependencyModuleNames.Add("DeveloperSettings");
 	}
 }

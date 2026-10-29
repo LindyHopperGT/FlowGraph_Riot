@@ -72,9 +72,8 @@ public:
 	virtual bool IsTitleBarPin(const UEdGraphPin& Pin) const override;
 	virtual bool CanShowDataTooltipForPin(const UEdGraphPin& Pin) const override;
 	// --
-	
-	// Lets a schema substitute its own widget for a pin, checked by FFlowGraphPinFactory before it falls back to
-	// the default Flow pin widgets (e.g. SFlowGraphPinExec). Returns null by default, meaning no substitution.
+
+	// Lets a schema substitute its own widget for a pin before Flow falls back to its default pin widgets.
 	virtual TSharedPtr<SGraphPin> CreatePinWidget(UEdGraphPin* InPin) const { return nullptr; }
 
 	static const FFlowPinType* LookupDataPinTypeForPinCategory(const FName& PinCategory);

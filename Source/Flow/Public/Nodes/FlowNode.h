@@ -153,16 +153,13 @@ public:
 	virtual TArray<FFlowPin> GetContextOutputs() const override;
 	// --
 
-	//~Begin UFlowNodeBase Interface
-	virtual void GetCatalogPins(TArray<FFlowPin>& OutInputPins, TArray<FFlowPin>& OutOutputPins) const override;
-	//~End UFlowNodeBase Interface
-
 	virtual bool CanUserAddInput() const;
 	virtual bool CanUserAddOutput() const;
 
 	void RemoveUserInput(const FName& PinName);
 	void RemoveUserOutput(const FName& PinName);
 
+	virtual void GetCatalogPins(TArray<FFlowPin>& OutInputPins, TArray<FFlowPin>& OutOutputPins) const override;
 #endif
 
 protected:

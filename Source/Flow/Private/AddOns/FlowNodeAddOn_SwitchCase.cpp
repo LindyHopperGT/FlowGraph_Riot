@@ -150,6 +150,8 @@ bool UFlowNodeAddOn_SwitchCase::TryTriggerForCase_Implementation() const
 	return bResult;
 }
 
+#undef LOCTEXT_NAMESPACE
+
 #if WITH_EDITOR
 const FFlowAgentDoc& UFlowNodeAddOn_SwitchCase::GetAgentDoc() const
 {
@@ -160,5 +162,3 @@ const FFlowAgentDoc& UFlowNodeAddOn_SwitchCase::GetAgentDoc() const
 	return AgentDoc.HasDoc() ? AgentDoc : Doc;
 }
 #endif
-
-#undef LOCTEXT_NAMESPACE
