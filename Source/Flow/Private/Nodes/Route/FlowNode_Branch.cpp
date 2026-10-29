@@ -39,6 +39,18 @@ EFlowAddOnAcceptResult UFlowNode_Branch::AcceptFlowNodeAddOnChild_Implementation
 	return Super::AcceptFlowNodeAddOnChild_Implementation(AddOnTemplate, AdditionalAddOnsToAssumeAreChildren);
 }
 
+FText UFlowNode_Branch::K2_GetNodeTitle_Implementation() const
+{
+	FLOW_ASSERT_ENUM_MAX(EFlowPredicateCombinationRule, 2);
+	if (BranchCombinationRule != EFlowPredicateCombinationRule::AND &&
+		GetDefault<UFlowSettings>()->bUseAdaptiveNodeTitles)
+	{
+		return FText::Format(LOCTEXT("BranchTitle", "{0} ({1})"), {Super::K2_GetNodeTitle_Implementation(), UEnum::GetDisplayValueAsText(BranchCombinationRule)});
+	}
+
+	return Super::K2_GetNodeTitle_Implementation();
+}
+
 void UFlowNode_Branch::ExecuteInput(const FName& PinName)
 {
 	bool bPassedRootPredicates;
@@ -66,16 +78,15 @@ void UFlowNode_Branch::ExecuteInput(const FName& PinName)
 	}
 }
 
-FText UFlowNode_Branch::K2_GetNodeTitle_Implementation() const
-{
-	FLOW_ASSERT_ENUM_MAX(EFlowPredicateCombinationRule, 2);
-	if (BranchCombinationRule != EFlowPredicateCombinationRule::AND &&
-		GetDefault<UFlowSettings>()->bUseAdaptiveNodeTitles)
-	{
-		return FText::Format(LOCTEXT("BranchTitle", "{0} ({1})"), {Super::K2_GetNodeTitle_Implementation(), UEnum::GetDisplayValueAsText(BranchCombinationRule)});
-	}
-
-	return Super::K2_GetNodeTitle_Implementation();
-}
-
 #undef LOCTEXT_NAMESPACE
+
+#if WITH_EDITOR
+const FFlowAgentDoc& UFlowNode_Branch::GetAgentDoc() const
+{
+	static const FFlowAgentDoc Doc = MakeAgentDoc(
+		/*Guidance*/ TEXT("Attach one or more predicate AddOns (implementing IFlowPredicateInterface) as children to define what is being tested - with zero attached predicates the combination is vacuously true for both AND and OR."),
+		/*Tags*/     { TEXT("route"), TEXT("branch"), TEXT("predicate") },
+		/*Articles*/ {  });
+	return Doc;
+}
+#endif

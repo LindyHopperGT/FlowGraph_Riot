@@ -7,6 +7,10 @@
 
 #include "FlowNodeAddOn_PredicateRequireGameplayTags.generated.h"
 
+/**
+ * Checks a GameplayTag or GameplayTagContainer supplied on its data pin against a configured set of tag requirements,
+ * evaluating true only if the requirements are satisfied.
+ */
 UCLASS(MinimalApi, NotBlueprintable, meta = (DisplayName = "Require Gameplay Tags"))
 class UFlowNodeAddOn_PredicateRequireGameplayTags
 	: public UFlowNodeAddOn
@@ -22,17 +26,19 @@ public:
 	virtual bool EvaluatePredicate_Implementation() const override;
 	// --
 
+protected:
 	// UFlowNodeBase
 	virtual void UpdateNodeConfigText_Implementation() override;
 	// --
 
+public:
 #if WITH_EDITOR
 	// UObject Interface
 	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
 	// --
 
 	// UFlowNodeBase
-	void OnEditorPinConnectionsChanged(const TArray<FFlowPinConnectionChange>& Changes) override;
+	virtual void OnEditorPinConnectionsChanged(const TArray<FFlowPinConnectionChange>& Changes) override;
 	// --
 #endif
 
@@ -47,4 +53,9 @@ public:
 	/* Requirements to evaluate the Test Tags with. */
 	UPROPERTY(EditAnywhere, Category = Configuration)
 	FFlowGameplayTagRequirements Requirements;
+
+#if WITH_EDITOR
+public:
+	virtual const FFlowAgentDoc& GetAgentDoc() const override;
+#endif
 };

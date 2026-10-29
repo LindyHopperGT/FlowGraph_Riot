@@ -1,25 +1,12 @@
 // Copyright https://github.com/MothCocoon/FlowGraph/graphs/contributors
-
 #include "Graph/FlowGraphEditorSettings.h"
+
 #include "Graph/FlowGraphSchema.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(FlowGraphEditorSettings)
 
-UFlowGraphEditorSettings::UFlowGraphEditorSettings()
-	: NodeDoubleClickTarget(EFlowNodeDoubleClickTarget::PrimaryAssetOrNodeDefinition)
-	, bShowNodeClass(false)
-	, bShowNodeDescriptionWhilePlaying(true)
-	, bShowAddonDescriptions(true)
-	, bEnforceFriendlyPinNames(false)
-	, bShowSubGraphPreview(true)
-	, bShowSubGraphPath(true)
-	, SubGraphPreviewSize(FVector2D(640.f, 360.f))
-	, bHighlightInputWiresOfSelectedNodes(false)
-	, bHighlightOutputWiresOfSelectedNodes(false)
-{
-}
+UFlowGraphEditorSettings::FOnSettingsChanged UFlowGraphEditorSettings::SettingsChanged;
 
-#if WITH_EDITOR
 void UFlowGraphEditorSettings::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 {
 	Super::PostEditChangeProperty(PropertyChangedEvent);
@@ -28,5 +15,14 @@ void UFlowGraphEditorSettings::PostEditChangeProperty(FPropertyChangedEvent& Pro
 	{
 		GetDefault<UFlowGraphSchema>()->ForceVisualizationCacheClear();
 	}
+
+	if (PropertyChangedEvent.GetMemberPropertyName() == GET_MEMBER_NAME_CHECKED(UFlowGraphEditorSettings, bShowAddOnsInNodeDetails))
+	{
+		SettingsChanged.Broadcast();
+	}
 }
-#endif
+
+UFlowGraphEditorSettings::FOnSettingsChanged& UFlowGraphEditorSettings::OnSettingsChanged()
+{
+	return SettingsChanged;
+}

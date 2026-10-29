@@ -1,5 +1,4 @@
 // Copyright https://github.com/MothCocoon/FlowGraph/graphs/contributors
-
 #include "AddOns/FlowNodeAddOn_PredicateNOT.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(FlowNodeAddOn_PredicateNOT)
@@ -17,7 +16,10 @@ EFlowAddOnAcceptResult UFlowNodeAddOn_PredicateNOT::AcceptFlowNodeAddOnChild_Imp
 	const UFlowNodeAddOn* AddOnTemplate,
 	const TArray<UFlowNodeAddOn*>& AdditionalAddOnsToAssumeAreChildren) const
 {
-	if (AddOns.Num() >= 1 || !AdditionalAddOnsToAssumeAreChildren.IsEmpty())
+	if (HasOtherDirectAddOnChildMatching(
+		*UFlowNodeAddOn::StaticClass(),
+		AddOnTemplate,
+		AdditionalAddOnsToAssumeAreChildren))
 	{
 		// Must not have more than one child Add-On under any circumstances
 		return EFlowAddOnAcceptResult::Reject;
@@ -63,3 +65,14 @@ bool UFlowNodeAddOn_PredicateNOT::EvaluatePredicate_Implementation() const
 
 	return bResult;
 }
+
+#if WITH_EDITOR
+const FFlowAgentDoc& UFlowNodeAddOn_PredicateNOT::GetAgentDoc() const
+{
+	static const FFlowAgentDoc Doc = MakeAgentDoc(
+		/*Guidance*/ TEXT("Accepts a single predicate child and inverts its result. With zero attached children NOT evaluates true, for parity with an empty AND, so an empty NOT block does not block anything."),
+		/*Tags*/     { TEXT("predicate"), TEXT("not"), TEXT("logic") },
+		/*Articles*/ {  });
+	return Doc;
+}
+#endif

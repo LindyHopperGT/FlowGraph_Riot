@@ -1,14 +1,13 @@
 // Copyright https://github.com/MothCocoon/FlowGraph/graphs/contributors
-
 #include "FlowAsset.h"
 
 #include "FlowLogChannels.h"
 #include "FlowSettings.h"
 #include "FlowSubsystem.h"
+#include "Types/FlowInjectComponentsManager.h"
 #include "AddOns/FlowNodeAddOn.h"
 #include "Asset/FlowAssetParams.h"
 #include "Asset/FlowAssetParamsUtils.h"
-#include "Interfaces/FlowExecutionGate.h"
 #include "Interfaces/FlowGraphOutputDataReceiverInterface.h"
 #include "Types/FlowNamedDataPinProperty.h"
 #include "Nodes/FlowNodeBase.h"
@@ -21,16 +20,22 @@
 #include "Types/FlowDataPinValue.h"
 #include "Types/FlowStructUtils.h"
 
+#include "Components/ActorComponent.h"
 #include "Engine/World.h"
+#include "GameFramework/Actor.h"
+#include "Net/UnrealNetwork.h"
+#include "Net/Core/PushModel/PushModel.h"
 #include "Serialization/MemoryReader.h"
 #include "Serialization/MemoryWriter.h"
 #include "Algo/AnyOf.h"
 
 #if WITH_EDITOR
 #include "Nodes/Graph/FlowNode_SetGraphOutput.h"
+
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "AssetToolsModule.h"
 #include "ContentBrowserModule.h"
+#include "Misc/DataValidation.h"
 #include "IContentBrowserSingleton.h"
 #include "Editor.h"
 #include "Editor/EditorEngine.h"
@@ -43,21 +48,16 @@ FString UFlowAsset::ValidationError_NodeClassNotAllowed = TEXT("Node class {0} i
 FString UFlowAsset::ValidationError_AddOnNodeClassNotAllowed = TEXT("AddOn Node class {0} is not allowed in this asset.");
 FString UFlowAsset::ValidationError_NullNodeInstance = TEXT("Node with GUID {0} is NULL");
 FString UFlowAsset::ValidationError_NullAddOnNodeInstance = TEXT("Node with GUID {0} has NULL AddOn(s)");
+FString UFlowAsset::ValidationError_ConnectedToMissingNode = TEXT("Pin {0} on Node with GUID {1} is connected to Node with Guid {2}, which does not exist in {3}. {4}");
+FString UFlowAsset::ValidationError_AdviseResave = TEXT("Open the Flow Asset in editor and resave it.");
 #endif
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(FlowAsset)
 
 UFlowAsset::UFlowAsset(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
-	, bWorldBound(true)
-#if WITH_EDITORONLY_DATA
-	, FlowGraph(nullptr)
-#endif
 	, AllowedNodeClasses({UFlowNodeBase::StaticClass()})
 	, AllowedInSubgraphNodeClasses({UFlowNode_SubGraph::StaticClass()})
-	, bStartNodePlacedAsGhostNode(false)
-	, TemplateAsset(nullptr)
-	, FinishPolicy(EFlowFinishPolicy::Keep)
 {
 	if (!AssetGuid.IsValid())
 	{
@@ -146,68 +146,34 @@ void UFlowAsset::PostLoad()
 void UFlowAsset::PreSaveRoot(FObjectPreSaveRootContext ObjectSaveContext)
 {
 	ReconcileBaseAssetParams(FDateTime::Now());
+	(void)RepairDuplicateAddOnGuids();
 }
 
-EDataValidationResult UFlowAsset::ValidateAsset(FFlowMessageLog& MessageLog)
+void UFlowAsset::SetupForEditing()
 {
-	// validate nodes
-	for (const TPair<FGuid, UFlowNode*>& Node : ObjectPtrDecay(Nodes))
-	{
-		if (IsValid(Node.Value))
-		{
-			FText FailureReason;
-			if (!IsNodeOrAddOnClassAllowed(Node.Value->GetClass(), &FailureReason))
-			{
-				const FString ErrorMsg =
-					FailureReason.IsEmpty()
-						? FString::Format(*ValidationError_NodeClassNotAllowed, {*Node.Value->GetClass()->GetName()})
-						: FailureReason.ToString();
+	InitializePinConnectionPolicy();
 
-				MessageLog.Error(*ErrorMsg, Node.Value);
-			}
-
-			Node.Value->ValidationLog.Messages.Empty();
-			Node.Value->ValidateNode();
-			MessageLog.Messages.Append(Node.Value->ValidationLog.Messages);
-
-			// Validate AddOns
-			for (UFlowNodeAddOn* AddOn : Node.Value->GetFlowNodeAddOnChildren())
-			{
-				if (IsValid(AddOn))
-				{
-					ValidateAddOnTree(*AddOn, MessageLog);
-				}
-				else
-				{
-					const FString ErrorMsg = FString::Format(*ValidationError_NullAddOnNodeInstance, {*Node.Key.ToString()});
-					MessageLog.Error(*ErrorMsg, this);
-				}
-			}
-		}
-		else
-		{
-			const FString ErrorMsg = FString::Format(*ValidationError_NullNodeInstance, {*Node.Key.ToString()});
-			MessageLog.Error(*ErrorMsg, this);
-		}
-	}
-
-	// if at least one error has been logged : mark the asset as invalid
-	for (const TSharedRef<FTokenizedMessage>& Msg : MessageLog.Messages)
-	{
-		if (Msg->GetSeverity() == EMessageSeverity::Error)
-		{
-			return EDataValidationResult::Invalid;
-		}
-	}
-
-	// otherwise, the asset is considered valid (even with warnings or notes)
-	return EDataValidationResult::Valid;
+	// Initialize any customizable Policies before we instantiate nodes
+	InitializePreloadPolicy();
 }
 
 bool UFlowAsset::IsNodeOrAddOnClassAllowed(const UClass* FlowNodeOrAddOnClass, FText* OutOptionalFailureReason) const
 {
 	if (!IsValid(FlowNodeOrAddOnClass))
 	{
+		return false;
+	}
+
+	if (FlowNodeOrAddOnClass->HasAnyClassFlags(CLASS_Abstract | CLASS_Deprecated | CLASS_NewerVersionExists))
+	{
+		if (OutOptionalFailureReason)
+		{
+			*OutOptionalFailureReason = FText::Format(
+				NSLOCTEXT("FlowAsset", "UnsaveableNodeClass",
+					"Class '{0}' cannot be saved because it is abstract, deprecated, or superseded. "
+					"Replace this node or add-on before cooking; its saved reference would be null."),
+				FText::FromString(FlowNodeOrAddOnClass->GetPathName()));
+		}
 		return false;
 	}
 
@@ -354,7 +320,141 @@ bool UFlowAsset::IsFlowNodeClassInDeniedClasses(const UClass& FlowNodeClass) con
 	return false;
 }
 
-void UFlowAsset::ValidateAddOnTree(UFlowNodeAddOn& AddOn, FFlowMessageLog& MessageLog)
+bool UFlowAsset::ShouldValidateOnSave() const
+{
+	return GetDefault<UFlowSettings>()->bValidateAssetOnSave;
+}
+
+EDataValidationResult UFlowAsset::IsDataValid(FDataValidationContext& Context) const
+{
+	FFlowMessageLog LogResults;
+	const EDataValidationResult Result = ValidateAsset(LogResults);
+
+	for (const TSharedRef<FTokenizedMessage>& Message : LogResults.Messages)
+	{
+		Context.AddMessage(Message);
+	}
+
+	return Result;
+}
+
+EDataValidationResult UFlowAsset::ValidateAsset(FFlowMessageLog& MessageLog) const
+{
+	// A node may report Invalid with warnings only or no messages
+	EDataValidationResult NodesResult = EDataValidationResult::NotValidated;
+
+	// validate runtime nodes
+	for (const TPair<FGuid, UFlowNode*>& NodeIt : ObjectPtrDecay(Nodes))
+	{
+		UFlowNode* Node = NodeIt.Value;
+
+		if (IsValid(Node))
+		{
+			// Check if this node class is still allowed in this asset class
+			FText FailureReason;
+			if (!IsNodeOrAddOnClassAllowed(Node->GetClass(), &FailureReason))
+			{
+				const FString ErrorMsg = !FailureReason.IsEmpty() ? FailureReason.ToString()
+					: FString::Format(*ValidationError_NodeClassNotAllowed, {*Node->GetClass()->GetName()});
+				MessageLog.Error(*ErrorMsg, Node);
+			}
+
+			// Validate node connections
+			for (const TPair<FName, FConnectedPin>& Connection : Node->Connections)
+			{
+				if (!Nodes.Contains(Connection.Value.NodeGuid))
+				{
+					const FString ErrorMsg = FString::Format(*ValidationError_ConnectedToMissingNode, 
+						{*Connection.Key.ToString(), *NodeIt.Key.ToString(), *Connection.Value.NodeGuid.ToString(), GetPathName(), ValidationError_AdviseResave});
+
+					MessageLog.Error(*ErrorMsg, Node);
+				}
+			}
+
+			// Validate node itself
+			NodesResult = CombineDataValidationResults(NodesResult, ValidateNode(*Node, MessageLog));
+
+			// Validate node AddOns
+			NodesResult = CombineDataValidationResults(NodesResult, ValidateAddOnChildren(*Node, MessageLog));
+		}
+		else
+		{
+			const FString ErrorMsg = FString::Format(*ValidationError_NullNodeInstance, {*NodeIt.Key.ToString()});
+			MessageLog.Error(*ErrorMsg, this);
+		}
+	}
+
+	// validate editor's graph
+	OnValidateGraph.ExecuteIfBound(MessageLog);
+
+	// if at least one error has been logged : mark the asset as invalid
+	for (const TSharedRef<FTokenizedMessage>& Msg : MessageLog.Messages)
+	{
+		if (Msg->GetSeverity() == EMessageSeverity::Error)
+		{
+			return EDataValidationResult::Invalid;
+		}
+	}
+
+	if (NodesResult == EDataValidationResult::Invalid)
+	{
+		return EDataValidationResult::Invalid;
+	}
+
+	// otherwise, the asset is considered valid (even with warnings or notes)
+	return EDataValidationResult::Valid;
+}
+
+EDataValidationResult UFlowAsset::ValidateNode(UFlowNodeBase& FlowNodeBase, FFlowMessageLog& MessageLog)
+{
+	FlowNodeBase.ValidationLog.Messages.Empty();
+	const EDataValidationResult NodeResult = FlowNodeBase.ValidateNode();
+	MessageLog.Messages.Append(FlowNodeBase.ValidationLog.Messages);
+
+	return NodeResult;
+}
+
+EDataValidationResult UFlowAsset::ValidateAddOnChildren(UFlowNodeBase& OwnerNode, FFlowMessageLog& MessageLog) const
+{
+	EDataValidationResult ChildrenResult = EDataValidationResult::NotValidated;
+
+	const TArray<UFlowNodeAddOn*>& Children = OwnerNode.GetFlowNodeAddOnChildren();
+	for (UFlowNodeAddOn* Child : Children)
+	{
+		if (IsValid(Child))
+		{
+			TArray<UFlowNodeAddOn*> OtherChildren;
+			OtherChildren.Reserve(Children.Num() - 1);
+			for (UFlowNodeAddOn* OtherChild : Children)
+			{
+				if (IsValid(OtherChild) && OtherChild != Child)
+				{
+					OtherChildren.Add(OtherChild);
+				}
+			}
+
+			if (OwnerNode.CheckAcceptFlowNodeAddOnChild(Child, OtherChildren) == EFlowAddOnAcceptResult::Reject)
+			{
+				const FString ErrorMsg = FString::Printf(
+					TEXT("AddOn '%s' is not a valid child of '%s' with its current sibling set."),
+					*Child->GetClass()->GetName(),
+					*OwnerNode.GetClass()->GetName());
+				MessageLog.Error(*ErrorMsg, &OwnerNode);
+			}
+
+			ChildrenResult = CombineDataValidationResults(ChildrenResult, ValidateAddOnTree(*Child, MessageLog));
+		}
+		else
+		{
+			const FString ErrorMsg = FString::Format(*ValidationError_NullAddOnNodeInstance, {*OwnerNode.GetGuid().ToString()});
+			MessageLog.Error(*ErrorMsg, this);
+		}
+	}
+
+	return ChildrenResult;
+}
+
+EDataValidationResult UFlowAsset::ValidateAddOnTree(UFlowNodeAddOn& AddOn, FFlowMessageLog& MessageLog) const
 {
 	// Filter unauthorized addon nodes
 	FText FailureReason;
@@ -369,18 +469,9 @@ void UFlowAsset::ValidateAddOnTree(UFlowNodeAddOn& AddOn, FFlowMessageLog& Messa
 	}
 
 	// Validate AddOn
-	AddOn.ValidationLog.Messages.Empty();
-	AddOn.ValidateNode();
-	MessageLog.Messages.Append(AddOn.ValidationLog.Messages);
+	const EDataValidationResult AddOnResult = ValidateNode(AddOn, MessageLog);
 
-	// Validate Children
-	for (UFlowNodeAddOn* Child : AddOn.GetFlowNodeAddOnChildren())
-	{
-		if (IsValid(Child))
-		{
-			ValidateAddOnTree(*Child, MessageLog);
-		}
-	}
+	return CombineDataValidationResults(AddOnResult, ValidateAddOnChildren(AddOn, MessageLog));
 }
 
 UFlowNode* UFlowAsset::CreateNode(const UClass* NodeClass, UEdGraphNode* GraphNode)
@@ -397,7 +488,7 @@ void UFlowAsset::RegisterNode(const FGuid& NewGuid, UFlowNode* NewNode)
 	NewNode->SetGuid(NewGuid);
 	Nodes.Emplace(NewGuid, NewNode);
 
-	HarvestNodeConnections();
+	HarvestNodeConnections(NewNode);
 
 	if (NewNode->TryUpdateAutoDataPins())
 	{
@@ -448,7 +539,18 @@ void UFlowAsset::HarvestNodeConnections(UFlowNode* TargetNode)
 		bool bNodeDirty = false;
 
 		TMap<FName, FConnectedPin> FoundConnections;
-		const TArray<UEdGraphPin*>& GraphNodePins = FlowNode->GetGraphNode()->Pins;
+		const UEdGraphNode* EdGraphNode = FlowNode->GetGraphNode();
+
+		if (!IsValid(EdGraphNode))
+		{
+			// A node may exist in Nodes map without a GraphNode if the importer has populated
+			// the asset before RegraphFlowAsset has finished linking runtime nodes to their
+			// editor counterparts.
+			// Such nodes have no pins to harvest yet. Skip them.
+			continue;
+		}
+
+		const TArray<UEdGraphPin*>& GraphNodePins = EdGraphNode->Pins;
 
 		for (const UEdGraphPin* ThisPin : GraphNodePins)
 		{
@@ -594,14 +696,66 @@ UFlowNode* UFlowAsset::GetDefaultEntryNode() const
 	return FirstStartNode;
 }
 
+int32 UFlowAsset::RepairDuplicateAddOnGuids() const
+{
+	TSet<FGuid> SeenAddOnGuids;
+	int32 NumRepaired = 0;
+
+	TFunction<void(UFlowNodeAddOn&)> RepairAddOnTree = [this, &SeenAddOnGuids, &NumRepaired, &RepairAddOnTree](UFlowNodeAddOn& AddOn)
+	{
+		bool bAlreadyInSet = false;
+		SeenAddOnGuids.Add(AddOn.GetGuid(), &bAlreadyInSet);
+
+		if (bAlreadyInSet)
+		{
+			const FGuid OldGuid = AddOn.GetGuid();
+			const FGuid NewGuid = FGuid::NewGuid();
+			AddOn.SetGuid(NewGuid);
+			SeenAddOnGuids.Add(NewGuid);
+			++NumRepaired;
+
+			UE_LOG(LogFlow, Log, TEXT("RepairDuplicateAddOnGuids: %s AddOn %s had duplicate Guid %s, re-minted to %s"),
+				*GetPathName(), *AddOn.GetName(), *OldGuid.ToString(), *NewGuid.ToString());
+		}
+
+		for (UFlowNodeAddOn* Child : AddOn.GetFlowNodeAddOnChildren())
+		{
+			if (IsValid(Child))
+			{
+				RepairAddOnTree(*Child);
+			}
+		}
+	};
+
+	for (const TPair<FGuid, UFlowNode*>& Node : ObjectPtrDecay(Nodes))
+	{
+		if (!IsValid(Node.Value))
+		{
+			continue;
+		}
+
+		for (UFlowNodeAddOn* AddOn : Node.Value->GetFlowNodeAddOnChildren())
+		{
+			if (IsValid(AddOn))
+			{
+				RepairAddOnTree(*AddOn);
+			}
+		}
+	}
+
+	return NumRepaired;
+}
+
 TArray<UFlowNode*> UFlowAsset::GatherNodesConnectedToAllInputs() const
 {
 	TSet<TObjectKey<UFlowNode>> IteratedNodes;
 	TArray<UFlowNode*> ConnectedNodes;
 
 	// Nodes connected to the Start node
-	UFlowNode* DefaultEntryNode = GetDefaultEntryNode();
-	GetNodesInExecutionOrder_Recursive(DefaultEntryNode, IteratedNodes, ConnectedNodes);
+	if (UFlowNode* DefaultEntryNode = GetDefaultEntryNode())
+	{
+		GetNodesInExecutionOrder_Recursive(DefaultEntryNode, IteratedNodes, ConnectedNodes);
+	}
 
 	// Nodes connected to Custom Input node(s)
 	for (const TPair<FGuid, UFlowNode*>& Node : ObjectPtrDecay(Nodes))
@@ -682,6 +836,30 @@ TArray<FName> UFlowAsset::GatherCustomOutputNodeEventNames() const
 }
 
 #if WITH_EDITOR
+void UFlowAsset::RebuildCustomInterfaceLists()
+{
+	CustomInputs.Reset();
+	CustomOutputs.Reset();
+
+	for (const TPair<FGuid, UFlowNode*>& Pair : ObjectPtrDecay(Nodes))
+	{
+		if (const UFlowNode_CustomInput* InputNode = Cast<UFlowNode_CustomInput>(Pair.Value))
+		{
+			if (!InputNode->GetEventName().IsNone())
+			{
+				CustomInputs.AddUnique(InputNode->GetEventName());
+			}
+		}
+		else if (const UFlowNode_CustomOutput* OutputNode = Cast<UFlowNode_CustomOutput>(Pair.Value))
+		{
+			if (!OutputNode->GetEventName().IsNone())
+			{
+				CustomOutputs.AddUnique(OutputNode->GetEventName());
+			}
+		}
+	}
+}
+
 void UFlowAsset::AddCustomInput(const FName& EventName)
 {
 	if (!CustomInputs.Contains(EventName))
@@ -878,7 +1056,7 @@ void UFlowAsset::ReconcileBaseAssetParams(const FDateTime& AssetLastSavedTimesta
 	if (EFlowReconcilePropertiesResult_Classifiers::IsErrorResult(ReconcileResult))
 	{
 		UE_LOG(LogFlow, Error, TEXT("Failed to reconcile BaseAssetParams for %s: %s"),
-			   *BaseAssetParamsPtr->GetPathName(), *UEnum::GetDisplayValueAsText(ReconcileResult).ToString());
+		       *BaseAssetParamsPtr->GetPathName(), *UEnum::GetDisplayValueAsText(ReconcileResult).ToString());
 	}
 }
 #endif
@@ -891,7 +1069,8 @@ void UFlowAsset::AddInstance(UFlowAsset* Instance)
 int32 UFlowAsset::RemoveInstance(UFlowAsset* Instance)
 {
 #if WITH_EDITOR
-	if (InspectedInstance.IsValid() && InspectedInstance.Get() == Instance)
+	const UFlowAsset* InspectedInstancePtr = InspectedInstance.Get();
+	if (InspectedInstancePtr && InspectedInstancePtr == Instance)
 	{
 		SetInspectedInstance(nullptr);
 	}
@@ -914,7 +1093,8 @@ void UFlowAsset::ClearInstances()
 	{
 		if (ActiveInstances.IsValidIndex(i) && ActiveInstances[i])
 		{
-			ActiveInstances[i]->FinishFlow(EFlowFinishPolicy::Keep);
+			ActiveInstances[i]->FinishFlowInstance(EFlowFinishPolicy::Keep);
+			ActiveInstances[i]->DeinitializeInstance();
 		}
 	}
 
@@ -922,9 +1102,33 @@ void UFlowAsset::ClearInstances()
 }
 
 #if WITH_EDITOR
+void UFlowAsset::AddReplicaInstance(UFlowAsset* Instance)
+{
+	// Replicas destroyed without PreDestroyFromReplication, i.e. on ending PIE, leave empty entries
+	ReplicaInstances.RemoveAll([](const TWeakObjectPtr<UFlowAsset>& ReplicaInstance)
+	{
+		return !ReplicaInstance.IsValid();
+	});
+
+	ReplicaInstances.Add(Instance);
+	BroadcastDebuggerRefresh();
+}
+
+void UFlowAsset::RemoveReplicaInstance(UFlowAsset* Instance)
+{
+	const UFlowAsset* InspectedInstancePtr = InspectedInstance.Get();
+	if (InspectedInstancePtr && InspectedInstancePtr == Instance)
+	{
+		SetInspectedInstance(nullptr);
+	}
+
+	ReplicaInstances.Remove(Instance);
+	BroadcastDebuggerRefresh();
+}
+
 void UFlowAsset::SetInspectedInstance(TWeakObjectPtr<const UFlowAsset> NewInspectedInstance)
 {
-	if (NewInspectedInstance.IsValid())
+	if (const UFlowAsset* NewInspectedInstancePtr = NewInspectedInstance.Get())
 	{
 		if (InspectedInstance == NewInspectedInstance)
 		{
@@ -932,12 +1136,15 @@ void UFlowAsset::SetInspectedInstance(TWeakObjectPtr<const UFlowAsset> NewInspec
 			return;
 		}
 
-		bool bIsNewInstancePresent = Algo::AnyOf(ActiveInstances, [NewInspectedInstance](const UFlowAsset* ActiveInstance)
+		bool bIsNewInstancePresent = Algo::AnyOf(ActiveInstances, [NewInspectedInstancePtr](const UFlowAsset* ActiveInstance)
 		{
-			return ActiveInstance && ActiveInstance == NewInspectedInstance;
+			return ActiveInstance && ActiveInstance == NewInspectedInstancePtr;
+		}) || Algo::AnyOf(ReplicaInstances, [NewInspectedInstancePtr](const TWeakObjectPtr<UFlowAsset>& ReplicaInstance)
+		{
+			return ReplicaInstance.Get() == NewInspectedInstancePtr;
 		});
 
-		if (!ensureMsgf(bIsNewInstancePresent, TEXT("Trying to set %s as InspectedInstance, but it is not one of the ActiveInstances"), *NewInspectedInstance->GetName()))
+		if (!ensureMsgf(bIsNewInstancePresent, TEXT("Trying to set %s as InspectedInstance, but it is not one of the ActiveInstances"), *NewInspectedInstancePtr->GetName()))
 		{
 			NewInspectedInstance = nullptr;
 		}
@@ -956,15 +1163,30 @@ void UFlowAsset::BroadcastRuntimeMessageAdded(const TSharedRef<FTokenizedMessage
 {
 	RuntimeMessageEvent.Broadcast(this, Message);
 }
-
-void UFlowAsset::SetupForEditing()
-{
-	InitializePinConnectionPolicy();
-
-	// Initialize any customizable Policies before we instantiate nodes
-	InitializePreloadPolicy();
-}
 #endif // WITH_EDITOR
+
+bool UFlowAsset::CanBeInstanced(const UFlowAsset& InTemplateAsset, const UObject* InOwner) const
+{
+	// Called for the template and again for its new instance.
+	// Use the (this != &InTemplateAsset) comparison if you need to test the new instance.
+
+	if (GetDefault<UFlowSettings>()->bRejectFlowInstancesWithInvalidNodes)
+	{
+		for (const TPair<FGuid, UFlowNode*>& Node : ObjectPtrDecay(Nodes))
+		{
+			if (!IsValid(Node.Value))
+			{
+				UE_LOG(LogFlow, Error,
+					TEXT("Flow instance creation rejected an invalid node. Template: '%s', Asset: '%s', "
+						"Node GUID: '%s', Owner: '%s'. Repair and recook the graph; it will not execute."),
+					*InTemplateAsset.GetPathName(), *GetPathName(), *Node.Key.ToString(), *GetPathNameSafe(InOwner));
+				return false;
+			}
+		}
+	}
+
+	return true;
+}
 
 void UFlowAsset::InitializeInstance(const TWeakObjectPtr<UObject> InOwner, UFlowAsset& InTemplateAsset)
 {
@@ -972,49 +1194,37 @@ void UFlowAsset::InitializeInstance(const TWeakObjectPtr<UObject> InOwner, UFlow
 
 	Owner = InOwner;
 	TemplateAsset = &InTemplateAsset;
+	// UFlowSubsystem::CreateFlowInstance assigns the root first; callers that initialize directly become their own root.
+	if (!IsValid(OwningRootFlowInstance))
+	{
+		OwningRootFlowInstance = this;
+	}
 
 	// Initialize any customizable Policies before we instantiate nodes
 	InitializePreloadPolicy();
 
 	for (TPair<FGuid, TObjectPtr<UFlowNode>>& Node : Nodes)
 	{
-		UFlowNode* NewNodeInstance = NewObject<UFlowNode>(this, Node.Value->GetClass(), NAME_None, RF_Transient, Node.Value, false, nullptr);
-		Node.Value = NewNodeInstance;
-
-		if (UFlowNode_CustomInput* CustomInput = Cast<UFlowNode_CustomInput>(NewNodeInstance))
+		// Node can be null if its class has been removed.
+		if (IsValid(Node.Value))
 		{
-			if (!CustomInput->GetEventName().IsNone())
+			UFlowNode* NewNodeInstance = NewObject<UFlowNode>(this, Node.Value->GetClass(), NAME_None, RF_Transient, Node.Value, false, nullptr);
+			Node.Value = NewNodeInstance;
+
+			if (UFlowNode_CustomInput* CustomInput = Cast<UFlowNode_CustomInput>(NewNodeInstance))
 			{
-				CustomInputNodes.Emplace(CustomInput);
+				if (!CustomInput->GetEventName().IsNone())
+				{
+					CustomInputNodes.Emplace(CustomInput);
+				}
 			}
+
+			NewNodeInstance->InitializeInstance();
 		}
-
-		NewNodeInstance->InitializeInstance();
-	}
-}
-
-void UFlowAsset::DeinitializeInstance()
-{
-	// These should have been flushed in FinishFlow()
-	check(DeferredTransitionScopes.IsEmpty());
-
-	if (IsInstanceInitialized())
-	{
-		for (const TPair<FGuid, UFlowNode*>& Node : ObjectPtrDecay(Nodes))
+		else
 		{
-			if (IsValid(Node.Value))
-			{
-				Node.Value->DeinitializeInstance();
-			}
+			UE_LOG(LogFlow, Error, TEXT("Flow asset '%s' contains an invalid node for GUID '%s', node won't be instanced."), *InTemplateAsset.GetPathName(), *Node.Key.ToString());
 		}
-
-		const int32 ActiveInstancesLeft = TemplateAsset->RemoveInstance(this);
-		if (ActiveInstancesLeft == 0 && GetFlowSubsystem())
-		{
-			GetFlowSubsystem()->RemoveInstancedTemplate(TemplateAsset);
-		}
-
-		TemplateAsset = nullptr;
 	}
 }
 
@@ -1149,25 +1359,28 @@ void UFlowAsset::FinishNode(UFlowNode* Node)
 				Receiver->ReceiveOutputDataSnapshot(OutputDataPinValues);
 			}
 
-			if (NodeOwningThisAssetInstance.IsValid())
+			if (UFlowNode_SubGraph* OwningSubGraphNode = NodeOwningThisAssetInstance.Get())
 			{
-				NodeOwningThisAssetInstance.Get()->TriggerFirstOutput(true);
+				OwningSubGraphNode->TriggerFirstOutput(true);
 				return;
 			}
 
-			// if this instance is a Root Flow, we need to deregister it from the subsystem first
-			if (Owner.IsValid())
+			// if this instance is a Root Flow, we need to deregister it from the subsystem first. This will
+			// finalize and deinitialize the root flow.
+			UObject* OwnerObject = Owner.Get();
+			UFlowSubsystem* FlowSubsystem = GetFlowSubsystem();
+			if (OwnerObject && FlowSubsystem)
 			{
-				const TSet<UFlowAsset*>& RootFlowInstances = GetFlowSubsystem()->GetRootInstancesByOwner(Owner.Get());
+				const TSet<UFlowAsset*>& RootFlowInstances = FlowSubsystem->GetRootInstancesByOwner(OwnerObject);
 				if (RootFlowInstances.Contains(this))
 				{
-					GetFlowSubsystem()->FinishRootFlow(Owner.Get(), TemplateAsset, EFlowFinishPolicy::Keep);
+					FlowSubsystem->FinishAndDeinitializeRootFlow(OwnerObject, TemplateAsset, EFlowFinishPolicy::Keep);
 
 					return;
 				}
 			}
 
-			FinishFlow(EFlowFinishPolicy::Keep);
+			FinishFlowInstance(EFlowFinishPolicy::Keep);
 		}
 	}
 }
@@ -1182,7 +1395,17 @@ void UFlowAsset::ResetNodes()
 	RecordedNodes.Empty();
 }
 
-void UFlowAsset::FinishFlow(const EFlowFinishPolicy InFinishPolicy, const bool bRemoveInstance /*= true*/)
+void UFlowAsset::FinishFlow(const EFlowFinishPolicy InFinishPolicy, const bool bRemoveInstance)
+{
+	FinishFlowInstance(InFinishPolicy);
+	
+	if (bRemoveInstance)
+	{
+		DeinitializeInstance();
+	}
+}
+
+void UFlowAsset::FinishFlowInstance(const EFlowFinishPolicy InFinishPolicy)
 {
 	FinishPolicy = InFinishPolicy;
 
@@ -1194,12 +1417,52 @@ void UFlowAsset::FinishFlow(const EFlowFinishPolicy InFinishPolicy, const bool b
 		Node->Deactivate();
 	}
 	ActiveNodes.Empty();
+}
 
-	// provides option to finish game-specific logic prior to removing asset instance 
-	if (bRemoveInstance)
+void UFlowAsset::DeinitializeInstance()
+{
+	// These should have been flushed in FinishFlowInstance()
+	check(DeferredTransitionScopes.IsEmpty());
+
+	if (IsInstanceInitialized())
 	{
-		DeinitializeInstance();
+		StopReplication();
+
+		for (const TPair<FGuid, UFlowNode*>& Node : ObjectPtrDecay(Nodes))
+		{
+			if (IsValid(Node.Value))
+			{
+				Node.Value->DeinitializeInstance();
+			}
+		}
+
+		const int32 ActiveInstancesLeft = TemplateAsset->RemoveInstance(this);
+		if (ActiveInstancesLeft == 0 && GetFlowSubsystem())
+		{
+			GetFlowSubsystem()->RemoveInstancedTemplate(TemplateAsset);
+		}
+
+		// Unregister this child flow as a user of all components tracked by the root's manager.
+		UFlowInjectComponentsManager* RootManager = FindComponentInjectionManagerInRootFlow();
+		if (IsValid(RootManager) && RootManager != ComponentInjector)
+		{
+			RootManager->UnregisterAllComponentUsers(*this);
+		}
+
+		// Shut down only our own manager, which may be distinct from the root's manager.
+		if (IsValid(ComponentInjector))
+		{
+			ComponentInjector->ShutdownRuntime();
+			ComponentInjector = nullptr;
+		}
+		OwningRootFlowInstance = nullptr;
+		TemplateAsset = nullptr;
 	}
+}
+
+ESubGraphFinishPolicy UFlowAsset::GetSubGraphFinishPolicy() const
+{
+	return GetDefault<UFlowSettings>()->SubGraphFinishPolicy;
 }
 
 UFlowSubsystem* UFlowAsset::GetFlowSubsystem() const
@@ -1214,12 +1477,323 @@ UFlowNode_SubGraph* UFlowAsset::GetNodeOwningThisAssetInstance() const
 
 UFlowAsset* UFlowAsset::GetParentInstance() const
 {
-	return NodeOwningThisAssetInstance.IsValid() ? NodeOwningThisAssetInstance.Get()->GetFlowAsset() : nullptr;
+	const UFlowNode_SubGraph* OwningSubGraphNode = NodeOwningThisAssetInstance.Get();
+	return OwningSubGraphNode ? OwningSubGraphNode->GetFlowAsset() : nullptr;
 }
 
 TWeakObjectPtr<UFlowAsset> UFlowAsset::GetFlowInstance(UFlowNode_SubGraph* SubGraphNode) const
 {
 	return ActiveSubGraphs.FindRef(SubGraphNode);
+}
+
+UFlowAsset* UFlowAsset::GetOwningRootFlowInstance() const
+{
+	return OwningRootFlowInstance.Get();
+}
+
+UFlowInjectComponentsManager* UFlowAsset::GetOrCreateComponentInjectionManager()
+{
+	if (!IsValid(ComponentInjector))
+	{
+		ComponentInjector = NewObject<UFlowInjectComponentsManager>(this);
+		ComponentInjector->InitializeRuntime();
+	}
+	return ComponentInjector;
+}
+
+UFlowInjectComponentsManager* UFlowAsset::GetOrCreateComponentInjectionManagerInRootFlow() const
+{
+	UFlowAsset* Root = GetOwningRootFlowInstance();
+	checkf(IsValid(Root), TEXT("Root component manager access requires a runtime Flow instance."));
+	return Root->GetOrCreateComponentInjectionManager();
+}
+
+UFlowInjectComponentsManager* UFlowAsset::FindComponentInjectionManager() const
+{
+	return IsValid(ComponentInjector) ? ComponentInjector.Get() : nullptr;
+}
+
+UFlowInjectComponentsManager* UFlowAsset::FindComponentInjectionManagerInRootFlow() const
+{
+	const UFlowAsset* Root = GetOwningRootFlowInstance();
+	return IsValid(Root) ? Root->FindComponentInjectionManager() : nullptr;
+}
+
+void UFlowAsset::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+
+#if WITH_PUSH_MODEL
+	FDoRepLifetimeParams InitialOnlyParams;
+	InitialOnlyParams.bIsPushBased = true;
+	InitialOnlyParams.Condition = COND_InitialOnly;
+
+	DOREPLIFETIME_WITH_PARAMS_FAST(ThisClass, TemplateAsset, InitialOnlyParams);
+	DOREPLIFETIME_WITH_PARAMS_FAST(ThisClass, Owner, InitialOnlyParams);
+	DOREPLIFETIME_WITH_PARAMS_FAST(ThisClass, ReplicatedParentInstance, InitialOnlyParams);
+	DOREPLIFETIME_WITH_PARAMS_FAST(ThisClass, OwningSubGraphNodeGuid, InitialOnlyParams);
+
+	FDoRepLifetimeParams Params;
+	Params.bIsPushBased = true;
+
+	DOREPLIFETIME_WITH_PARAMS_FAST(ThisClass, ReplicatedNodeStates, Params);
+#else
+	DOREPLIFETIME_CONDITION(ThisClass, TemplateAsset, COND_InitialOnly);
+	DOREPLIFETIME_CONDITION(ThisClass, Owner, COND_InitialOnly);
+	DOREPLIFETIME_CONDITION(ThisClass, ReplicatedParentInstance, COND_InitialOnly);
+	DOREPLIFETIME_CONDITION(ThisClass, OwningSubGraphNodeGuid, COND_InitialOnly);
+
+	DOREPLIFETIME(ThisClass, ReplicatedNodeStates);
+#endif
+}
+
+void UFlowAsset::PostInitProperties()
+{
+	Super::PostInitProperties();
+
+	// Instances copy this pointer from their template
+	ReplicatedNodeStates.OwningAsset = this;
+}
+
+void UFlowAsset::PreDestroyFromReplication()
+{
+	// The last state sent by the server in the same frame as removing this instance might not arrive
+	for (const TPair<FGuid, UFlowNode*>& Node : ObjectPtrDecay(Nodes))
+	{
+		if (IsValid(Node.Value) && Node.Value->GetActivationState() == EFlowNodeState::Active)
+		{
+			Node.Value->ActivationState = EFlowNodeState::Completed;
+			Node.Value->OnRep_ActivationState(EFlowNodeState::Active);
+		}
+	}
+
+	if (UFlowAsset* ParentInstance = ReplicatedParentInstance.Get())
+	{
+		// Replica of the next run of the same SubGraph node might be linked already
+		if (ParentInstance->ActiveSubGraphs.FindRef(NodeOwningThisAssetInstance).Get() == this)
+		{
+			ParentInstance->ActiveSubGraphs.Remove(NodeOwningThisAssetInstance);
+		}
+	}
+
+#if WITH_EDITOR
+	if (bReplicaInitialized && IsValid(TemplateAsset))
+	{
+		TemplateAsset->RemoveReplicaInstance(this);
+	}
+#endif
+
+	Super::PreDestroyFromReplication();
+}
+
+bool UFlowAsset::ShouldReplicate() const
+{
+	return GetDefault<UFlowSettings>()->bReplicateFlowInstances && bReplicateInstances;
+}
+
+void UFlowAsset::StartReplication()
+{
+	const UFlowNode_SubGraph* OwningSubGraphNode = NodeOwningThisAssetInstance.Get();
+	UFlowAsset* ParentInstance = OwningSubGraphNode ? OwningSubGraphNode->GetFlowAsset() : nullptr;
+
+	// Clients link the replica of a SubGraph instance to the replica of its parent
+	const bool bParentReplicates = ParentInstance == nullptr || ParentInstance->bReplicatedToClients;
+
+	if (ShouldReplicate() && !bReplicatedToClients && bParentReplicates)
+	{
+		UObject* OwnerObject = Owner.Get();
+		if (AActor* OwnerActor = Cast<AActor>(OwnerObject))
+		{
+			if (OwnerActor->GetIsReplicated() && (OwnerActor->IsNetMode(NM_DedicatedServer) || OwnerActor->IsNetMode(NM_ListenServer)))
+			{
+				if (OwnerActor->IsUsingRegisteredSubObjectList())
+				{
+					OwnerActor->AddReplicatedSubObject(this);
+					bReplicatedToClients = true;
+				}
+				else
+				{
+					UE_LOG(LogFlow, Warning, TEXT("%s won't replicate, since its Owner %s doesn't use the registered subobject list."), *GetName(), *OwnerActor->GetName());
+				}
+			}
+		}
+		else if (UActorComponent* OwnerComponent = Cast<UActorComponent>(OwnerObject))
+		{
+			if (OwnerComponent->GetIsReplicated() && (OwnerComponent->IsNetMode(NM_DedicatedServer) || OwnerComponent->IsNetMode(NM_ListenServer)))
+			{
+				if (OwnerComponent->IsUsingRegisteredSubObjectList())
+				{
+					OwnerComponent->AddReplicatedSubObject(this);
+					bReplicatedToClients = true;
+				}
+				else
+				{
+					UE_LOG(LogFlow, Warning, TEXT("%s won't replicate, since its Owner %s doesn't use the registered subobject list."), *GetName(), *OwnerComponent->GetName());
+				}
+			}
+		}
+
+		if (bReplicatedToClients)
+		{
+			if (ParentInstance)
+			{
+				ReplicatedParentInstance = ParentInstance;
+				OwningSubGraphNodeGuid = OwningSubGraphNode->GetGuid();
+			}
+
+			for (const TPair<FGuid, UFlowNode*>& Node : ObjectPtrDecay(Nodes))
+			{
+				if (IsValid(Node.Value))
+				{
+					Node.Value->bHasReplicatedProperties = Node.Value->ShouldReplicateProperties() && FlowNodeReplication::HasReplicatedProperties(*Node.Value);
+				}
+			}
+
+#if WITH_PUSH_MODEL
+			MARK_PROPERTY_DIRTY_FROM_NAME(UFlowAsset, TemplateAsset, this);
+			MARK_PROPERTY_DIRTY_FROM_NAME(UFlowAsset, Owner, this);
+			MARK_PROPERTY_DIRTY_FROM_NAME(UFlowAsset, ReplicatedParentInstance, this);
+			MARK_PROPERTY_DIRTY_FROM_NAME(UFlowAsset, OwningSubGraphNodeGuid, this);
+#endif
+		}
+	}
+}
+
+void UFlowAsset::StopReplication()
+{
+	if (bReplicatedToClients)
+	{
+		UObject* OwnerObject = Owner.Get();
+		if (AActor* OwnerActor = Cast<AActor>(OwnerObject))
+		{
+			OwnerActor->DestroyReplicatedSubObjectOnRemotePeers(this);
+		}
+		else if (UActorComponent* OwnerComponent = Cast<UActorComponent>(OwnerObject))
+		{
+			OwnerComponent->DestroyReplicatedSubObjectOnRemotePeers(this);
+		}
+
+		bReplicatedToClients = false;
+	}
+}
+
+void UFlowAsset::OnRep_TemplateAsset()
+{
+	if (!bReplicaInitialized && IsValid(TemplateAsset))
+	{
+		bReplicaInitialized = true;
+
+#if WITH_EDITOR
+		TemplateAsset->AddReplicaInstance(this);
+#endif
+
+		LinkReplicaToParent();
+
+		for (const TWeakObjectPtr<UFlowAsset>& ChildInstance : ReplicaChildrenAwaitingTemplate)
+		{
+			if (UFlowAsset* Child = ChildInstance.Get())
+			{
+				Child->LinkReplicaToParent();
+			}
+		}
+		ReplicaChildrenAwaitingTemplate.Empty();
+
+		for (const FFlowNodeReplicatedState& Item : ReplicatedNodeStates.Items)
+		{
+			ApplyReplicatedNodeState(Item);
+		}
+	}
+}
+
+void UFlowAsset::OnRep_ReplicatedParentInstance()
+{
+	LinkReplicaToParent();
+}
+
+void UFlowAsset::LinkReplicaToParent()
+{
+	if (!NodeOwningThisAssetInstance.IsValid())
+	{
+		if (UFlowAsset* ParentInstance = ReplicatedParentInstance.Get())
+		{
+			// The SubGraph node of the parent can be created only from its TemplateAsset
+			if (ParentInstance->bReplicaInitialized)
+			{
+				if (UFlowNode_SubGraph* SubGraphNode = Cast<UFlowNode_SubGraph>(ParentInstance->GetOrCreateReplicaNode(OwningSubGraphNodeGuid)))
+				{
+					NodeOwningThisAssetInstance = SubGraphNode;
+					ParentInstance->ActiveSubGraphs.Add(SubGraphNode, this);
+				}
+			}
+			else
+			{
+				ParentInstance->ReplicaChildrenAwaitingTemplate.AddUnique(this);
+			}
+		}
+	}
+}
+
+UFlowNode* UFlowAsset::GetOrCreateReplicaNode(const FGuid& NodeGuid)
+{
+	UFlowNode* Node = Nodes.FindRef(NodeGuid);
+
+	if (Node == nullptr && IsValid(TemplateAsset))
+	{
+		// Node can be null if its class has been removed.
+		UFlowNode* TemplateNode = TemplateAsset->Nodes.FindRef(NodeGuid);
+		if (IsValid(TemplateNode))
+		{
+			Node = NewObject<UFlowNode>(this, TemplateNode->GetClass(), NAME_None, RF_Transient, TemplateNode, false, nullptr);
+			Nodes.Add(NodeGuid, Node);
+
+			Node->InitializeReplica();
+		}
+	}
+
+	return Node;
+}
+
+void UFlowAsset::WriteReplicatedNodeState(UFlowNode& Node)
+{
+	if (bReplicatedToClients && Node.bHasReplicatedProperties)
+	{
+		const FGuid& NodeGuid = Node.GetGuid();
+		FFlowNodeReplicatedState* Item = ReplicatedNodeStates.Items.FindByPredicate([&NodeGuid](const FFlowNodeReplicatedState& Existing)
+		{
+			return Existing.NodeGuid == NodeGuid;
+		});
+
+		if (Item == nullptr)
+		{
+			Item = &ReplicatedNodeStates.Items.AddDefaulted_GetRef();
+			Item->NodeGuid = NodeGuid;
+		}
+
+		FlowNodeReplication::WriteReplicatedProperties(Node, Item->CustomData);
+
+		// Legacy replication and Iris both limit the number of replicated array elements to uint16
+		if (Item->CustomData.Num() > MAX_uint16)
+		{
+			UE_LOG(LogFlow, Error, TEXT("Replicated properties of node %s in %s take %d bytes, above the limit of %d bytes. Clients won't receive them."), *Node.GetName(), *GetName(), Item->CustomData.Num(), MAX_uint16);
+		}
+
+		ReplicatedNodeStates.MarkItemDirty(*Item);
+#if WITH_PUSH_MODEL
+		MARK_PROPERTY_DIRTY_FROM_NAME(UFlowAsset, ReplicatedNodeStates, this);
+#endif
+	}
+}
+
+void UFlowAsset::ApplyReplicatedNodeState(const FFlowNodeReplicatedState& Item)
+{
+	// States received before TemplateAsset are applied by OnRep_TemplateAsset
+	if (bReplicaInitialized)
+	{
+		if (UFlowNode* Node = GetOrCreateReplicaNode(Item.NodeGuid))
+		{
+			FlowNodeReplication::ReadReplicatedProperties(*Node, Item.CustomData);
+		}
+	}
 }
 
 void UFlowAsset::InitializePreloadPolicy()
@@ -1240,6 +1814,14 @@ void UFlowAsset::InitializePreloadPolicy()
 	}
 
 	ensureAlwaysMsgf(PreloadPolicy.IsValid(), TEXT("There's no valid Preload Policy set in the project!"));
+}
+
+void UFlowAsset::EnsurePreloadPolicyInitialized()
+{
+	if (!PreloadPolicy.IsValid())
+	{
+		InitializePreloadPolicy();
+	}
 }
 
 const FFlowPreloadPolicy& UFlowAsset::GetPreloadPolicy() const
@@ -1276,8 +1858,7 @@ void UFlowAsset::TriggerCustomInput_FromSubGraph(UFlowNode_SubGraph* SubGraphNod
 	// but we may want to allow them to source parameters, so I am providing the subgraph node as the 
 	// IFlowDataPinValueSupplierInterface when triggering the node (even though it's not used at this time).
 
-	const TWeakObjectPtr<UFlowAsset> FlowInstance = ActiveSubGraphs.FindRef(SubGraphNode);
-	if (FlowInstance.IsValid())
+	if (UFlowAsset* FlowInstance = ActiveSubGraphs.FindRef(SubGraphNode).Get())
 	{
 		FlowInstance->TriggerCustomInput(EventName, SubGraphNode);
 	}
@@ -1285,10 +1866,10 @@ void UFlowAsset::TriggerCustomInput_FromSubGraph(UFlowNode_SubGraph* SubGraphNod
 
 void UFlowAsset::TriggerCustomOutput(const FName& EventName)
 {
-	if (NodeOwningThisAssetInstance.IsValid())
+	if (UFlowNode_SubGraph* OwningSubGraphNode = NodeOwningThisAssetInstance.Get())
 	{
 		// it's a SubGraph
-		NodeOwningThisAssetInstance->TriggerOutput(EventName);
+		OwningSubGraphNode->TriggerOutput(EventName);
 	}
 	else
 	{
@@ -1302,12 +1883,7 @@ void UFlowAsset::TriggerCustomOutput(const FName& EventName)
 
 void UFlowAsset::TriggerInput(const FGuid& NodeGuid, const FName& PinName, const FConnectedPin& FromPin)
 {
-	if (FFlowExecutionGate::IsHalted())
-	{
-		// Halt always takes precedence for debugger correctness
-		EnqueueDeferredTrigger(NodeGuid, PinName, FromPin);
-	}
-	else if (ShouldDeferTriggers())
+	if (ShouldDeferTriggers())
 	{
 		// Defer only if we have an open the top scope
 		if (!DeferredTransitionScopes.IsEmpty() && DeferredTransitionScopes.Top()->IsOpen())
@@ -1348,12 +1924,8 @@ bool UFlowAsset::ShouldDeferTriggers() const
 
 void UFlowAsset::EnqueueDeferredTrigger(const FGuid& NodeGuid, const FName& PinName, const FConnectedPin& FromPin)
 {
-	if (DeferredTransitionScopes.IsEmpty() || !DeferredTransitionScopes.Top()->IsOpen())
-	{
-		// This should only occur when halted at an execution gate
-		check(FFlowExecutionGate::IsHalted());
-		PushDeferredTransitionScope();
-	}
+	// TriggerInput() is the only caller, and only enqueues while the top scope is open
+	check(!DeferredTransitionScopes.IsEmpty() && DeferredTransitionScopes.Top()->IsOpen());
 
 	// Always enqueue to the current innermost (top) scope
 	DeferredTransitionScopes.Top()->EnqueueDeferredTrigger(FFlowDeferredTriggerInput{NodeGuid, PinName, FromPin});
@@ -1379,18 +1951,14 @@ void UFlowAsset::PopDeferredTransitionScope(const TSharedPtr<FFlowDeferredTransi
 
 bool UFlowAsset::TryFlushAndRemoveDeferredTransitionScope(const TSharedPtr<FFlowDeferredTransitionScope>& ScopeToFlush)
 {
-	if (ScopeToFlush->TryFlushDeferredTriggers(*this))
+	if (!ScopeToFlush->TryFlushDeferredTriggers(*this))
 	{
-		// Remove the exact instance we were holding (handles nested push/pop cases)
-		DeferredTransitionScopes.RemoveSingle(ScopeToFlush);
-		return true;
-	}
-	else
-	{
-		// Flush was interrupted — should only happen due to execution gate halt
-		check(FFlowExecutionGate::IsHalted());
 		return false;
 	}
+
+	// Remove the exact instance we were holding (handles nested push/pop cases)
+	DeferredTransitionScopes.RemoveSingle(ScopeToFlush);
+	return true;
 }
 
 bool UFlowAsset::TryFlushAllDeferredTriggerScopes()
@@ -1402,10 +1970,10 @@ bool UFlowAsset::TryFlushAllDeferredTriggerScopes()
 			break;
 		}
 
-		// Keep flushing until stack is empty, or we hit an ExecutionGate halt
+		// Keep flushing until the stack is empty
 	}
 
-	check(DeferredTransitionScopes.IsEmpty() || FFlowExecutionGate::IsHalted());
+	check(DeferredTransitionScopes.IsEmpty());
 
 	return DeferredTransitionScopes.IsEmpty();
 }
@@ -1419,9 +1987,8 @@ void UFlowAsset::CancelAndWarnForUnflushedDeferredTriggers()
 {
 	// Aggressively drop any pending deferred triggers — graph is done
 	// In normal execution these should have been flushed via PopDeferredTransitionScope() in TriggerInputDirect
-	// In the debugger they should have been flushed by ResumePIE
 	// Remaining scopes here usually mean:
-	//   - early/abnormal termination (e.g. FinishFlow called from unexpected place)
+	//   - early/abnormal termination (e.g. FinishFlowInstance called from unexpected place)
 	//   - exception/early return before Pop
 	//   - forced deinitialization during active execution (e.g. PIE stop, subsystem cleanup)
 	if (!DeferredTransitionScopes.IsEmpty())
@@ -1441,7 +2008,7 @@ void UFlowAsset::CancelAndWarnForUnflushedDeferredTriggers()
 			{
 				UE_LOG(LogFlow, Warning, TEXT("FlowAsset '%s' is finishing with %d lingering deferred transition scope(s) — dropping them. "
 					"This is usually unexpected and may indicate a bug or abnormal termination."),
-					*GetName(), DeferredTransitionScopes.Num());
+				    *GetName(), DeferredTransitionScopes.Num());
 			}
 
 			TotalDroppedTriggers += Triggers.Num();
@@ -1455,17 +2022,17 @@ void UFlowAsset::CancelAndWarnForUnflushedDeferredTriggers()
 				const FString FromNodeName = FromNode ? FromNode->GetName() : TEXT("<null/destroyed>");
 
 				UE_LOG(LogFlow, Error,
-					TEXT("  → Dropped deferred trigger:\n")
-					TEXT("      To Node: %s (%s)\n")
-					TEXT("      To Pin:  %s\n")
-					TEXT("      From Node: %s (%s)\n")
-					TEXT("      From Pin:  %s"),
-					*ToNodeName,
-					*Trigger.NodeGuid.ToString(),
-					*Trigger.PinName.ToString(),
-					*FromNodeName,
-					*Trigger.FromPin.NodeGuid.ToString(),
-					*Trigger.FromPin.PinName.ToString()
+				       TEXT("  → Dropped deferred trigger:\n")
+				       TEXT("      To Node: %s (%s)\n")
+				       TEXT("      To Pin:  %s\n")
+				       TEXT("      From Node: %s (%s)\n")
+				       TEXT("      From Pin:  %s"),
+				       *ToNodeName,
+				       *Trigger.NodeGuid.ToString(),
+				       *Trigger.PinName.ToString(),
+				       *FromNodeName,
+				       *Trigger.FromPin.NodeGuid.ToString(),
+				       *Trigger.FromPin.PinName.ToString()
 				);
 			}
 		}
@@ -1489,8 +2056,7 @@ FFlowAssetSaveData UFlowAsset::SaveInstance(TArray<FFlowAssetSaveData>& SavedFlo
 	OnSave();
 
 	// iterate nodes
-	TArray<UFlowNode*> NodesInExecutionOrder;
-	GetNodesInExecutionOrder<UFlowNode>(GetDefaultEntryNode(), NodesInExecutionOrder);
+	TArray<UFlowNode*> NodesInExecutionOrder = GatherNodesConnectedToAllInputs();
 	for (UFlowNode* Node : NodesInExecutionOrder)
 	{
 		if (Node && Node->ShouldSave())
@@ -1498,8 +2064,7 @@ FFlowAssetSaveData UFlowAsset::SaveInstance(TArray<FFlowAssetSaveData>& SavedFlo
 			// iterate SubGraphs
 			if (UFlowNode_SubGraph* SubGraphNode = Cast<UFlowNode_SubGraph>(Node))
 			{
-				const TWeakObjectPtr<UFlowAsset> SubFlowInstance = GetFlowInstance(SubGraphNode);
-				if (SubFlowInstance.IsValid())
+				if (UFlowAsset* SubFlowInstance = GetFlowInstance(SubGraphNode).Get())
 				{
 					const FFlowAssetSaveData SubAssetRecord = SubFlowInstance->SaveInstance(SavedFlowInstances);
 					SubGraphNode->SavedAssetInstanceName = SubAssetRecord.InstanceName;

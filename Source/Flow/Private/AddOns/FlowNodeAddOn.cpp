@@ -1,5 +1,4 @@
 // Copyright https://github.com/MothCocoon/FlowGraph/graphs/contributors
-
 #include "AddOns/FlowNodeAddOn.h"
 
 #include "FlowLogChannels.h"
@@ -12,23 +11,64 @@
 
 UFlowNodeAddOn::UFlowNodeAddOn()
 {
+	// AddOns have no single creation choke point analogous to UFlowAsset::RegisterNode, so - unlike
+	// UFlowNode - auto-mint a Guid here. See UFlowNodeBase::NodeGuid's doc comment.
+	SetGuid(FGuid::NewGuid());
+
 #if WITH_EDITOR
 	NodeDisplayStyle = FlowNodeStyle::AddOn;
 #endif
 }
 
-void UFlowNodeAddOn::InitializeInstance()
+#if WITH_EDITOR
+void UFlowNodeAddOn::PostDuplicate(bool bDuplicateForPIE)
 {
-	CacheFlowNode();
+	Super::PostDuplicate(bDuplicateForPIE);
 
-	Super::InitializeInstance();
+	if (!bDuplicateForPIE)
+	{
+		// The constructor can record a CDO identity before serialized properties are copied.
+		// At this hook, NodeGuid is the source identity that the copied graph pins actually use.
+		ClearPreviousGuidForPinRemapping();
+
+		SetGuid(FGuid::NewGuid());
+	}
 }
 
-void UFlowNodeAddOn::DeinitializeInstance()
+void UFlowNodeAddOn::PostEditImport()
 {
-	Super::DeinitializeInstance();
+	Super::PostEditImport();
 
-	FlowNode = nullptr;
+	// Discard constructor history and remap from the imported, serialized identity.
+	ClearPreviousGuidForPinRemapping();
+
+	SetGuid(FGuid::NewGuid());
+}
+#endif
+
+EFlowAddOnAcceptResult UFlowNodeAddOn::AcceptFlowNodeAddOnParent_Implementation(
+	const UFlowNodeBase* ParentTemplate,
+	const TArray<UFlowNodeAddOn*>& AdditionalAddOnsToAssumeAreChildren) const
+{
+	// Subclasses may override this function to opt in to parent classes
+	return EFlowAddOnAcceptResult::Undetermined;
+}
+
+bool UFlowNodeAddOn::IsSupportedInputPinName(const FName& PinName) const
+{
+	if (InputPins.IsEmpty())
+	{
+		return true;
+	}
+
+	if (const FFlowPin* FoundFlowPin = FindFlowPinByName(PinName, InputPins))
+	{
+		return true;
+	}
+	else
+	{
+		return false;
+	}
 }
 
 void UFlowNodeAddOn::TriggerFirstOutput(const bool bFinish)
@@ -55,20 +95,25 @@ void UFlowNodeAddOn::Finish()
 	}
 }
 
-EFlowAddOnAcceptResult UFlowNodeAddOn::AcceptFlowNodeAddOnParent_Implementation(
-	const UFlowNodeBase* ParentTemplate,
-	const TArray<UFlowNodeAddOn*>& AdditionalAddOnsToAssumeAreChildren) const
+void UFlowNodeAddOn::InitializeInstance()
 {
-	// Subclasses may override this function to opt in to parent classes
-	return EFlowAddOnAcceptResult::Undetermined;
+	CacheFlowNode();
+
+	Super::InitializeInstance();
 }
 
-void UFlowNodeAddOn::NotifyPreloadComplete()
+void UFlowNodeAddOn::DeinitializeInstance()
 {
-	if (ensure(FlowNode))
-	{
-		FlowNode->NotifyPreloadComplete();
-	}
+	Super::DeinitializeInstance();
+
+	FlowNode = nullptr;
+}
+
+void UFlowNodeAddOn::InitializeReplica()
+{
+	CacheFlowNode();
+
+	Super::InitializeReplica();
 }
 
 UFlowNode* UFlowNodeAddOn::GetFlowNode() const
@@ -109,22 +154,30 @@ int32 UFlowNodeAddOn::GetRandomSeed() const
 	return 0;
 }
 
-bool UFlowNodeAddOn::IsSupportedInputPinName(const FName& PinName) const
+void UFlowNodeAddOn::NotifyPreloadComplete()
 {
-	if (InputPins.IsEmpty())
+	if (ensure(FlowNode))
 	{
-		return true;
-	}
-
-	if (const FFlowPin* FoundFlowPin = FindFlowPinByName(PinName, InputPins))
-	{
-		return true;
-	}
-	else
-	{
-		return false;
+		FlowNode->NotifyPreloadComplete();
 	}
 }
+
+#if WITH_EDITOR
+TArray<FFlowPin> UFlowNodeAddOn::GetContextInputs() const
+{
+	return GetPinsForContext(InputPins, Super::GetContextInputs());
+}
+
+TArray<FFlowPin> UFlowNodeAddOn::GetContextOutputs() const
+{
+	return GetPinsForContext(OutputPins, Super::GetContextOutputs());
+}
+
+void UFlowNodeAddOn::RequestReconstructionOnOwningFlowNode() const
+{
+	(void)OnAddOnRequestedParentReconstruction.ExecuteIfBound();
+}
+#endif // WITH_EDITOR
 
 void UFlowNodeAddOn::CacheFlowNode()
 {
@@ -134,9 +187,13 @@ void UFlowNodeAddOn::CacheFlowNode()
 }
 
 #if WITH_EDITOR
-TArray<FFlowPin> UFlowNodeAddOn::GetPinsForContext(const TArray<FFlowPin>& Context) const
+// Build an AddOn's context from the inherited context of the same direction before adding
+// its own pins. This keeps nested input and output contributions separate during reconstruction.
+TArray<FFlowPin> UFlowNodeAddOn::GetPinsForContext(
+	const TArray<FFlowPin>& Context,
+	const TArray<FFlowPin>& BaseContext) const
 {
-	TArray<FFlowPin> ContextPins = Super::GetContextInputs();
+	TArray<FFlowPin> ContextPins = BaseContext;
 
 	ContextPins.Reserve(ContextPins.Num() + Context.Num());
 
@@ -153,20 +210,5 @@ TArray<FFlowPin> UFlowNodeAddOn::GetPinsForContext(const TArray<FFlowPin>& Conte
 	}
 
 	return ContextPins;
-}
-
-TArray<FFlowPin> UFlowNodeAddOn::GetContextInputs() const
-{
-	return GetPinsForContext(InputPins);
-}
-
-TArray<FFlowPin> UFlowNodeAddOn::GetContextOutputs() const
-{
-	return GetPinsForContext(OutputPins);
-}
-
-void UFlowNodeAddOn::RequestReconstructionOnOwningFlowNode() const
-{
-	(void)OnAddOnRequestedParentReconstruction.ExecuteIfBound();
 }
 #endif // WITH_EDITOR

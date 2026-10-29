@@ -32,7 +32,7 @@ void UFlowNode_Timer::InitializeInstance()
 {
 	Super::InitializeInstance();
 
-	// Initialize to the configured value, 
+	// Initialize to the configured value,
 	// but we will overwrite this with the results of ResolveCompletionTime() when the timer is started
 	ResolvedCompletionTime = CompletionTime;
 }
@@ -238,3 +238,14 @@ void UFlowNode_Timer::UpdateNodeConfigText_Implementation()
 #endif
 
 #undef LOCTEXT_NAMESPACE
+
+#if WITH_EDITOR
+const FFlowAgentDoc& UFlowNode_Timer::GetAgentDoc() const
+{
+	static const FFlowAgentDoc Doc = MakeAgentDoc(
+		/*Guidance*/ TEXT("CompletionTime is overridable via an input data pin at runtime - if that pin is connected, the property value is ignored in favor of the resolved data pin value. Set StepTime to 0 to disable periodic Step firings."),
+		/*Tags*/     { TEXT("route"), TEXT("timer"), TEXT("delay") },
+		/*Articles*/ {  });
+	return Doc;
+}
+#endif

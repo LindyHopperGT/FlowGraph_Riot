@@ -11,6 +11,7 @@
 #include "Nodes/FlowNode.h"
 #include "Types/FlowArray.h"
 #include "Types/FlowDataPinResults.h"
+#include "Types/FlowInjectComponentsManager.h"
 #include "Types/FlowPinTypesStandard.h"
 #include "Types/FlowNamedDataPinProperty.h"
 
@@ -29,6 +30,18 @@
 #include UE_INLINE_GENERATED_CPP_BY_NAME(FlowNodeBase)
 
 using namespace EFlowForEachAddOnFunctionReturnValue_Classifiers;
+
+void UFlowNodeBase::SetGuid(const FGuid& NewGuid)
+{
+#if WITH_EDITOR
+	if (NodeGuid.IsValid() && NodeGuid != NewGuid && !PreviousGuidForPinRemapping.IsValid())
+	{
+		PreviousGuidForPinRemapping = NodeGuid;
+	}
+#endif
+
+	NodeGuid = NewGuid;
+}
 
 UWorld* UFlowNodeBase::GetWorld() const
 {
@@ -54,22 +67,7 @@ void UFlowNodeBase::InitializeInstance()
 
 	if (!AddOns.IsEmpty())
 	{
-		TArray<UFlowNodeAddOn*> SourceAddOns = AddOns;
-		AddOns.Reset();
-
-		for (UFlowNodeAddOn* SourceAddOn : SourceAddOns)
-		{
-			// Create a new instance of each AddOn
-			if (IsValid(SourceAddOn))
-			{
-				UFlowNodeAddOn* NewAddOnInstance = NewObject<UFlowNodeAddOn>(this, SourceAddOn->GetClass(), NAME_None, RF_Transient, SourceAddOn, false, nullptr);
-				AddOns.Add(NewAddOnInstance);
-			}
-			else
-			{
-				LogError(FString::Printf(TEXT("Null AddOn found in node %s"), *GetName()), EFlowOnScreenMessageType::Permanent);
-			}
-		}
+		InstantiateAddOns();
 
 		for (UFlowNodeAddOn* AddOn : AddOns)
 		{
@@ -121,6 +119,21 @@ void UFlowNodeBase::Cleanup()
 		AddOn->Cleanup();
 	}
 
+	if (const UFlowAsset* FlowAsset = GetFlowAsset())
+	{
+		UFlowInjectComponentsManager* LocalManager = FlowAsset->FindComponentInjectionManager();
+		if (LocalManager)
+		{
+			LocalManager->UnregisterAllComponentUsers(*this);
+		}
+
+		UFlowInjectComponentsManager* RootManager = FlowAsset->FindComponentInjectionManagerInRootFlow();
+		if (RootManager && RootManager != LocalManager)
+		{
+			RootManager->UnregisterAllComponentUsers(*this);
+		}
+	}
+
 	IFlowCoreExecutableInterface::Cleanup();
 }
 
@@ -141,11 +154,6 @@ void UFlowNodeBase::ExecuteInputForSelfAndAddOns(const FName& PinName)
 	}
 }
 
-void UFlowNodeBase::TriggerOutputPin(const FFlowOutputPinHandle Pin, const bool bFinish, const EFlowPinActivationType ActivationType)
-{
-	TriggerOutput(Pin.PinName, bFinish, ActivationType);
-}
-
 void UFlowNodeBase::TriggerOutput(const FString& PinName, const bool bFinish)
 {
 	TriggerOutput(FName(PinName), bFinish);
@@ -159,6 +167,11 @@ void UFlowNodeBase::TriggerOutput(const FText& PinName, const bool bFinish)
 void UFlowNodeBase::TriggerOutput(const TCHAR* PinName, const bool bFinish)
 {
 	TriggerOutput(FName(PinName), bFinish);
+}
+
+void UFlowNodeBase::TriggerOutputPin(const FFlowOutputPinHandle Pin, const bool bFinish, const EFlowPinActivationType ActivationType)
+{
+	TriggerOutput(Pin.PinName, bFinish, ActivationType);
 }
 
 const FFlowPin* UFlowNodeBase::FindFlowPinByName(const FName& PinName, const TArray<FFlowPin>& FlowPins)
@@ -227,27 +240,6 @@ TArray<FFlowPin> UFlowNodeBase::GetContextOutputs() const
 }
 
 #endif
-
-void UFlowNodeBase::LogValidationError(const FString& Message)
-{
-#if WITH_EDITOR
-	ValidationLog.Error<UFlowNodeBase>(*Message, this);
-#endif
-}
-
-void UFlowNodeBase::LogValidationWarning(const FString& Message)
-{
-#if WITH_EDITOR
-	ValidationLog.Warning<UFlowNodeBase>(*Message, this);
-#endif
-}
-
-void UFlowNodeBase::LogValidationNote(const FString& Message)
-{
-#if WITH_EDITOR
-	ValidationLog.Note<UFlowNodeBase>(*Message, this);
-#endif
-}
 
 UFlowAsset* UFlowNodeBase::GetFlowAsset() const
 {
@@ -324,6 +316,26 @@ TArray<UFlowNodeBase*> UFlowNodeBase::BuildFlowNodeBaseAncestorChain(UFlowNodeBa
 	return AncestorChain;
 }
 
+void UFlowNodeBase::InstantiateAddOns()
+{
+	TArray<UFlowNodeAddOn*> SourceAddOns = AddOns;
+	AddOns.Reset();
+
+	for (UFlowNodeAddOn* SourceAddOn : SourceAddOns)
+	{
+		// Create a new instance of each AddOn
+		if (IsValid(SourceAddOn))
+		{
+			UFlowNodeAddOn* NewAddOnInstance = NewObject<UFlowNodeAddOn>(this, SourceAddOn->GetClass(), NAME_None, RF_Transient, SourceAddOn, false, nullptr);
+			AddOns.Add(NewAddOnInstance);
+		}
+		else
+		{
+			LogError(FString::Printf(TEXT("Null AddOn found in node %s"), *GetName()), EFlowOnScreenMessageType::Permanent);
+		}
+	}
+}
+
 EFlowAddOnAcceptResult UFlowNodeBase::AcceptFlowNodeAddOnChild_Implementation(
 	const UFlowNodeAddOn* AddOnTemplate,
 	const TArray<UFlowNodeAddOn*>& AdditionalAddOnsToAssumeAreChildren) const
@@ -332,10 +344,34 @@ EFlowAddOnAcceptResult UFlowNodeBase::AcceptFlowNodeAddOnChild_Implementation(
 	return EFlowAddOnAcceptResult::Undetermined;
 }
 
+bool UFlowNodeBase::HasOtherDirectAddOnChildMatching(const UClass& ClassOrInterface, const UFlowNodeAddOn* IgnoredAddOn, const TArray<UFlowNodeAddOn*>& AdditionalAddOnsToAssumeAreChildren) const
+{
+	const auto IsOtherMatchingAddOn = [&ClassOrInterface, IgnoredAddOn](const UFlowNodeAddOn* AddOn)
+	{
+		return IsValid(AddOn) && AddOn != IgnoredAddOn && AddOn->IsClassOrImplementsInterface(ClassOrInterface);
+	};
+
+	for (const UFlowNodeAddOn* AddOn : GetFlowNodeAddOnChildren())
+	{
+		if (IsOtherMatchingAddOn(AddOn))
+		{
+			return true;
+		}
+	}
+
+	for (const UFlowNodeAddOn* AddOn : AdditionalAddOnsToAssumeAreChildren)
+	{
+		if (IsOtherMatchingAddOn(AddOn))
+		{
+			return true;
+		}
+	}
+
+	return false;
+}
+
 #if WITH_EDITOR
-EFlowAddOnAcceptResult UFlowNodeBase::CheckAcceptFlowNodeAddOnChild(
-	const UFlowNodeAddOn* AddOnTemplate,
-	const TArray<UFlowNodeAddOn*>& AdditionalAddOnsToAssumeAreChildren) const
+EFlowAddOnAcceptResult UFlowNodeBase::CheckAcceptFlowNodeAddOnChild(const UFlowNodeAddOn* AddOnTemplate, const TArray<UFlowNodeAddOn*>& AdditionalAddOnsToAssumeAreChildren) const
 {
 	if (!IsValid(AddOnTemplate))
 	{
@@ -410,9 +446,7 @@ EFlowForEachAddOnFunctionReturnValue UFlowNodeBase::ForEachAddOnConst(
 	return ReturnValue;
 }
 
-EFlowForEachAddOnFunctionReturnValue UFlowNodeBase::ForEachAddOn(
-	const FFlowNodeAddOnFunction& Function,
-	EFlowForEachAddOnChildRule AddOnChildRule) const
+EFlowForEachAddOnFunctionReturnValue UFlowNodeBase::ForEachAddOn(const FFlowNodeAddOnFunction& Function, const EFlowForEachAddOnChildRule AddOnChildRule) const
 {
 	FLOW_ASSERT_ENUM_MAX(EFlowForEachAddOnFunctionReturnValue, 3);
 
@@ -447,10 +481,7 @@ EFlowForEachAddOnFunctionReturnValue UFlowNodeBase::ForEachAddOn(
 	return ReturnValue;
 }
 
-EFlowForEachAddOnFunctionReturnValue UFlowNodeBase::ForEachAddOnForClassConst(
-	const UClass& InterfaceOrClass,
-	const FConstFlowNodeAddOnFunction& Function,
-	EFlowForEachAddOnChildRule AddOnChildRule) const
+EFlowForEachAddOnFunctionReturnValue UFlowNodeBase::ForEachAddOnForClassConst(const UClass& InterfaceOrClass, const FConstFlowNodeAddOnFunction& Function, const EFlowForEachAddOnChildRule AddOnChildRule) const
 {
 	FLOW_ASSERT_ENUM_MAX(EFlowForEachAddOnFunctionReturnValue, 3);
 
@@ -529,211 +560,28 @@ EFlowForEachAddOnFunctionReturnValue UFlowNodeBase::ForEachAddOnForClass(
 	return ReturnValue;
 }
 
-#if WITH_EDITOR
-void UFlowNodeBase::PostLoad()
+void UFlowNodeBase::InitializeReplica()
 {
-	Super::PostLoad();
+	InstantiateAddOns();
 
-	EnsureNodeDisplayStyle();
-}
-
-void UFlowNodeBase::SetGraphNode(UEdGraphNode* NewGraphNode)
-{
-	GraphNode = NewGraphNode;
-
-	UpdateNodeConfigText();
-}
-
-void UFlowNodeBase::SetCanDelete(const bool CanDelete)
-{
-	bCanDelete = CanDelete;
-}
-
-void UFlowNodeBase::SetupForEditing(UEdGraphNode& EdGraphNode)
-{
-	SetGraphNode(&EdGraphNode);
-
-	// Refresh the Config text when setting up this FlowNodeBase for editing
-	UpdateNodeConfigText();
-}
-
-void UFlowNodeBase::FixNode(UEdGraphNode* NewGraphNode)
-{
-	// Fix any node pointers that may be out of date
-	if (NewGraphNode)
+	for (UFlowNodeAddOn* AddOn : AddOns)
 	{
-		GraphNode = NewGraphNode;
+		AddOn->InitializeReplica();
 	}
 }
 
-void UFlowNodeBase::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
+void UFlowNodeBase::MarkReplicatedPropertiesDirty()
 {
-	Super::PostEditChangeProperty(PropertyChangedEvent);
-
-	if (!PropertyChangedEvent.Property)
+	if (UFlowNode* FlowNode = GetFlowNodeSelfOrOwner())
 	{
-		return;
+		if (UFlowAsset* FlowAsset = FlowNode->GetFlowAsset())
+		{
+			FlowAsset->WriteReplicatedNodeState(*FlowNode);
+		}
 	}
-
-	const FName PropertyName = PropertyChangedEvent.GetPropertyName();
-	if (PropertyName == GET_MEMBER_NAME_CHECKED(UFlowNode, AddOns))
-	{
-		// Potentially need to rebuild the pins from the AddOns of this node
-		OnReconstructionRequested.ExecuteIfBound();
-	}
-
-	UpdateNodeConfigText();
-}
-#endif
-
-FString UFlowNodeBase::GetStatusString() const
-{
-	return K2_GetStatusString();
 }
 
 #if WITH_EDITOR
-FString UFlowNodeBase::GetNodeCategory() const
-{
-	if (GetClass()->ClassGeneratedBy)
-	{
-		const FString& BlueprintCategory = Cast<UBlueprint>(GetClass()->ClassGeneratedBy)->BlueprintCategory;
-		if (!BlueprintCategory.IsEmpty())
-		{
-			return BlueprintCategory;
-		}
-	}
-
-	return K2_GetNodeCategory();
-}
-
-bool UFlowNodeBase::GetDynamicTitleColor(FLinearColor& OutColor) const
-{
-	// Legacy asset support for NodeStyle == EFlowNodeStyle::Custom
-	if (NodeDisplayStyle == FlowNodeStyle::Custom || NodeStyle == EFlowNodeStyle::Custom)
-	{
-		OutColor = NodeColor;
-		return true;
-	}
-
-	return false;
-}
-
-FText UFlowNodeBase::GetNodeTitle() const
-{
-	if (HasAnyFlags(RF_ClassDefaultObject | RF_ArchetypeObject))
-	{
-		// For the archetype of the node (e.g. in the node selection UI), only use the default value
-		return UFlowNodeBase::K2_GetNodeTitle_Implementation();
-	}
-	else
-	{
-		return K2_GetNodeTitle();
-	}
-}
-
-FText UFlowNodeBase::GetNodeToolTip() const
-{
-	if (HasAnyFlags(RF_ClassDefaultObject | RF_ArchetypeObject))
-	{
-		// For the archetype of the node (e.g. in the node selection UI), only use the default value
-		return UFlowNodeBase::K2_GetNodeToolTip_Implementation();
-	}
-	else
-	{
-		return K2_GetNodeToolTip();
-	}
-}
-
-FText UFlowNodeBase::GetGeneratedDisplayName() const
-{
-	static const FName NAME_GeneratedDisplayName(TEXT("GeneratedDisplayName"));
-
-	if (GetClass()->ClassGeneratedBy)
-	{
-		UClass* Class = Cast<UBlueprint>(GetClass()->ClassGeneratedBy)->GeneratedClass;
-		return Class->GetMetaDataText(NAME_GeneratedDisplayName);
-	}
-
-	return GetClass()->GetMetaDataText(NAME_GeneratedDisplayName);
-}
-
-void UFlowNodeBase::EnsureNodeDisplayStyle()
-{
-	// todo: remove in Flow 2.2
-
-	// Backward compatibility update to convert NodeStyle to NodeDisplayStyle
-	FLOW_ASSERT_ENUM_MAX(EFlowNodeStyle, 7);
-
-	const FGameplayTag NodeDisplayStylePrev = NodeDisplayStyle;
-
-	switch (NodeStyle)
-	{
-		case EFlowNodeStyle::Condition:
-			{
-				NodeDisplayStyle = FlowNodeStyle::Condition;
-			}
-			break;
-		case EFlowNodeStyle::Default:
-			{
-				NodeDisplayStyle = FlowNodeStyle::Default;
-			}
-			break;
-		case EFlowNodeStyle::InOut:
-			{
-				NodeDisplayStyle = FlowNodeStyle::InOut;
-			}
-			break;
-		case EFlowNodeStyle::Latent:
-			{
-				NodeDisplayStyle = FlowNodeStyle::Latent;
-			}
-			break;
-		case EFlowNodeStyle::Logic:
-			{
-				NodeDisplayStyle = FlowNodeStyle::Logic;
-			}
-			break;
-		case EFlowNodeStyle::SubGraph:
-			{
-				NodeDisplayStyle = FlowNodeStyle::SubGraph;
-			}
-			break;
-		case EFlowNodeStyle::Custom:
-			{
-				NodeDisplayStyle = FlowNodeStyle::Custom;
-			}
-			break;
-		default: break;
-	}
-
-	if (GEditor != nullptr && NodeDisplayStyle != NodeDisplayStylePrev)
-	{
-		NodeStyle = EFlowNodeStyle::Invalid;
-		Modify();
-	}
-}
-
-FString UFlowNodeBase::GetNodeDescription() const
-{
-	return K2_GetNodeDescription();
-}
-
-FString UFlowNodeBase::GetAddOnDescriptions() const
-{
-	FString Result;
-
-	for (const UFlowNodeBase* Addon : AddOns)
-	{
-		const FString& Description = Addon->GetNodeDescription();
-		if (!Description.IsEmpty())
-		{
-			Result.Append(Description).Append(LINE_TERMINATOR);
-		}
-	}
-
-	return Result;
-}
-
 bool UFlowNodeBase::CanModifyFlowDataPinType() const
 {
 	return !IsPlacedInFlowAsset() || IsFlowNamedPropertiesSupplier();
@@ -770,263 +618,15 @@ bool UFlowNodeBase::IsFlowNamedPropertiesSupplier() const
 }
 #endif
 
-FText UFlowNodeBase::K2_GetNodeTitle_Implementation() const
-{
-#if WITH_EDITOR
-	if (GetClass()->ClassGeneratedBy)
-	{
-		const FString& BlueprintTitle = Cast<UBlueprint>(GetClass()->ClassGeneratedBy)->BlueprintDisplayName;
-		if (!BlueprintTitle.IsEmpty())
-		{
-			return FText::FromString(BlueprintTitle);
-		}
-	}
-
-	static const FName NAME_DisplayName(TEXT("DisplayName"));
-	if (bDisplayNodeTitleWithoutPrefix && !GetClass()->HasMetaData(NAME_DisplayName))
-	{
-		return GetGeneratedDisplayName();
-	}
-
-	return GetClass()->GetDisplayNameText();
-#else
-	return FText::GetEmpty();
-#endif
-}
-
-FText UFlowNodeBase::K2_GetNodeToolTip_Implementation() const
-{
-#if WITH_EDITOR
-	if (GetClass()->ClassGeneratedBy)
-	{
-		const FString& BlueprintToolTip = Cast<UBlueprint>(GetClass()->ClassGeneratedBy)->BlueprintDescription;
-		if (!BlueprintToolTip.IsEmpty())
-		{
-			return FText::FromString(BlueprintToolTip);
-		}
-	}
-
-	static const FName NAME_Tooltip(TEXT("Tooltip"));
-	if (bDisplayNodeTitleWithoutPrefix && !GetClass()->HasMetaData(NAME_Tooltip))
-	{
-		return GetGeneratedDisplayName();
-	}
-
-	// GetClass()->GetToolTipText() can return meta = (DisplayName = ... ), but ignore BlueprintDisplayName even if it is BP Node
-	if (GetClass()->ClassGeneratedBy)
-	{
-		const FString& BlueprintTitle = Cast<UBlueprint>(GetClass()->ClassGeneratedBy)->BlueprintDisplayName;
-		if (!BlueprintTitle.IsEmpty())
-		{
-			return FText::FromString(BlueprintTitle);
-		}
-	}
-
-	return GetClass()->GetToolTipText();
-#else
-	return FText::GetEmpty();
-#endif
-}
-
-FString UFlowNodeBase::K2_GetNodeCategory_Implementation() const
-{
-#if WITH_EDITORONLY_DATA
-	return Category;
-#else
-	return "";
-#endif
-}
-
-FText UFlowNodeBase::GetNodeConfigText() const
-{
-#if WITH_EDITORONLY_DATA
-	return DevNodeConfigText;
-#else
-	return FText::GetEmpty();
-#endif
-}
-
-void UFlowNodeBase::SetNodeConfigText(const FText& NodeConfigText)
-{
-#if WITH_EDITOR
-	if (!NodeConfigText.EqualTo(DevNodeConfigText))
-	{
-		DevNodeConfigText = NodeConfigText;
-	}
-#endif
-}
-
-void UFlowNodeBase::UpdateNodeConfigText_Implementation()
-{
-}
-
-void UFlowNodeBase::LogError(FString Message, const EFlowOnScreenMessageType OnScreenMessageType) const
-{
-#if !NO_LOGGING || UE_ENABLE_DEBUG_DRAWING
-	if (BuildMessage(Message))
-	{
-		// Output Log
-		UE_LOG(LogFlow, Error, TEXT("%s"), *Message);
-		
-#if WITH_EDITOR
-		if (GEditor)
-		{
-			// Message Log
-			GetFlowAsset()->GetTemplateAsset()->LogError(Message, this);
-		}
-#endif
-		
-#if UE_ENABLE_DEBUG_DRAWING
-		// OnScreen Message
-		if (OnScreenMessageType == EFlowOnScreenMessageType::Permanent)
-		{
-			if (UWorld* World = GetWorld())
-			{
-				if (UViewportStatsSubsystem* StatsSubsystem = World->GetSubsystem<UViewportStatsSubsystem>())
-				{
-					StatsSubsystem->AddDisplayDelegate([WeakThis = TWeakObjectPtr<const UFlowNodeBase>(this), Message](FText& OutText, FLinearColor& OutColor)
-					{
-						const UFlowNodeBase* ThisPtr = WeakThis.Get();
-						if (ThisPtr && ThisPtr->GetFlowNodeSelfOrOwner() && ThisPtr->GetFlowNodeSelfOrOwner()->GetActivationState() != EFlowNodeState::NeverActivated)
-						{
-							OutText = FText::FromString(Message);
-							OutColor = FLinearColor::Red;
-							return true;
-						}
-
-						return false;
-					});
-				}
-			}
-		}
-		else if (OnScreenMessageType == EFlowOnScreenMessageType::Temporary)
-		{
-			GEngine->AddOnScreenDebugMessage(-1, 2.0f, FColor::Red, Message);
-		}
-#endif
-	}
-#endif
-}
-
-void UFlowNodeBase::LogWarning(FString Message) const
-{
-#if !NO_LOGGING
-	if (BuildMessage(Message))
-	{
-		// Output Log
-		UE_LOG(LogFlow, Warning, TEXT("%s"), *Message);
-
-#if WITH_EDITOR
-		if (GEditor)
-		{
-			// Message Log
-			GetFlowAsset()->GetTemplateAsset()->LogWarning(Message, this);
-		}
-#endif
-	}
-#endif
-}
-
-void UFlowNodeBase::LogNote(FString Message) const
-{
-#if !NO_LOGGING
-	if (BuildMessage(Message))
-	{
-		// Output Log
-		UE_LOG(LogFlow, Log, TEXT("%s"), *Message);
-
-#if WITH_EDITOR
-		if (GEditor)
-		{
-			// Message Log
-			GetFlowAsset()->GetTemplateAsset()->LogNote(Message, this);
-		}
-#endif
-	}
-#endif
-}
-
-void UFlowNodeBase::LogVerbose(FString Message) const
-{
-#if !NO_LOGGING
-	if (BuildMessage(Message))
-	{
-		// Output Log
-		UE_LOG(LogFlow, Verbose, TEXT("%s"), *Message);
-	}
-#endif
-}
-
-#if !NO_LOGGING || UE_ENABLE_DEBUG_DRAWING
-bool UFlowNodeBase::BuildMessage(FString& Message) const
-{
-	const UFlowAsset* FlowAsset = GetFlowAsset();
-	if (FlowAsset && FlowAsset->GetTemplateAsset()) // this is runtime log which is should be only called on runtime instances of asset
-	{
-		const FString TemplatePath = FlowAsset->GetTemplateAsset()->GetPathName();
-		Message.Append(TEXT(" --- node ")).Append(GetName()).Append(TEXT(", asset ")).Append(FPaths::GetPath(TemplatePath) / FPaths::GetBaseFilename(TemplatePath));
-
-		return true;
-	}
-
-	return false;
-}
-#endif
-
-#if WITH_EDITOR
-EDataValidationResult UFlowNodeBase::ValidateNode()
-{
-	EDataValidationResult ValidationResult = EDataValidationResult::NotValidated;
-
-	if (GetClass()->IsFunctionImplementedInScript(GET_FUNCTION_NAME_CHECKED(UFlowNodeBase, K2_ValidateNode)))
-	{
-		ValidationResult = K2_ValidateNode();
-	}
-
-	return ValidationResult;
-}
-#endif
-
-bool UFlowNodeBase::TryAddValueToFormatNamedArguments(const FFlowNamedDataPinProperty& NamedDataPinProperty, FFormatNamedArguments& InOutArguments) const
-{
-	if (NamedDataPinProperty.Name.IsNone() || !NamedDataPinProperty.DataPinValue.IsValid())
-	{
-		return false;
-	}
-
-	const FFlowDataPinValue& DataPinValue = NamedDataPinProperty.DataPinValue.Get();
-
-	const FFlowPinTypeName PinTypeName = DataPinValue.GetPinTypeName();
-	if (PinTypeName.IsNone())
-	{
-		return false;
-	}
-
-	const FFlowPinType* PinType = FFlowPinType::LookupPinType(PinTypeName);
-	if (!PinType)
-	{
-		return false;
-	}
-
-	FFormatArgumentValue FormatValue;
-	if (PinType->ResolveAndFormatPinValue(*this, NamedDataPinProperty.Name, FormatValue))
-	{
-		InOutArguments.Add(NamedDataPinProperty.Name.ToString(), FormatValue);
-		return true;
-	}
-
-	return false;
-}
-
 FFlowDataPinResult UFlowNodeBase::TryResolveDataPin(FName PinName) const
 {
 	FFlowDataPinResult DataPinResult(EFlowDataPinResolveResult::Success);
 
 	const UFlowNode* FlowNode = GetFlowNodeSelfOrOwner();
-	UFlowNode::TFlowPinValueSupplierDataArray PinValueSupplierDatas;
-	if (!FlowNode->TryGetFlowDataPinSupplierDatasForPinName(PinName, PinValueSupplierDatas))
+	UFlowNode::TFlowPinValueSupplierDataArray PinValueSupplierData;
+	if (!FlowNode->TryGetFlowDataPinSupplierDatasForPinName(PinName, PinValueSupplierData))
 	{
-		// If we could not build the PinValueDataSuppliers array, 
+		// If we could not build the PinValueDataSuppliers array,
 		// then the pin must be disconnected and have no default value available.
 		DataPinResult.Result = EFlowDataPinResolveResult::FailedWithError;
 
@@ -1036,9 +636,9 @@ FFlowDataPinResult UFlowNodeBase::TryResolveDataPin(FName PinName) const
 	}
 
 	// Iterate over the suppliers in inverse order
-	for (int32 Index = PinValueSupplierDatas.Num() - 1; Index >= 0; --Index)
+	for (int32 Index = PinValueSupplierData.Num() - 1; Index >= 0; --Index)
 	{
-		const FFlowPinValueSupplierData& SupplierData = PinValueSupplierDatas[Index];
+		const FFlowPinValueSupplierData& SupplierData = PinValueSupplierData[Index];
 
 		DataPinResult = SupplierData.PinValueSupplier->TrySupplyDataPin(SupplierData.SupplierPinName);
 
@@ -1162,7 +762,7 @@ FFlowDataPinResult_InstancedStruct UFlowNodeBase::TryResolveDataPinAsInstancedSt
 FFlowDataPinResult_Object UFlowNodeBase::TryResolveDataPinAsObject(const FName& PinName) const
 {
 	FFlowDataPinResult_Object ResolveResult;
-	TObjectPtr<UObject> Value = nullptr;
+	TObjectPtr<UObject> Value;
 	ResolveResult.Result = TryResolveDataPinValue<FFlowPinType_Object>(PinName, Value);
 	ResolveResult.Value = Value;
 	return ResolveResult;
@@ -1171,10 +771,525 @@ FFlowDataPinResult_Object UFlowNodeBase::TryResolveDataPinAsObject(const FName& 
 FFlowDataPinResult_Class UFlowNodeBase::TryResolveDataPinAsClass(const FName& PinName) const
 {
 	FFlowDataPinResult_Class ResolveResult;
-	TObjectPtr<UClass> Value = nullptr;
+	TObjectPtr<UClass> Value;
 	ResolveResult.Result = TryResolveDataPinValue<FFlowPinType_Class>(PinName, Value);
 	ResolveResult.SetValueFromObjectPtr(Value);
 	return ResolveResult;
 }
 
 // --
+
+bool UFlowNodeBase::TryAddValueToFormatNamedArguments(const FFlowNamedDataPinProperty& NamedDataPinProperty, FFormatNamedArguments& InOutArguments) const
+{
+	if (NamedDataPinProperty.Name.IsNone() || !NamedDataPinProperty.DataPinValue.IsValid())
+	{
+		return false;
+	}
+
+	const FFlowDataPinValue& DataPinValue = NamedDataPinProperty.DataPinValue.Get();
+
+	const FFlowPinTypeName PinTypeName = DataPinValue.GetPinTypeName();
+	if (PinTypeName.IsNone())
+	{
+		return false;
+	}
+
+	const FFlowPinType* PinType = FFlowPinType::LookupPinType(PinTypeName);
+	if (!PinType)
+	{
+		return false;
+	}
+
+	FFormatArgumentValue FormatValue;
+	if (PinType->ResolveAndFormatPinValue(*this, NamedDataPinProperty.Name, FormatValue))
+	{
+		InOutArguments.Add(NamedDataPinProperty.Name.ToString(), FormatValue);
+		return true;
+	}
+
+	return false;
+}
+
+#if WITH_EDITOR
+void UFlowNodeBase::PostLoad()
+{
+	Super::PostLoad();
+
+	EnsureNodeDisplayStyle();
+}
+
+void UFlowNodeBase::SetGraphNode(UEdGraphNode* NewGraphNode)
+{
+	GraphNode = NewGraphNode;
+
+	UpdateNodeConfigText();
+}
+
+void UFlowNodeBase::SetCanDelete(const bool CanDelete)
+{
+	bCanDelete = CanDelete;
+}
+
+void UFlowNodeBase::SetupForEditing(UEdGraphNode& EdGraphNode)
+{
+	SetGraphNode(&EdGraphNode);
+
+	// Refresh the Config text when setting up this FlowNodeBase for editing
+	UpdateNodeConfigText();
+}
+
+void UFlowNodeBase::FixNode(UEdGraphNode* NewGraphNode)
+{
+	// Fix any node pointers that may be out of date
+	if (NewGraphNode)
+	{
+		GraphNode = NewGraphNode;
+	}
+}
+
+void UFlowNodeBase::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
+{
+	Super::PostEditChangeProperty(PropertyChangedEvent);
+
+	if (!PropertyChangedEvent.Property)
+	{
+		return;
+	}
+
+	const FName PropertyName = PropertyChangedEvent.GetPropertyName();
+	if (PropertyName == GET_MEMBER_NAME_CHECKED(UFlowNode, AddOns))
+	{
+		// Potentially need to rebuild the pins from the AddOns of this node
+		OnReconstructionRequested.ExecuteIfBound();
+	}
+
+	UpdateNodeConfigText();
+}
+#endif
+
+FString UFlowNodeBase::GetStatusString() const
+{
+	return K2_GetStatusString();
+}
+
+#if WITH_EDITOR
+FString UFlowNodeBase::GetNodeCategory() const
+{
+	// Category declared in class metadata, for script-defined nodes (e.g. AngelScript) that have no UBlueprint to hold BlueprintCategory.
+	const FString& MetadataCategory = GetClass()->GetMetaData(TEXT("BlueprintCategoryName"));
+	if (!MetadataCategory.IsEmpty())
+	{
+		return MetadataCategory;
+	}
+
+	if (GetClass()->ClassGeneratedBy)
+	{
+		const FString& BlueprintCategory = Cast<UBlueprint>(GetClass()->ClassGeneratedBy)->BlueprintCategory;
+		if (!BlueprintCategory.IsEmpty())
+		{
+			return BlueprintCategory;
+		}
+	}
+
+	return K2_GetNodeCategory();
+}
+
+bool UFlowNodeBase::GetDynamicTitleColor(FLinearColor& OutColor) const
+{
+	// Legacy asset support for NodeStyle == EFlowNodeStyle::Custom
+	if (NodeDisplayStyle == FlowNodeStyle::Custom || NodeStyle == EFlowNodeStyle::Custom)
+	{
+		OutColor = NodeColor;
+		return true;
+	}
+
+	return false;
+}
+
+FText UFlowNodeBase::GetNodeTitle() const
+{
+	if (HasAnyFlags(RF_ClassDefaultObject | RF_ArchetypeObject))
+	{
+		// For the archetype of the node (e.g. in the node selection UI), only use the default value
+		return UFlowNodeBase::K2_GetNodeTitle_Implementation();
+	}
+	else
+	{
+		return K2_GetNodeTitle();
+	}
+}
+
+FText UFlowNodeBase::GetNodeToolTip() const
+{
+	if (HasAnyFlags(RF_ClassDefaultObject | RF_ArchetypeObject))
+	{
+		// For the archetype of the node (e.g. in the node selection UI), only use the default value
+		return UFlowNodeBase::K2_GetNodeToolTip_Implementation();
+	}
+	else
+	{
+		return K2_GetNodeToolTip();
+	}
+}
+
+FText UFlowNodeBase::GetGeneratedDisplayName() const
+{
+	static const FName NAME_GeneratedDisplayName(TEXT("GeneratedDisplayName"));
+
+	if (GetClass()->ClassGeneratedBy)
+	{
+		UClass* Class = Cast<UBlueprint>(GetClass()->ClassGeneratedBy)->GeneratedClass;
+		return Class->GetMetaDataText(NAME_GeneratedDisplayName);
+	}
+
+	return GetClass()->GetMetaDataText(NAME_GeneratedDisplayName);
+}
+
+FString UFlowNodeBase::GetInheritedNodeKeywords(const UClass* NodeClass)
+{
+	static const FName NAME_Keywords(TEXT("Keywords"));
+	static const TCHAR* Delimiters[] = {TEXT(" "), TEXT(","), TEXT("\t")};
+
+	TArray<FString> Keywords;
+	for (const UClass* Class = NodeClass; Class; Class = Class->GetSuperClass())
+	{
+		TArray<FString> ClassKeywords;
+		Class->GetMetaData(NAME_Keywords).ParseIntoArray(ClassKeywords, Delimiters, UE_ARRAY_COUNT(Delimiters));
+		for (FString& Keyword : ClassKeywords)
+		{
+			const bool bAlreadyAdded = Keywords.ContainsByPredicate([&Keyword](const FString& Existing)
+			{
+				return Existing.Equals(Keyword, ESearchCase::IgnoreCase);
+			});
+			if (!bAlreadyAdded)
+			{
+				Keywords.Add(MoveTemp(Keyword));
+			}
+		}
+
+		if (Class == UFlowNodeBase::StaticClass() || !Class->IsChildOf<UFlowNodeBase>())
+		{
+			break;
+		}
+	}
+
+	return FString::Join(Keywords, TEXT(" "));
+}
+
+void UFlowNodeBase::EnsureNodeDisplayStyle()
+{
+	// todo: remove in Flow 2.2
+
+	// Backward compatibility update to convert NodeStyle to NodeDisplayStyle
+	FLOW_ASSERT_ENUM_MAX(EFlowNodeStyle, 7);
+
+	const FGameplayTag NodeDisplayStylePrev = NodeDisplayStyle;
+
+	switch (NodeStyle)
+	{
+		case EFlowNodeStyle::Condition:
+			{
+				NodeDisplayStyle = FlowNodeStyle::Condition;
+			}
+			break;
+		case EFlowNodeStyle::Default:
+			{
+				NodeDisplayStyle = FlowNodeStyle::Default;
+			}
+			break;
+		case EFlowNodeStyle::InOut:
+			{
+				NodeDisplayStyle = FlowNodeStyle::InOut;
+			}
+			break;
+		case EFlowNodeStyle::Latent:
+			{
+				NodeDisplayStyle = FlowNodeStyle::Latent;
+			}
+			break;
+		case EFlowNodeStyle::Logic:
+			{
+				NodeDisplayStyle = FlowNodeStyle::Logic;
+			}
+			break;
+		case EFlowNodeStyle::SubGraph:
+			{
+				NodeDisplayStyle = FlowNodeStyle::SubGraph;
+			}
+			break;
+		case EFlowNodeStyle::Custom:
+			{
+				NodeDisplayStyle = FlowNodeStyle::Custom;
+			}
+			break;
+		default: break;
+	}
+
+	if (GEditor != nullptr && NodeDisplayStyle != NodeDisplayStylePrev)
+	{
+		NodeStyle = EFlowNodeStyle::Invalid;
+		Modify();
+	}
+}
+#endif
+
+FText UFlowNodeBase::K2_GetNodeTitle_Implementation() const
+{
+#if WITH_EDITOR
+	if (GetClass()->ClassGeneratedBy)
+	{
+		const FString& BlueprintTitle = Cast<UBlueprint>(GetClass()->ClassGeneratedBy)->BlueprintDisplayName;
+		if (!BlueprintTitle.IsEmpty())
+		{
+			return FText::FromString(BlueprintTitle);
+		}
+	}
+
+	static const FName NAME_DisplayName(TEXT("DisplayName"));
+	if (bDisplayNodeTitleWithoutPrefix && !GetClass()->HasMetaData(NAME_DisplayName))
+	{
+		return GetGeneratedDisplayName();
+	}
+
+	return GetClass()->GetDisplayNameText();
+#else
+	return FText::GetEmpty();
+#endif
+}
+
+FText UFlowNodeBase::K2_GetNodeToolTip_Implementation() const
+{
+#if WITH_EDITOR
+	if (GetClass()->ClassGeneratedBy)
+	{
+		const FString& BlueprintToolTip = Cast<UBlueprint>(GetClass()->ClassGeneratedBy)->BlueprintDescription;
+		if (!BlueprintToolTip.IsEmpty())
+		{
+			return FText::FromString(BlueprintToolTip);
+		}
+	}
+
+	static const FName NAME_Tooltip(TEXT("Tooltip"));
+	if (bDisplayNodeTitleWithoutPrefix && !GetClass()->HasMetaData(NAME_Tooltip))
+	{
+		return GetGeneratedDisplayName();
+	}
+
+	// GetClass()->GetToolTipText() can return meta = (DisplayName = ... ), but ignore BlueprintDisplayName even if it is BP Node
+	if (GetClass()->ClassGeneratedBy)
+	{
+		const FString& BlueprintTitle = Cast<UBlueprint>(GetClass()->ClassGeneratedBy)->BlueprintDisplayName;
+		if (!BlueprintTitle.IsEmpty())
+		{
+			return FText::FromString(BlueprintTitle);
+		}
+	}
+
+	return GetClass()->GetToolTipText();
+#else
+	return FText::GetEmpty();
+#endif
+}
+
+FString UFlowNodeBase::K2_GetNodeCategory_Implementation() const
+{
+#if WITH_EDITORONLY_DATA
+	return Category;
+#else
+	return "";
+#endif
+}
+
+FText UFlowNodeBase::GetNodeConfigText() const
+{
+#if WITH_EDITORONLY_DATA
+	return DevNodeConfigText;
+#else
+	return FText::GetEmpty();
+#endif
+}
+
+void UFlowNodeBase::SetNodeConfigText(const FText& NodeConfigText)
+{
+#if WITH_EDITOR
+	if (!NodeConfigText.EqualTo(DevNodeConfigText))
+	{
+		DevNodeConfigText = NodeConfigText;
+	}
+#endif
+}
+
+void UFlowNodeBase::UpdateNodeConfigText_Implementation()
+{
+}
+
+#if WITH_EDITOR
+FString UFlowNodeBase::GetNodeDescription() const
+{
+	return K2_GetNodeDescription();
+}
+
+FString UFlowNodeBase::GetAddOnDescriptions() const
+{
+	FString Result;
+
+	for (const UFlowNodeBase* Addon : AddOns)
+	{
+		const FString& Description = Addon->GetNodeDescription();
+		if (!Description.IsEmpty())
+		{
+			Result.Append(Description).Append(LINE_TERMINATOR);
+		}
+	}
+
+	return Result;
+}
+#endif
+
+void UFlowNodeBase::LogError(FString Message, const EFlowOnScreenMessageType OnScreenMessageType) const
+{
+#if !NO_LOGGING || UE_ENABLE_DEBUG_DRAWING
+	if (BuildMessage(Message))
+	{
+		// Output Log
+		UE_LOG(LogFlow, Error, TEXT("%s"), *Message);
+
+#if WITH_EDITOR
+		if (GEditor)
+		{
+			// Message Log
+			GetFlowAsset()->GetTemplateAsset()->LogError(Message, this);
+		}
+#endif
+
+#if UE_ENABLE_DEBUG_DRAWING
+		// OnScreen Message
+		if (OnScreenMessageType == EFlowOnScreenMessageType::Permanent)
+		{
+			if (UWorld* World = GetWorld())
+			{
+				if (UViewportStatsSubsystem* StatsSubsystem = World->GetSubsystem<UViewportStatsSubsystem>())
+				{
+					StatsSubsystem->AddDisplayDelegate([WeakThis = TWeakObjectPtr<const UFlowNodeBase>(this), Message](FText& OutText, FLinearColor& OutColor)
+					{
+						const UFlowNodeBase* ThisPtr = WeakThis.Get();
+						if (ThisPtr && ThisPtr->GetFlowNodeSelfOrOwner() && ThisPtr->GetFlowNodeSelfOrOwner()->GetActivationState() != EFlowNodeState::NeverActivated)
+						{
+							OutText = FText::FromString(Message);
+							OutColor = FLinearColor::Red;
+							return true;
+						}
+
+						return false;
+					});
+				}
+			}
+		}
+		else if (OnScreenMessageType == EFlowOnScreenMessageType::Temporary)
+		{
+			GEngine->AddOnScreenDebugMessage(-1, 2.0f, FColor::Red, Message);
+		}
+#endif
+	}
+#endif
+}
+
+void UFlowNodeBase::LogWarning(FString Message) const
+{
+#if !NO_LOGGING
+	if (BuildMessage(Message))
+	{
+		// Output Log
+		UE_LOG(LogFlow, Warning, TEXT("%s"), *Message);
+
+#if WITH_EDITOR
+		if (GEditor)
+		{
+			// Message Log
+			GetFlowAsset()->GetTemplateAsset()->LogWarning(Message, this);
+		}
+#endif
+	}
+#endif
+}
+
+void UFlowNodeBase::LogNote(FString Message) const
+{
+#if !NO_LOGGING
+	if (BuildMessage(Message))
+	{
+		// Output Log
+		UE_LOG(LogFlow, Log, TEXT("%s"), *Message);
+
+#if WITH_EDITOR
+		if (GEditor)
+		{
+			// Message Log
+			GetFlowAsset()->GetTemplateAsset()->LogNote(Message, this);
+		}
+#endif
+	}
+#endif
+}
+
+void UFlowNodeBase::LogVerbose(FString Message) const
+{
+#if !NO_LOGGING
+	if (BuildMessage(Message))
+	{
+		// Output Log
+		UE_LOG(LogFlow, Verbose, TEXT("%s"), *Message);
+	}
+#endif
+}
+
+#if !NO_LOGGING || UE_ENABLE_DEBUG_DRAWING
+bool UFlowNodeBase::BuildMessage(FString& Message) const
+{
+	const UFlowAsset* FlowAsset = GetFlowAsset();
+	if (FlowAsset && FlowAsset->GetTemplateAsset()) // this is runtime log which is should be only called on runtime instances of asset
+	{
+		const FString TemplatePath = FlowAsset->GetTemplateAsset()->GetPathName();
+		Message.Append(TEXT(" --- node ")).Append(GetName()).Append(TEXT(", asset ")).Append(FPaths::GetPath(TemplatePath) / FPaths::GetBaseFilename(TemplatePath));
+
+		return true;
+	}
+
+	return false;
+}
+#endif
+
+#if WITH_EDITOR
+EDataValidationResult UFlowNodeBase::ValidateNode()
+{
+	EDataValidationResult ValidationResult = EDataValidationResult::NotValidated;
+
+	if (GetClass()->IsFunctionImplementedInScript(GET_FUNCTION_NAME_CHECKED(UFlowNodeBase, K2_ValidateNode)))
+	{
+		ValidationResult = K2_ValidateNode();
+	}
+
+	return ValidationResult;
+}
+#endif
+
+void UFlowNodeBase::LogValidationError(const FString& Message)
+{
+#if WITH_EDITOR
+	ValidationLog.Error<UFlowNodeBase>(*Message, this);
+#endif
+}
+
+void UFlowNodeBase::LogValidationWarning(const FString& Message)
+{
+#if WITH_EDITOR
+	ValidationLog.Warning<UFlowNodeBase>(*Message, this);
+#endif
+}
+
+void UFlowNodeBase::LogValidationNote(const FString& Message)
+{
+#if WITH_EDITOR
+	ValidationLog.Note<UFlowNodeBase>(*Message, this);
+#endif
+}

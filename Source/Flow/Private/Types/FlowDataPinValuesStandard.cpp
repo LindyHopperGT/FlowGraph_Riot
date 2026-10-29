@@ -1,8 +1,9 @@
 // Copyright https://github.com/MothCocoon/FlowGraph/graphs/contributors
-
 #include "Types/FlowDataPinValuesStandard.h"
+
 #include "Nodes/FlowPin.h"
 #include "Types/FlowArray.h"
+#include "Types/FlowDebuggableStruct.h"
 
 #include "GameFramework/Actor.h"
 
@@ -527,6 +528,27 @@ bool FFlowDataPinValue_InstancedStruct::TryConvertValuesToString(FString& OutStr
 			}
 
 			return ExportedString;
+		},
+		StringArraySeparator);
+
+	return true;
+}
+
+bool FFlowDataPinValue_InstancedStruct::GetDebugString(FString& OutString) const
+{
+	OutString = FlowArray::FormatArrayString<FInstancedStruct>(
+		Values,
+		[](const FInstancedStruct& InstancedStruct)
+		{
+			FString DebugString;
+			const FFlowDebuggableStruct* DebuggableStruct = InstancedStruct.GetPtr<FFlowDebuggableStruct>();
+			if (DebuggableStruct && DebuggableStruct->GetDebugString(DebugString))
+			{
+				return DebugString;
+			}
+
+			FFlowDataPinValue_InstancedStruct(InstancedStruct).TryConvertValuesToString(DebugString);
+			return DebugString;
 		},
 		StringArraySeparator);
 

@@ -1,10 +1,108 @@
 // Copyright https://github.com/MothCocoon/FlowGraph/graphs/contributors
-
 #include "Types/FlowDataPinBlueprintLibrary.h"
+
 #include "Types/FlowDataPinValue.h"
+#include "Types/FlowDataPinValuesStandard.h"
 #include "Nodes/FlowNodeBase.h"
+#include "Asset/FlowAssetParams.h"
+#include "Interfaces/FlowAssetProviderInterface.h"
+#include "FlowLogChannels.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(FlowDataPinBlueprintLibrary)
+
+namespace
+{
+	template <typename TResult>
+	TArray<TResult> GetAndFilterRootFlowParamsByType_Impl(
+		UObject* FlowAssetProvider,
+		const UScriptStruct* ValueType,
+		TFunctionRef<void(const TInstancedStruct<FFlowDataPinValue>& PinValue, TArray<TResult>& OutResults)> Unbox)
+	{
+		TArray<TResult> Results;
+
+		if (!IsValid(FlowAssetProvider) || !FlowAssetProvider->Implements<UFlowAssetProviderInterface>())
+		{
+			UE_LOG(LogFlow, Warning, TEXT("GetRootFlowParamsByType: FlowAssetProvider is null or does not implement IFlowAssetProviderInterface."));
+			return Results;
+		}
+
+		if (!IsValid(ValueType))
+		{
+			UE_LOG(LogFlow, Error, TEXT("GetRootFlowParamsByType: ValueType is not valid."));
+			return Results;
+		}
+
+		const UFlowAssetParams* FlowAssetParams = IFlowAssetProviderInterface::Execute_GetRootFlowParams(FlowAssetProvider);
+		if (!IsValid(FlowAssetParams))
+		{
+			return Results;
+		}
+
+		for (const auto& [PropertyName, PropertyValue] : FlowAssetParams->PropertyMap)
+		{
+			const UScriptStruct* EntryType = PropertyValue.GetScriptStruct();
+			if (IsValid(EntryType) && EntryType->IsChildOf(ValueType))
+			{
+				Unbox(PropertyValue, Results);
+			}
+		}
+
+		return Results;
+	}
+}
+
+TArray<FInstancedStruct> UFlowDataPinBlueprintLibrary::GetRootFlowInstancedStructValues(UObject* FlowAssetProvider, const UScriptStruct* InnerType)
+{
+	return GetAndFilterRootFlowParamsByType_Impl<FInstancedStruct>(
+		FlowAssetProvider,
+		FFlowDataPinValue_InstancedStruct::StaticStruct(),
+		[InnerType](const TInstancedStruct<FFlowDataPinValue>& PinValue, TArray<FInstancedStruct>& OutResults)
+		{
+			const FFlowDataPinValue_InstancedStruct* Pin = PinValue.GetPtr<FFlowDataPinValue_InstancedStruct>();
+			if (!Pin)
+			{
+				return;
+			}
+
+			for (const FInstancedStruct& Entry : Pin->Values)
+			{
+				const UScriptStruct* EntryType = Entry.GetScriptStruct();
+				if (IsValid(EntryType) && (!IsValid(InnerType) || EntryType->IsChildOf(InnerType)))
+				{
+					OutResults.Add(Entry);
+				}
+			}
+		});
+}
+
+TArray<UObject*> UFlowDataPinBlueprintLibrary::GetRootFlowObjectParamsByClass(UObject* FlowAssetProvider, TSubclassOf<UObject> ObjectClass)
+{
+	if (!IsValid(ObjectClass))
+	{
+		UE_LOG(LogFlow, Error, TEXT("GetRootFlowObjectParamsByClass: ObjectClass is not valid."));
+		return {};
+	}
+
+	return GetAndFilterRootFlowParamsByType_Impl<UObject*>(
+		FlowAssetProvider,
+		FFlowDataPinValue_Object::StaticStruct(),
+		[ObjectClass](const TInstancedStruct<FFlowDataPinValue>& PinValue, TArray<UObject*>& OutResults)
+		{
+			const FFlowDataPinValue_Object* Pin = PinValue.GetPtr<FFlowDataPinValue_Object>();
+			if (!Pin)
+			{
+				return;
+			}
+
+			for (const TObjectPtr<UObject>& ObjectPtr : Pin->Values)
+			{
+				if (IsValid(ObjectPtr) && ObjectPtr->IsA(ObjectClass))
+				{
+					OutResults.Add(ObjectPtr.Get());
+				}
+			}
+		});
+}
 
 void UFlowDataPinBlueprintLibrary::ResolveAndExtract_Impl(
 	UFlowNodeBase* Target,
@@ -1047,7 +1145,7 @@ UObject* UFlowDataPinBlueprintLibrary::AutoConvert_TryResolveAsObject(const FFlo
 	using namespace FlowPinType;
 
 	constexpr EFlowSingleFromArray SingleMode = EFlowSingleFromArray::LastValue;
-	TObjectPtr<UObject> Extracted = nullptr;
+	TObjectPtr<UObject> Extracted;
 	EFlowDataPinResolveResult ResolveResult = EFlowDataPinResolveResult::FailedNullFlowNodeBase;
 
 	if (IsValid(Target))
@@ -1100,7 +1198,7 @@ UClass* UFlowDataPinBlueprintLibrary::AutoConvert_TryResolveAsClass(const FFlowD
 	using namespace FlowPinType;
 
 	constexpr EFlowSingleFromArray SingleMode = EFlowSingleFromArray::LastValue;
-	TObjectPtr<UClass> Extracted = nullptr;
+	TObjectPtr<UClass> Extracted;
 	EFlowDataPinResolveResult ResolveResult = EFlowDataPinResolveResult::FailedNullFlowNodeBase;
 
 	if (IsValid(Target))
@@ -1542,7 +1640,7 @@ TArray<FInstancedStruct> UFlowDataPinBlueprintLibrary::AutoConvert_TryExtractIns
 UObject* UFlowDataPinBlueprintLibrary::AutoConvert_TryExtractObject(const FFlowDataPinResult& DataPinResult)
 {
 	using namespace FlowPinType;
-	TObjectPtr<UObject> ExtractedValue = nullptr;
+	TObjectPtr<UObject> ExtractedValue;
 	constexpr EFlowSingleFromArray SingleMode = EFlowSingleFromArray::LastValue;
 	const EFlowDataPinResolveResult ResolveResult = TryExtractValue<FFlowPinType_Object>(DataPinResult, ExtractedValue, SingleMode);
 	if (!IsSuccess(ResolveResult))
@@ -1567,7 +1665,7 @@ TArray<UObject*> UFlowDataPinBlueprintLibrary::AutoConvert_TryExtractObjectArray
 UClass* UFlowDataPinBlueprintLibrary::AutoConvert_TryExtractClass(const FFlowDataPinResult& DataPinResult)
 {
 	using namespace FlowPinType;
-	TObjectPtr<UClass> ExtractedValue = nullptr;
+	TObjectPtr<UClass> ExtractedValue;
 	constexpr EFlowSingleFromArray SingleMode = EFlowSingleFromArray::LastValue;
 	const EFlowDataPinResolveResult ResolveResult = TryExtractValue<FFlowPinType_Class>(DataPinResult, ExtractedValue, SingleMode);
 	if (!IsSuccess(ResolveResult))

@@ -29,6 +29,7 @@ public:
 	virtual void PostEditChangeChainProperty(FPropertyChangedChainEvent& PropertyChangedEvent) override;
 	// --
 
+protected:
 	virtual void UpdateNodeConfigText_Implementation() override;
 #endif
 
@@ -41,4 +42,9 @@ public:
 	// --
 
 	static const FName OUTPIN_TextOutput;
+
+#if WITH_EDITOR
+public:
+	virtual const FFlowAgentDoc& GetAgentDoc() const override;
+#endif
 };

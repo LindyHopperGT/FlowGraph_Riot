@@ -18,7 +18,16 @@ class UFlowNodeAddOn : public UFlowNodeBase
 
 public:
 	FLOW_API UFlowNodeAddOn();
-	
+
+	// UObject
+#if WITH_EDITOR
+	/* Serialization-based editor copy paths (text paste, node duplicate and asset duplicate)
+	 * copy NodeGuid verbatim, so re-mint here. Runtime template instancing skips these
+	 * callbacks and must retain the template's NodeGuid. */
+	FLOW_API virtual void PostDuplicate(bool bDuplicateForPIE) override;
+	FLOW_API virtual void PostEditImport() override;
+#endif
+	// --
 protected:
 	/* The Flow Node that contains this AddOn.
 	 * Accessible only when initialized, runtime only. */
@@ -62,6 +71,10 @@ public:
 	FLOW_API virtual void DeinitializeInstance() override;
 	// --
 
+	// UFlowNodeBase
+	FLOW_API virtual void InitializeReplica() override;
+	// --
+
 	// UFlowNodeAddOn
 
 	/* The FlowNode that contains this AddOn.
@@ -101,6 +114,12 @@ protected:
 	void CacheFlowNode();
 
 #if WITH_EDITOR
-	TArray<FFlowPin> GetPinsForContext(const TArray<FFlowPin>& Context) const;
+	/**
+	 * Combines this AddOn's pins with the inherited context for one direction.
+	 * @param Context The pins contributed by this AddOn: InputPins or OutputPins.
+	 * @param BaseContext The superclass context for that same direction, copied before appending Context.
+	 * @return BaseContext followed by the valid pins from Context.
+	 */
+	TArray<FFlowPin> GetPinsForContext(const TArray<FFlowPin>& Context, const TArray<FFlowPin>& BaseContext) const;
 #endif
 };

@@ -1,5 +1,4 @@
 // Copyright https://github.com/MothCocoon/FlowGraph/graphs/contributors
-
 #include "FlowSubsystem.h"
 
 #include "FlowAsset.h"
@@ -7,13 +6,13 @@
 #include "FlowLogChannels.h"
 #include "FlowSave.h"
 #include "FlowSettings.h"
-#include "Interfaces/FlowExecutionGate.h"
 #include "Nodes/Graph/FlowNode_SubGraph.h"
 
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "Logging/MessageLog.h"
 #include "Misc/Paths.h"
+#include "Types/FlowIdentity.h"
 #include "UObject/UObjectHash.h"
 
 #include UE_INLINE_GENERATED_CPP_BY_NAME(FlowSubsystem)
@@ -24,11 +23,6 @@ FNativeFlowAssetEvent UFlowSubsystem::OnInstancedTemplateRemoved;
 #endif
 
 #define LOCTEXT_NAMESPACE "FlowSubsystem"
-
-UFlowSubsystem::UFlowSubsystem()
-	: LoadedSaveGame(nullptr)
-{
-}
 
 bool UFlowSubsystem::ShouldCreateSubsystem(UObject* Outer) const
 {
@@ -127,7 +121,7 @@ UFlowAsset* UFlowSubsystem::CreateRootFlow(UObject* Owner, UFlowAsset* FlowAsset
 	return NewFlow;
 }
 
-void UFlowSubsystem::FinishRootFlow(UObject* Owner, UFlowAsset* TemplateAsset, const EFlowFinishPolicy FinishPolicy)
+void UFlowSubsystem::FinishAndDeinitializeRootFlow(UObject* Owner, UFlowAsset* TemplateAsset, const EFlowFinishPolicy FinishPolicy)
 {
 	UFlowAsset* InstanceToFinish = nullptr;
 
@@ -140,14 +134,10 @@ void UFlowSubsystem::FinishRootFlow(UObject* Owner, UFlowAsset* TemplateAsset, c
 		}
 	}
 
-	if (InstanceToFinish)
-	{
-		RootInstances.Remove(InstanceToFinish);
-		InstanceToFinish->FinishFlow(FinishPolicy);
-	}
+	FinishAndDeinitializeInstance(InstanceToFinish, FinishPolicy);
 }
 
-void UFlowSubsystem::FinishAllRootFlows(UObject* Owner, const EFlowFinishPolicy FinishPolicy)
+void UFlowSubsystem::FinishAndDeinitializeAllRootFlows(UObject* Owner, const EFlowFinishPolicy FinishPolicy)
 {
 	TArray<UFlowAsset*> InstancesToFinish;
 
@@ -161,19 +151,45 @@ void UFlowSubsystem::FinishAllRootFlows(UObject* Owner, const EFlowFinishPolicy 
 
 	for (UFlowAsset* InstanceToFinish : InstancesToFinish)
 	{
+		FinishAndDeinitializeInstance(InstanceToFinish, FinishPolicy);
+	}
+}
+
+void UFlowSubsystem::FinishAndDeinitializeInstance(UFlowAsset* InstanceToFinish, const EFlowFinishPolicy FinishPolicy)
+{
+	if (InstanceToFinish)
+	{
 		RootInstances.Remove(InstanceToFinish);
-		InstanceToFinish->FinishFlow(FinishPolicy);
+
+		InstanceToFinish->FinishFlowInstance(FinishPolicy);
+		InstanceToFinish->DeinitializeInstance();
 	}
 }
 
 UFlowAsset* UFlowSubsystem::CreateSubFlow(UFlowNode_SubGraph* SubGraphNode, const FString& SavedInstanceName, const bool bPreloading /* = false */)
 {
+	// all calls checks if SubGraphNode is valid
+	ensureAlways(SubGraphNode);
+
+	UFlowAsset* SubGraphOwner = SubGraphNode->GetFlowAsset();
 	UFlowAsset* AssetInstance = nullptr;
+
+	// Instance finished by the previous run of this node is replaced, so every run starts with fresh node instances.
+	// Preloaded instance is kept, as it hasn't started yet.
+	if (const UFlowAsset* PreviousInstance = InstancedSubFlows.FindRef(SubGraphNode))
+	{
+		if (PreviousInstance->HasStartedFlow()
+			&& (!SubGraphOwner || !SubGraphOwner->ActiveSubGraphs.Contains(SubGraphNode))
+			&& PreviousInstance->GetSubGraphFinishPolicy() != ESubGraphFinishPolicy::Reuse)
+		{
+			FinishSubFlow(SubGraphNode, EFlowFinishPolicy::Keep, true);
+		}
+	}
 
 	if (!InstancedSubFlows.Contains(SubGraphNode))
 	{
-		const TWeakObjectPtr<UObject> Owner = SubGraphNode->GetFlowAsset() ? SubGraphNode->GetFlowAsset()->GetOwner() : nullptr;
-		AssetInstance = CreateFlowInstance(Owner, SubGraphNode->Asset.LoadSynchronous(), SavedInstanceName);
+		const TWeakObjectPtr<UObject> Owner = SubGraphOwner ? SubGraphOwner->GetOwner() : nullptr;
+		AssetInstance = CreateFlowInstance(Owner, SubGraphNode->Asset.LoadSynchronous(), SavedInstanceName, /*bStartReplication=*/false, SubGraphOwner);
 
 		if (AssetInstance)
 		{
@@ -193,7 +209,10 @@ UFlowAsset* UFlowSubsystem::CreateSubFlow(UFlowNode_SubGraph* SubGraphNode, cons
 		}
 		check(AssetInstance->NodeOwningThisAssetInstance == SubGraphNode);
 
-		SubGraphNode->GetFlowAsset()->ActiveSubGraphs.Add(SubGraphNode, AssetInstance);
+		// clients receive SubGraph instance from its activation, not from preload
+		AssetInstance->StartReplication();
+
+		SubGraphOwner->ActiveSubGraphs.Add(SubGraphNode, AssetInstance);
 
 		// don't activate Start Node if we're loading Sub Graph from SaveGame
 		if (SavedInstanceName.IsEmpty())
@@ -205,29 +224,45 @@ UFlowAsset* UFlowSubsystem::CreateSubFlow(UFlowNode_SubGraph* SubGraphNode, cons
 	return AssetInstance;
 }
 
-void UFlowSubsystem::RemoveSubFlow(UFlowNode_SubGraph* SubGraphNode, const EFlowFinishPolicy FinishPolicy)
+void UFlowSubsystem::FinishSubFlow(UFlowNode_SubGraph* SubGraphNode, const EFlowFinishPolicy FinishPolicy, const bool bRemoveInstance)
 {
-	if (InstancedSubFlows.Contains(SubGraphNode))
+	if (IsValid(SubGraphNode) && InstancedSubFlows.Contains(SubGraphNode))
 	{
+		// Delist this SubGraph node from its parent
+		if (UFlowAsset* SubGraphOwner = SubGraphNode->GetFlowAsset())
+		{
+			SubGraphOwner->ActiveSubGraphs.Remove(SubGraphNode);
+		}
+
+		// The Flow Asset instantiated by this SubGraph node
 		UFlowAsset* AssetInstance = InstancedSubFlows[SubGraphNode];
+		AssetInstance->FinishFlowInstance(FinishPolicy);
 
-		SubGraphNode->GetFlowAsset()->ActiveSubGraphs.Remove(SubGraphNode);
-		InstancedSubFlows.Remove(SubGraphNode);
+		if (bRemoveInstance)
+		{
+			InstancedSubFlows.Remove(SubGraphNode);
+			AssetInstance->DeinitializeInstance();
 
-		AssetInstance->FinishFlow(FinishPolicy);
-
-		// Make sure to set the NodeOwningThisAssetInstance after the FinishFlow call, as it may be needed in the FinishFlow method
-		AssetInstance->NodeOwningThisAssetInstance = nullptr;
+			// Cleared only now, the owning node is needed during finish and deinitialize callbacks
+			AssetInstance->NodeOwningThisAssetInstance = nullptr;
+		}
+		else
+		{
+			// clients receive SubGraph instance only while it's active, the finished instance is kept on the server only
+			AssetInstance->StopReplication();
+		}
 	}
 }
 
-UFlowAsset* UFlowSubsystem::CreateFlowInstance(const TWeakObjectPtr<UObject> Owner, UFlowAsset* LoadedFlowAsset, FString NewInstanceName)
+UFlowAsset* UFlowSubsystem::CreateFlowInstance(const TWeakObjectPtr<UObject> Owner, UFlowAsset* LoadedFlowAsset, FString NewInstanceName, const bool bStartReplication, UFlowAsset* OwningFlowInstance)
 {
-	if (LoadedFlowAsset == nullptr)
+	const UObject* OwnerObject = Owner.Get();
+	if (!IsValid(LoadedFlowAsset) || !LoadedFlowAsset->CanBeInstanced(*LoadedFlowAsset, OwnerObject))
 	{
 		return nullptr;
 	}
 
+	const bool bTemplateAlreadyInstanced = InstancedTemplates.Contains(LoadedFlowAsset);
 	AddInstancedTemplate(LoadedFlowAsset);
 
 #if WITH_EDITOR
@@ -245,7 +280,28 @@ UFlowAsset* UFlowSubsystem::CreateFlowInstance(const TWeakObjectPtr<UObject> Own
 	}
 
 	UFlowAsset* NewInstance = NewObject<UFlowAsset>(this, LoadedFlowAsset->GetClass(), *NewInstanceName, RF_Transient, LoadedFlowAsset, false, nullptr);
+
+	UFlowAsset* ResolvedRoot = IsValid(OwningFlowInstance) ? OwningFlowInstance->GetOwningRootFlowInstance() : nullptr;
+	if (!IsValid(ResolvedRoot))
+	{
+		ResolvedRoot = IsValid(OwningFlowInstance) ? OwningFlowInstance : NewInstance;
+	}
+	NewInstance->OwningRootFlowInstance = ResolvedRoot;
+
+	if (!NewInstance->CanBeInstanced(*LoadedFlowAsset, OwnerObject))
+	{
+		if (!bTemplateAlreadyInstanced)
+		{
+			RemoveInstancedTemplate(LoadedFlowAsset);
+		}
+		return nullptr;
+	}
+
 	NewInstance->InitializeInstance(Owner, *LoadedFlowAsset);
+	if (bStartReplication)
+	{
+		NewInstance->StartReplication();
+	}
 
 	LoadedFlowAsset->AddInstance(NewInstance);
 
@@ -273,63 +329,6 @@ void UFlowSubsystem::RemoveInstancedTemplate(UFlowAsset* Template)
 #endif
 
 	InstancedTemplates.Remove(Template);
-}
-
-bool UFlowSubsystem::TryFlushAllDeferredTriggerScopes() const
-{
-	// Flush deferred triggers on all active runtime instances.
-	// Flush order follows InstancedTemplates iteration + per-template ActiveInstances.
-	// This provides reasonable per-asset FIFO but is not a strict global FIFO across assets.
-	// A more precise global queue could be implemented later if cross-asset ordering becomes critical.
-	const TArray<UFlowAsset*> CapturedInstancedTemplates = InstancedTemplates;
-	for (const UFlowAsset* Template : CapturedInstancedTemplates)
-	{
-		if (!IsValid(Template))
-		{
-			continue;
-		}
-
-		for (UFlowAsset* Instance : Template->GetActiveInstances())
-		{
-			if (FFlowExecutionGate::IsHalted())
-			{
-				break;
-			}
-
-			if (IsValid(Instance))
-			{
-				const bool bFlushed = Instance->TryFlushAllDeferredTriggerScopes();
-
-				// The only case where we allow a flush to stop before completing
-				// is if we hit an execution gate halt
-				check(bFlushed || FFlowExecutionGate::IsHalted());
-			}
-		}
-	}
-
-	// The only case where we allow a flush to stop before completing
-	// is if we hit an execution gate halt
-	const bool bCompletedFlushAll = !FFlowExecutionGate::IsHalted();
-	return bCompletedFlushAll;
-}
-
-void UFlowSubsystem::ClearAllDeferredTriggerScopes()
-{
-	for (const UFlowAsset* Template : InstancedTemplates)
-	{
-		if (!IsValid(Template))
-		{
-			continue;
-		}
-
-		for (UFlowAsset* Instance : Template->GetActiveInstances())
-		{
-			if (IsValid(Instance))
-			{
-				Instance->ClearAllDeferredTriggerScopes();
-			}
-		}
-	}
 }
 
 TMap<UObject*, UFlowAsset*> UFlowSubsystem::GetRootInstances() const
@@ -403,9 +402,10 @@ void UFlowSubsystem::OnGameSaved(TArray<FFlowComponentSaveData>& FlowComponents,
 	// Save Flow Graphs.
 	for (const TPair<UFlowAsset*, TWeakObjectPtr<UObject>>& RootInstance : ObjectPtrDecay(RootInstances))
 	{
-		if (RootInstance.Key && RootInstance.Value.IsValid())
+		UObject* RootOwner = RootInstance.Value.Get();
+		if (RootInstance.Key && RootOwner)
 		{
-			if (UFlowComponent* FlowComponent = Cast<UFlowComponent>(RootInstance.Value))
+			if (UFlowComponent* FlowComponent = Cast<UFlowComponent>(RootOwner))
 			{
 				if (FlowComponent->CanSave())
 				{
@@ -430,9 +430,10 @@ void UFlowSubsystem::OnGameSaved(TArray<FFlowComponentSaveData>& FlowComponents,
 
 		for (const TWeakObjectPtr<UFlowComponent> RegisteredComponent : RegisteredComponents)
 		{
-			if (RegisteredComponent->CanSave())
+			UFlowComponent* FlowComponent = RegisteredComponent.Get();
+			if (FlowComponent && FlowComponent->CanSave())
 			{
-				FlowComponents.Emplace(RegisteredComponent->SaveInstance());
+				FlowComponents.Emplace(FlowComponent->SaveInstance());
 			}
 		}
 	}
@@ -634,9 +635,10 @@ TSet<UFlowComponent*> UFlowSubsystem::GetFlowComponentsByTag(const FGameplayTag 
 	TSet<UFlowComponent*> Result;
 	for (const TWeakObjectPtr<UFlowComponent>& Component : FoundComponents)
 	{
-		if (Component.IsValid() && Component->GetClass()->IsChildOf(ComponentClass))
+		UFlowComponent* FlowComponent = Component.Get();
+		if (FlowComponent && FlowComponent->GetClass()->IsChildOf(ComponentClass))
 		{
-			Result.Emplace(Component.Get());
+			Result.Emplace(FlowComponent);
 		}
 	}
 
@@ -651,9 +653,10 @@ TSet<UFlowComponent*> UFlowSubsystem::GetFlowComponentsByTags(const FGameplayTag
 	TSet<UFlowComponent*> Result;
 	for (const TWeakObjectPtr<UFlowComponent>& Component : FoundComponents)
 	{
-		if (Component.IsValid() && Component->GetClass()->IsChildOf(ComponentClass))
+		UFlowComponent* FlowComponent = Component.Get();
+		if (FlowComponent && FlowComponent->GetClass()->IsChildOf(ComponentClass))
 		{
-			Result.Emplace(Component.Get());
+			Result.Emplace(FlowComponent);
 		}
 	}
 
@@ -668,9 +671,11 @@ TSet<AActor*> UFlowSubsystem::GetFlowActorsByTag(const FGameplayTag Tag, const T
 	TSet<AActor*> Result;
 	for (const TWeakObjectPtr<UFlowComponent>& Component : FoundComponents)
 	{
-		if (Component.IsValid() && Component->GetOwner()->GetClass()->IsChildOf(ActorClass))
+		const UFlowComponent* FlowComponent = Component.Get();
+		AActor* ComponentOwner = FlowComponent ? FlowComponent->GetOwner() : nullptr;
+		if (ComponentOwner && ComponentOwner->GetClass()->IsChildOf(ActorClass))
 		{
-			Result.Emplace(Component->GetOwner());
+			Result.Emplace(ComponentOwner);
 		}
 	}
 
@@ -685,9 +690,11 @@ TSet<AActor*> UFlowSubsystem::GetFlowActorsByTags(const FGameplayTagContainer Ta
 	TSet<AActor*> Result;
 	for (const TWeakObjectPtr<UFlowComponent>& Component : FoundComponents)
 	{
-		if (Component.IsValid() && Component->GetOwner()->GetClass()->IsChildOf(ActorClass))
+		const UFlowComponent* FlowComponent = Component.Get();
+		AActor* ComponentOwner = FlowComponent ? FlowComponent->GetOwner() : nullptr;
+		if (ComponentOwner && ComponentOwner->GetClass()->IsChildOf(ActorClass))
 		{
-			Result.Emplace(Component->GetOwner());
+			Result.Emplace(ComponentOwner);
 		}
 	}
 
@@ -702,9 +709,11 @@ TMap<AActor*, UFlowComponent*> UFlowSubsystem::GetFlowActorsAndComponentsByTag(c
 	TMap<AActor*, UFlowComponent*> Result;
 	for (const TWeakObjectPtr<UFlowComponent>& Component : FoundComponents)
 	{
-		if (Component.IsValid() && Component->GetOwner()->GetClass()->IsChildOf(ActorClass))
+		UFlowComponent* FlowComponent = Component.Get();
+		AActor* ComponentOwner = FlowComponent ? FlowComponent->GetOwner() : nullptr;
+		if (ComponentOwner && ComponentOwner->GetClass()->IsChildOf(ActorClass))
 		{
-			Result.Emplace(Component->GetOwner(), Component.Get());
+			Result.Emplace(ComponentOwner, FlowComponent);
 		}
 	}
 
@@ -719,9 +728,55 @@ TMap<AActor*, UFlowComponent*> UFlowSubsystem::GetFlowActorsAndComponentsByTags(
 	TMap<AActor*, UFlowComponent*> Result;
 	for (const TWeakObjectPtr<UFlowComponent>& Component : FoundComponents)
 	{
-		if (Component.IsValid() && Component->GetOwner()->GetClass()->IsChildOf(ActorClass))
+		UFlowComponent* FlowComponent = Component.Get();
+		AActor* ComponentOwner = FlowComponent ? FlowComponent->GetOwner() : nullptr;
+		if (ComponentOwner && ComponentOwner->GetClass()->IsChildOf(ActorClass))
 		{
-			Result.Emplace(Component->GetOwner(), Component.Get());
+			Result.Emplace(ComponentOwner, FlowComponent);
+		}
+	}
+
+	return Result;
+}
+
+TSet<UFlowComponent*> UFlowSubsystem::GetFlowComponentsByIdentity(const FFlowIdentity& Identity) const
+{
+	TSet<UFlowComponent*> Result;
+
+	if (Identity.IsValid())
+	{
+		TSet<TWeakObjectPtr<UFlowComponent>> FoundComponents;
+		FindComponents(Identity.IdentityTags, Identity.GetContainerMatchType(), Identity.IsExactMatch(), FoundComponents);
+
+		for (const TWeakObjectPtr<UFlowComponent>& WeakComponent : FoundComponents)
+		{
+			UFlowComponent* Component = WeakComponent.Get();
+			if (Identity.MatchesFilters(Component))
+			{
+				Result.Emplace(Component);
+			}
+		}
+	}
+
+	return Result;
+}
+
+TSet<AActor*> UFlowSubsystem::GetFlowActorsByIdentity(const FFlowIdentity& Identity) const
+{
+	TSet<AActor*> Result;
+
+	if (Identity.IsValid())
+	{
+		TSet<TWeakObjectPtr<UFlowComponent>> FoundComponents;
+		FindComponents(Identity.IdentityTags, Identity.GetContainerMatchType(), Identity.IsExactMatch(), FoundComponents);
+
+		for (const TWeakObjectPtr<UFlowComponent>& WeakComponent : FoundComponents)
+		{
+			const UFlowComponent* Component = WeakComponent.Get();
+			if (Identity.MatchesFilters(Component))
+			{
+				Result.Emplace(Component->GetOwner());
+			}
 		}
 	}
 
@@ -778,7 +833,8 @@ void UFlowSubsystem::FindComponents(const FGameplayTagContainer& Tags, const EGa
 
 		for (const TWeakObjectPtr<UFlowComponent>& Component : ComponentsWithAnyTag)
 		{
-			if (Component.IsValid() && (bExactMatch ? Component->IdentityTags.HasAllExact(Tags) : Component->IdentityTags.HasAll(Tags)))
+			const UFlowComponent* FlowComponent = Component.Get();
+			if (FlowComponent && (bExactMatch ? FlowComponent->IdentityTags.HasAllExact(Tags) : FlowComponent->IdentityTags.HasAll(Tags)))
 			{
 				OutComponents.Emplace(Component);
 			}

@@ -8,6 +8,10 @@
 
 class UFlowNode;
 
+/**
+ * Inverts the combined result of its attached child predicate AddOns, evaluating true only when they would otherwise
+ * evaluate false.
+ */
 UCLASS(MinimalApi, NotBlueprintable, meta = (DisplayName = "NOT"))
 class UFlowNodeAddOn_PredicateNOT
 	: public UFlowNodeAddOn
@@ -18,11 +22,18 @@ class UFlowNodeAddOn_PredicateNOT
 public:
 	UFlowNodeAddOn_PredicateNOT();
 
+protected:
 	// UFlowNodeBase
 	virtual EFlowAddOnAcceptResult AcceptFlowNodeAddOnChild_Implementation(const UFlowNodeAddOn* AddOnTemplate, const TArray<UFlowNodeAddOn*>& AdditionalAddOnsToAssumeAreChildren) const override;
 	// --
 
+public:
 	// IFlowPredicateInterface
 	virtual bool EvaluatePredicate_Implementation() const override;
 	// --
+
+#if WITH_EDITOR
+public:
+	virtual const FFlowAgentDoc& GetAgentDoc() const override;
+#endif
 };

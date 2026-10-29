@@ -1,6 +1,7 @@
 // Copyright https://github.com/MothCocoon/FlowGraph/graphs/contributors
 #pragma once
 
+#include "FlowNodeReplication.h"
 #include "FlowSave.h"
 #include "FlowTypes.h"
 #include "Asset/FlowAssetParamsTypes.h"
@@ -21,10 +22,10 @@
 
 #include "FlowAsset.generated.h"
 
+class UFlowNode_SubGraph;
 class UFlowNode_CustomOutput;
 class UFlowNode_CustomInput;
-class UFlowNode_SubGraph;
-class UFlowSubsystem;
+class UFlowInjectComponentsManager;
 struct FFlowPreloadPolicy;
 struct FFlowPinConnectionPolicy;
 
@@ -35,7 +36,10 @@ class UFlowAssetParams;
 
 #if !UE_BUILD_SHIPPING
 DECLARE_DELEGATE(FFlowGraphEvent);
-DECLARE_DELEGATE_TwoParams(FFlowSignalEvent, UFlowNode* /*FlowNode*/, const FName& /*PinName*/);
+#endif
+
+#if WITH_EDITOR
+DECLARE_DELEGATE_OneParam(FFlowGraphValidationEvent, FFlowMessageLog& /*MessageLog*/);
 #endif
 
 /**
@@ -48,7 +52,6 @@ class FLOW_API UFlowAsset : public UObject
 
 public:
 	friend class UFlowNode;
-	friend class UFlowNode_CustomOutput;
 	friend class UFlowNode_SubGraph;
 	friend class UFlowSubsystem;
 
@@ -63,7 +66,7 @@ public:
 	/* Set it to False, if this asset is instantiated as Root Flow for owner that doesn't live in the world.
 	 * This allows to SaveGame support works properly, if owner of Root Flow would be Game Instance or its subsystem. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Flow Asset")
-	bool bWorldBound;
+	bool bWorldBound = true;
 
 //////////////////////////////////////////////////////////////////////////
 // Graph (editor-only)
@@ -90,6 +93,8 @@ public:
 	static FString ValidationError_AddOnNodeClassNotAllowed;
 	static FString ValidationError_NullNodeInstance;
 	static FString ValidationError_NullAddOnNodeInstance;
+	static FString ValidationError_ConnectedToMissingNode;
+	static FString ValidationError_AdviseResave;
 
 private:
 	UPROPERTY()
@@ -101,13 +106,11 @@ public:
 	void SetupForEditing();
 
 	UEdGraph* GetGraph() const { return FlowGraph; }
+	virtual TSubclassOf<UFlowAsset> GetDefaultFlowAssetForSubgraphs() const { return GetClass(); }
 
-	virtual EDataValidationResult ValidateAsset(FFlowMessageLog& MessageLog);
-
+public:
 	/* Returns whether the node class is allowed in this flow asset. */
 	bool IsNodeOrAddOnClassAllowed(const UClass* FlowNodeClass, FText* OutOptionalFailureReason = nullptr) const;
-
-	virtual TSubclassOf<UFlowAsset> GetDefaultFlowAssetForSubgraphs() const { return GetClass(); }
 
 protected:
 	bool CanFlowNodeClassBeUsedByFlowAsset(const UClass& FlowNodeClass) const;
@@ -117,9 +120,22 @@ protected:
 	bool IsFlowNodeClassInAllowedClasses(const UClass& FlowNodeClass, const TSubclassOf<UFlowNodeBase>& RequiredAncestor = nullptr) const;
 	bool IsFlowNodeClassInDeniedClasses(const UClass& FlowNodeClass) const;
 
+public:
+	/* Allow subclasses to override the project-wide validation on save. */
+	virtual bool ShouldValidateOnSave() const;
+	
+	FFlowGraphValidationEvent OnValidateGraph;
+	virtual EDataValidationResult IsDataValid(FDataValidationContext& Context) const override;
+	virtual EDataValidationResult ValidateAsset(FFlowMessageLog& MessageLog) const;
+
 private:
+	static EDataValidationResult ValidateNode(UFlowNodeBase& FlowNodeBase, FFlowMessageLog& MessageLog);
+
+	/* Validates every direct child attachment on OwnerNode and recursively validates child trees. */
+	EDataValidationResult ValidateAddOnChildren(UFlowNodeBase& OwnerNode, FFlowMessageLog& MessageLog) const;
+
 	/* Recursively validates the given addon and its children. */
-	void ValidateAddOnTree(UFlowNodeAddOn& AddOn, FFlowMessageLog& MessageLog);
+	EDataValidationResult ValidateAddOnTree(UFlowNodeAddOn& AddOn, FFlowMessageLog& MessageLog) const;
 #endif
 
 //////////////////////////////////////////////////////////////////////////
@@ -132,7 +148,7 @@ protected:
 	TArray<TSubclassOf<UFlowNodeBase>> AllowedInSubgraphNodeClasses;
 	TArray<TSubclassOf<UFlowNodeBase>> DeniedInSubgraphNodeClasses;
 
-	bool bStartNodePlacedAsGhostNode;
+	bool bStartNodePlacedAsGhostNode = false;
 
 private:
 	UPROPERTY()
@@ -210,6 +226,12 @@ protected:
 public:
 	UFUNCTION(BlueprintPure, Category = "FlowAsset")
 	virtual UFlowNode* GetDefaultEntryNode() const;
+	
+	/* Re-mints the NodeGuid of any UFlowNodeAddOn (at any nesting depth) whose Guid collides with
+	 * one already seen earlier in the walk, keeping the first occurrence of each Guid unchanged.
+	 * Called from PreSaveRoot so every explicit save self-heals.
+	 * Returns the number of AddOns that were re-minted. */
+	int32 RepairDuplicateAddOnGuids() const;
 
 //////////////////////////////////////////////////////////////////////////
 // Custom Inputs/Outputs
@@ -233,8 +255,8 @@ protected:
 	TArray<FFlowNamedDataPinProperty> OutputDataPinDeclarations;
 
 public:
-	/* Gathers all the nodes that are connected to the Start & Custom Inputs of the flow graph. */
-	TArray<UFlowNode*> GatherNodesConnectedToAllInputs() const;
+	/* Gathers all the nodes that are connected to the Start & Custom Inputs. */
+	virtual TArray<UFlowNode*> GatherNodesConnectedToAllInputs() const;
 
 	UFlowNode_CustomInput* TryFindCustomInputNodeByEventName(const FName& EventName) const;
 	UFlowNode_CustomOutput* TryFindCustomOutputNodeByEventName(const FName& EventName) const;
@@ -245,6 +267,9 @@ public:
 #if WITH_EDITOR
 	const TArray<FName>& GetCustomInputs() const { return CustomInputs; }
 	const TArray<FName>& GetCustomOutputs() const { return CustomOutputs; }
+
+	// Rebuilds the editor-only interface arrays after procedural graph-node creation.
+	void RebuildCustomInterfaceLists();
 
 protected:
 	void AddCustomInput(const FName& EventName);
@@ -306,6 +331,9 @@ private:
 #if WITH_EDITORONLY_DATA
 	TWeakObjectPtr<const UFlowAsset> InspectedInstance;
 
+	/* Instances replicated from the server to clients running in this process. */
+	TArray<TWeakObjectPtr<UFlowAsset>> ReplicaInstances;
+
 	/* Message log for storing runtime errors/notes/warnings that will only last until the next game run.
 	 * Log lives in the asset template, so it can be inspected after ending the PIE. */
 	TSharedPtr<class FFlowMessageLog> RuntimeLog;
@@ -320,8 +348,13 @@ public:
 	int32 GetInstancesNum() const { return ActiveInstances.Num(); }
 
 #if WITH_EDITOR
+	/* Replicas are listed separately from ActiveInstances, so they don't count as instances running on the server. */
+	void AddReplicaInstance(UFlowAsset* Instance);
+	void RemoveReplicaInstance(UFlowAsset* Instance);
+	const TArray<TWeakObjectPtr<UFlowAsset>>& GetReplicaInstances() const { return ReplicaInstances; }
+
 	void SetInspectedInstance(TWeakObjectPtr<const UFlowAsset> NewInspectedInstance);
-	const UFlowAsset* GetInspectedInstance() const { return InspectedInstance.IsValid() ? InspectedInstance.Get() : nullptr; }
+	const UFlowAsset* GetInspectedInstance() const { return InspectedInstance.Get(); }
 
 	DECLARE_EVENT(UFlowAsset, FRefreshDebuggerEvent);
 
@@ -342,11 +375,12 @@ private:
 // Executing asset instance
 
 protected:
-	UPROPERTY()
+	UPROPERTY(ReplicatedUsing = OnRep_TemplateAsset)
 	TObjectPtr<UFlowAsset> TemplateAsset;
 
 	/* Object that spawned Root Flow instance, i.e. World Settings or Player Controller.
 	 * This pointer is passed to child instances: Flow Asset instances created by the SubGraph nodes. */
+	UPROPERTY(Replicated)
 	TWeakObjectPtr<UObject> Owner;
 
 	/* SubGraph node that created this Flow Asset instance. */
@@ -369,7 +403,7 @@ protected:
 	TArray<TObjectPtr<UFlowNode>> RecordedNodes;
 
 	UPROPERTY(Transient)
-	EFlowFinishPolicy FinishPolicy;
+	EFlowFinishPolicy FinishPolicy = EFlowFinishPolicy::Keep;
 
 	 /* Receiver that will be given a snapshot of OutputDataPinValues when this graph finishes.
 	  * Typically, the SubGraph node that created this instance. */
@@ -380,10 +414,17 @@ protected:
 	 * Initialized from OutputDataPinDeclarations defaults at StartFlow; updated by SetGraphOutput/Finish nodes. */
 	UPROPERTY(Transient)
 	FFlowOutputDataPinValues OutputDataPinValues;
+	
+private:
+	UPROPERTY(Transient)
+	TObjectPtr<UFlowAsset> OwningRootFlowInstance;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UFlowInjectComponentsManager> ComponentInjector;
 
 public:
+	virtual bool CanBeInstanced(const UFlowAsset& InTemplateAsset, const UObject* InOwner) const;
 	virtual void InitializeInstance(const TWeakObjectPtr<UObject> InOwner, UFlowAsset& InTemplateAsset);
-	virtual void DeinitializeInstance();
 	bool IsInstanceInitialized() const { return IsValid(TemplateAsset); }
 
 	virtual FName GetInstanceName() const;
@@ -398,7 +439,7 @@ public:
 	template <class T>
 	TWeakObjectPtr<T> GetOwner() const
 	{
-		return Owner.IsValid() ? Cast<T>(Owner) : nullptr;
+		return Cast<T>(Owner.Get());
 	}
 
 	/* Returns the Owner as an Actor, or if Owner is a Component, return its Owner as an Actor. */
@@ -426,7 +467,14 @@ protected:
 	void ResetNodes();
 
 public:
-	virtual void FinishFlow(const EFlowFinishPolicy InFinishPolicy, const bool bRemoveInstance = true);
+	UE_DEPRECATED(5.7, "Method replaced with FinishFlowInstance and (if bRemoveInstance == true) separate call to DeinitializeInstance.")
+	void FinishFlow(const EFlowFinishPolicy InFinishPolicy, const bool bRemoveInstance = true);
+
+	virtual void FinishFlowInstance(const EFlowFinishPolicy InFinishPolicy);
+	virtual void DeinitializeInstance();
+
+	/* Allow subclasses to override the project-wide SubGraph finish policy */
+	virtual ESubGraphFinishPolicy GetSubGraphFinishPolicy() const;
 
 public:
 	UFlowSubsystem* GetFlowSubsystem() const;
@@ -449,6 +497,85 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Flow")
 	const TArray<UFlowNode*>& GetRecordedNodes() const { return RecordedNodes; }
 
+	UFUNCTION(BlueprintPure, Category = "Flow|Components")
+	UFlowAsset* GetOwningRootFlowInstance() const;
+
+	UFlowInjectComponentsManager* GetOrCreateComponentInjectionManager();
+	UFlowInjectComponentsManager* GetOrCreateComponentInjectionManagerInRootFlow() const;
+	UFlowInjectComponentsManager* FindComponentInjectionManager() const;
+	UFlowInjectComponentsManager* FindComponentInjectionManagerInRootFlow() const;
+
+//////////////////////////////////////////////////////////////////////////
+// Network replication
+
+protected:
+	/* Set it to False, if instances of this asset shouldn't replicate to clients.
+	 * Instances of SubGraphs started by this asset don't replicate either. */
+	UPROPERTY(EditAnywhere, Category = "Networking")
+	bool bReplicateInstances = true;
+
+	/* True on the server, if this instance is registered as a replicated subobject of its Owner. */
+	bool bReplicatedToClients = false;
+
+	/* True on a client, after TemplateAsset of this instance arrived. */
+	bool bReplicaInitialized = false;
+
+	/* Instance containing the SubGraph node that created this instance.
+	 * Required since NodeOwningThisAssetInstance points to a node, which isn't net-addressable. */
+	UPROPERTY(ReplicatedUsing = OnRep_ReplicatedParentInstance)
+	TWeakObjectPtr<UFlowAsset> ReplicatedParentInstance;
+
+	/* NodeGuid of the SubGraph node that created this instance.
+	 * Required since NodeOwningThisAssetInstance points to a node, which isn't net-addressable. */
+	UPROPERTY(Replicated)
+	FGuid OwningSubGraphNodeGuid;
+
+	/* Activation states and replicated properties of nodes. */
+	UPROPERTY(Replicated)
+	FFlowNodeReplicatedStateArray ReplicatedNodeStates;
+
+	/* Replicas of SubGraph instances that arrived on a client before TemplateAsset of this instance. */
+	TArray<TWeakObjectPtr<UFlowAsset>> ReplicaChildrenAwaitingTemplate;
+
+public:
+	// UObject
+	virtual bool IsSupportedForNetworking() const override { return true; }
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+	virtual void PostInitProperties() override;
+	virtual void PreDestroyFromReplication() override;
+	// --
+
+	/* Decides if this instance is replicated to clients as a subobject of its Owner. */
+	virtual bool ShouldReplicate() const;
+
+protected:
+	/* Registers this instance as a replicated subobject of its Owner.
+	 * Does nothing, if this instance shouldn't replicate, already replicates or Owner isn't a replicated actor or component on the server. */
+	void StartReplication();
+
+	/* Removes this instance from replicated subobjects of its Owner and destroys it on clients. */
+	void StopReplication();
+
+	/* Prepares the replica on a client after TemplateAsset arrived, then applies states received before. */
+	UFUNCTION()
+	void OnRep_TemplateAsset();
+
+	UFUNCTION()
+	void OnRep_ReplicatedParentInstance();
+
+	/* Links the replica of a SubGraph instance to the SubGraph node of its parent replica. */
+	void LinkReplicaToParent();
+
+	/* Returns the node of the replica, creating it from TemplateAsset on first use. */
+	UFlowNode* GetOrCreateReplicaNode(const FGuid& NodeGuid);
+
+public:
+	/* Writes the activation state and replicated properties of the node, so they are sent to clients. */
+	void WriteReplicatedNodeState(UFlowNode& Node);
+
+	/* Applies the replicated state to the node with the same NodeGuid on a client, creating this node on first use. */
+	void ApplyReplicatedNodeState(const FFlowNodeReplicatedState& Item);
+
 //////////////////////////////////////////////////////////////////////////
 // Preload policy
 
@@ -462,15 +589,11 @@ protected:
 	virtual void InitializePreloadPolicy();
 
 public:
+	void EnsurePreloadPolicyInitialized();
 	const FFlowPreloadPolicy& GetPreloadPolicy() const;
 
 //////////////////////////////////////////////////////////////////////////
 // Trigger Input
-
-#if !UE_BUILD_SHIPPING
-public:
-	FFlowSignalEvent OnPinTriggered;
-#endif
 
 protected:
 	/* Stack of active deferred transition scopes (innermost = top).
@@ -523,10 +646,10 @@ protected:
 	/* Expects to be owned (at runtime) by an object with this class (or one of its subclasses).
 	 * If the class is an AActor, and the Flow Asset is owned by a component, it will consider the component's owner for the AActor. */
 	UPROPERTY(EditAnywhere, Category = "Flow")
-	TSubclassOf<UObject> ExpectedOwnerClass;
+	TSoftClassPtr<UObject> ExpectedOwnerClass;
 
 public:
-	UClass* GetExpectedOwnerClass() const { return ExpectedOwnerClass; }
+	const TSoftClassPtr<UObject>& GetExpectedOwnerClass() const { return ExpectedOwnerClass; }
 
 //////////////////////////////////////////////////////////////////////////
 // SaveGame support

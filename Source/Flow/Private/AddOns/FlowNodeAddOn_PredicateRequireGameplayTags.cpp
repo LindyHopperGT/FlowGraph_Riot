@@ -1,6 +1,6 @@
 // Copyright https://github.com/MothCocoon/FlowGraph/graphs/contributors
-
 #include "AddOns/FlowNodeAddOn_PredicateRequireGameplayTags.h"
+
 #include "FlowLogChannels.h"
 #include "Nodes/FlowNode.h"
 #include "Logging/LogMacros.h"
@@ -37,6 +37,29 @@ bool UFlowNodeAddOn_PredicateRequireGameplayTags::EvaluatePredicate_Implementati
 	return bResult;
 }
 
+void UFlowNodeAddOn_PredicateRequireGameplayTags::UpdateNodeConfigText_Implementation()
+{
+#if WITH_EDITOR
+	const FName TagsName = GET_MEMBER_NAME_CHECKED(UFlowNodeAddOn_PredicateRequireGameplayTags, Tags);
+	FTextBuilder TextBuilder;
+	if (Requirements.IsEmpty())
+	{
+		const FName RequirementsName = GET_MEMBER_NAME_CHECKED(UFlowNodeAddOn_PredicateRequireGameplayTags, Requirements);
+		TextBuilder.AppendLine(FString::Printf(TEXT("<not configured - Must have configured %s>"), *RequirementsName.ToString()));
+	}
+	else if (Tags.IsEmpty() && !GetFlowNode()->IsInputConnected(TagsName))
+	{
+		TextBuilder.AppendLine(FString::Printf(TEXT("<not configured - %s must have a default value or a connected pin>"), *TagsName.ToString()));
+	}
+	else
+	{
+		TextBuilder.AppendLine(Requirements.ToString());
+	}
+
+	SetNodeConfigText(TextBuilder.ToText());
+#endif // WITH_EDITOR
+}
+
 #if WITH_EDITOR
 void UFlowNodeAddOn_PredicateRequireGameplayTags::PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent)
 {
@@ -71,25 +94,13 @@ bool UFlowNodeAddOn_PredicateRequireGameplayTags::TryGetTagsToCheckFromDataPin(F
 	}
 }
 
-void UFlowNodeAddOn_PredicateRequireGameplayTags::UpdateNodeConfigText_Implementation()
-{
 #if WITH_EDITOR
-	const FName TagsName = GET_MEMBER_NAME_CHECKED(UFlowNodeAddOn_PredicateRequireGameplayTags, Tags);
-	FTextBuilder TextBuilder;
-	if (Requirements.IsEmpty())
-	{
-		const FName RequirementsName = GET_MEMBER_NAME_CHECKED(UFlowNodeAddOn_PredicateRequireGameplayTags, Requirements);
-		TextBuilder.AppendLine(FString::Printf(TEXT("<not configured - Must have configured %s>"), *RequirementsName.ToString()));
-	}
-	else if (Tags.IsEmpty() && !GetFlowNode()->IsInputConnected(TagsName))
-	{
-		TextBuilder.AppendLine(FString::Printf(TEXT("<not configured - %s must have a default value or a connected pin>"), *TagsName.ToString()));
-	}
-	else
-	{
-		TextBuilder.AppendLine(Requirements.ToString());
-	}
-
-	SetNodeConfigText(TextBuilder.ToText());
-#endif // WITH_EDITOR
+const FFlowAgentDoc& UFlowNodeAddOn_PredicateRequireGameplayTags::GetAgentDoc() const
+{
+	static const FFlowAgentDoc Doc = MakeAgentDoc(
+		/*Guidance*/ TEXT("The tags being tested come from the Tags data pin, not a hardcoded list on the AddOn itself - if the pin is unconnected the test runs against whatever default value Tags holds, which is empty unless explicitly authored."),
+		/*Tags*/     { TEXT("predicate"), TEXT("gameplay-tag"), TEXT("requirement") },
+		/*Articles*/ {  });
+	return Doc;
 }
+#endif

@@ -63,6 +63,7 @@ public:
 
 	virtual void ExecuteInput(const FName& PinName) override;
 	virtual void Cleanup() override;
+	virtual void DeinitializeInstance() override;
 
 public:
 	virtual void ForceFinishNode() override;
@@ -75,6 +76,7 @@ public:
 	virtual void ReceiveOutputDataSnapshot(const FFlowOutputDataPinValues& Snapshot) override;
 	// --
 
+protected:
 	virtual void OnLoad_Implementation() override;
 
 #if WITH_EDITORONLY_DATA
@@ -90,6 +92,9 @@ protected:
 
 #if WITH_EDITOR
 public:
+	/* Used by utility extracting selected nodes to the SubGraph. */
+	void SetAsset(UFlowAsset* InAsset);
+
 	virtual FText K2_GetNodeTitle_Implementation() const override;
 	virtual FString GetNodeDescription() const override;
 	virtual UObject* GetAssetToEdit() override;
@@ -119,4 +124,9 @@ private:
 #endif
 
 	static const FName AssetParams_MemberName;
+
+#if WITH_EDITOR
+public:
+	virtual const FFlowAgentDoc& GetAgentDoc() const override;
+#endif
 };

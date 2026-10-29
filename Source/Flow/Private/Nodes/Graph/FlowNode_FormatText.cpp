@@ -19,6 +19,51 @@ UFlowNode_FormatText::UFlowNode_FormatText()
 	OutputPins.Add(FFlowPin(OUTPIN_TextOutput, FFlowPinType_Text::GetPinTypeNameStatic()));
 }
 
+#if WITH_EDITOR
+void UFlowNode_FormatText::PostEditChangeChainProperty(FPropertyChangedChainEvent& PropertyChainEvent)
+{
+	const auto& Property = PropertyChainEvent.PropertyChain.GetActiveMemberNode()->GetValue();
+	constexpr bool bIsInput = true;
+	OnPostEditEnsureAllNamedPropertiesPinDirection(*Property, bIsInput);
+
+	Super::PostEditChangeChainProperty(PropertyChainEvent);
+}
+
+void UFlowNode_FormatText::UpdateNodeConfigText_Implementation()
+{
+	constexpr bool bErrorIfInputPinNotFound = true;
+	FConnectedPin ConnectedPin;
+
+	// is input connected?
+	if (FindFirstInputPinConnection(GET_MEMBER_NAME_CHECKED(ThisClass, FormatText), bErrorIfInputPinNotFound, ConnectedPin))
+	{
+		SetNodeConfigText(FText::Format(LOCTEXT("FormatTextFromPin", "Format from: {0}"), {FText::FromString(ConnectedPin.PinName.ToString())}));
+	}
+	else
+	{
+		SetNodeConfigText(FormatText);
+	}
+}
+
+#endif
+
+EFlowDataPinResolveResult UFlowNode_FormatText::TryResolveFormattedText(const FName& PinName, FText& OutFormattedText) const
+{
+	FText ResolvedFormatText = FormatText;
+	TryResolveDataPinValue<FFlowPinType_Text>(GET_MEMBER_NAME_CHECKED(ThisClass, FormatText), ResolvedFormatText);
+
+	if (TryFormatTextWithNamedPropertiesAsParameters(ResolvedFormatText, OutFormattedText))
+	{
+		return EFlowDataPinResolveResult::Success;
+	}
+	else
+	{
+		LogError(FString::Printf(TEXT("Could not format text '%s' with properties as parameters"), *ResolvedFormatText.ToString()), EFlowOnScreenMessageType::Temporary);
+
+		return EFlowDataPinResolveResult::FailedWithError;
+	}
+}
+
 FFlowDataPinResult UFlowNode_FormatText::TrySupplyDataPin(const FName PinName) const
 {
 	if (PinName == OUTPIN_TextOutput)
@@ -39,49 +84,15 @@ FFlowDataPinResult UFlowNode_FormatText::TrySupplyDataPin(const FName PinName) c
 	return Super::TrySupplyDataPin(PinName);
 }
 
-EFlowDataPinResolveResult UFlowNode_FormatText::TryResolveFormattedText(const FName& PinName, FText& OutFormattedText) const
-{
-	FText ResolvedFormatText = FormatText;
-	TryResolveDataPinValue<FFlowPinType_Text>(GET_MEMBER_NAME_CHECKED(ThisClass, FormatText), ResolvedFormatText);
-
-	if (TryFormatTextWithNamedPropertiesAsParameters(ResolvedFormatText, OutFormattedText))
-	{
-		return EFlowDataPinResolveResult::Success;
-	}
-	else
-	{
-		LogError(FString::Printf(TEXT("Could not format text '%s' with properties as parameters"), *ResolvedFormatText.ToString()), EFlowOnScreenMessageType::Temporary);
-
-		return EFlowDataPinResolveResult::FailedWithError;
-	}
-}
+#undef LOCTEXT_NAMESPACE
 
 #if WITH_EDITOR
-void UFlowNode_FormatText::PostEditChangeChainProperty(FPropertyChangedChainEvent& PropertyChainEvent)
+const FFlowAgentDoc& UFlowNode_FormatText::GetAgentDoc() const
 {
-	const auto& Property = PropertyChainEvent.PropertyChain.GetActiveMemberNode()->GetValue();
-	constexpr bool bIsInput = true;
-	OnPostEditEnsureAllNamedPropertiesPinDirection(*Property, bIsInput);
-
-	Super::PostEditChangeChainProperty(PropertyChainEvent);
+	static const FFlowAgentDoc Doc = MakeAgentDoc(
+		/*Guidance*/ TEXT("Inherits its named-property mechanism from Define Properties - Object and Class values are formatted by object name, and InstancedStruct values by their struct type name, not their contents."),
+		/*Tags*/     { TEXT("graph"), TEXT("text"), TEXT("format") },
+		/*Articles*/ {  });
+	return Doc;
 }
-
-void UFlowNode_FormatText::UpdateNodeConfigText_Implementation()
-{
-	constexpr bool bErrorIfInputPinNotFound = true;
-	FConnectedPin ConnectedPin;
-	
-	// is input connected?
-	if (FindFirstInputPinConnection(GET_MEMBER_NAME_CHECKED(ThisClass, FormatText), bErrorIfInputPinNotFound, ConnectedPin))
-	{
-		SetNodeConfigText(FText::Format(LOCTEXT("FormatTextFromPin", "Format from: {0}"), {FText::FromString(ConnectedPin.PinName.ToString())}));
-	}
-	else
-	{
-		SetNodeConfigText(FormatText);
-	}
-}
-
 #endif
-
-#undef LOCTEXT_NAMESPACE

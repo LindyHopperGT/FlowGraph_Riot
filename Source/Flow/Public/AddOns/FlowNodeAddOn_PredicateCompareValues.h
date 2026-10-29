@@ -12,6 +12,10 @@
 
 struct FFlowPinConnectionPolicy;
 
+/**
+ * Compares two data-pin values using a configurable operator (equal, not-equal, greater/less-than, etc.), resolving
+ * both sides through the flow's own data-pin type system rather than a fixed type.
+ */
 UCLASS(MinimalApi, NotBlueprintable, meta = (DisplayName = "Compare Values"))
 class UFlowNodeAddOn_PredicateCompareValues
 	: public UFlowNodeAddOn
@@ -31,8 +35,11 @@ public:
 	virtual void PostEditChangeChainProperty(FPropertyChangedChainEvent& PropertyChangedEvent) override;
 	// --
 
+protected:
 	// UFlowNodeBase
 	virtual EDataValidationResult ValidateNode() override;
+
+public:
 	virtual FText K2_GetNodeTitle_Implementation() const override;
 	// --
 
@@ -54,7 +61,7 @@ protected:
 	UPROPERTY(EditAnywhere, Category = Configuration)
 	EFlowSingleFromArray SingleFromArray = EFlowSingleFromArray::LastValue;
 
-protected:
+public:
 	// IFlowDataPinValueOwnerInterface
 	virtual bool TryFindPropertyByPinName(
 		const FName& PinName,
@@ -62,6 +69,7 @@ protected:
 		TInstancedStruct<FFlowDataPinValue>& OutFoundInstancedStruct) const override;
 	// --
 
+protected:
 	// Operator classifiers
 	bool IsEqualityOp() const;
 	bool IsArithmeticOp() const;
@@ -150,6 +158,11 @@ private:
 	/* Populate cached type names from the current LeftValue/RightValue.
 	* Returns false (and logs error) if either value is not configured. */
 	bool CacheTypeNames(FCachedTypeNames& OutCache) const;
+
+#if WITH_EDITOR
+public:
+	virtual const FFlowAgentDoc& GetAgentDoc() const override;
+#endif
 };
 
 // -----------------------------------------------------------------------

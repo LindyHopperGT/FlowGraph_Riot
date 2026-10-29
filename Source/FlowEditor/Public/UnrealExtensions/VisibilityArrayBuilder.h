@@ -1,5 +1,4 @@
 // Copyright https://github.com/MothCocoon/FlowGraph/graphs/contributors
-
 #pragma once
 
 #include "IDetailCustomNodeBuilder.h"
@@ -8,6 +7,7 @@
 #include "PropertyHandle.h"
 
 #include "Widgets/DeclarativeSyntaxSupport.h"
+#include "Widgets/Layout/SBox.h"
 #include "Widgets/SBoxPanel.h"
 #include "Widgets/Text/STextBlock.h"
 #include "PropertyCustomizationHelpers.h"
@@ -83,7 +83,7 @@ public:
 		BaseProperty->MarkHiddenByCustomization();
 	}
 
-	~FVisibilityArrayBuilder()
+	virtual ~FVisibilityArrayBuilder() override
 	{
 		if (ArrayProperty.IsValid())
 		{
@@ -219,17 +219,17 @@ public:
 		OnRebuildChildren.ExecuteIfBound();
 	}
 
-	virtual TSharedPtr<IPropertyHandle> GetPropertyHandle() const
+	virtual TSharedPtr<IPropertyHandle> GetPropertyHandle() const override
 	{
 		return BaseProperty;
 	}
 
-protected:
 	virtual void SetOnRebuildChildren(FSimpleDelegate InOnRebuildChildren) override
 	{
 		OnRebuildChildren = InOnRebuildChildren;
 	}
 
+protected:
 	void OnNumChildrenChanged()
 	{
 		OnRebuildChildren.ExecuteIfBound();

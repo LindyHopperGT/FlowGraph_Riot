@@ -33,6 +33,10 @@ public:
 //////////////////////////////////////////////////////////////////////////
 // Flow node
 
+public:	
+	UPROPERTY()
+	TSoftClassPtr<UFlowNodeBase> NodeInstanceClass;
+
 protected:
 	/* The FlowNode or FlowNodeAddOn runtime instance that is being edited by this UFlowGraphNode. */
 	UPROPERTY(Instanced)
@@ -103,7 +107,7 @@ public:
 	// --
 
 	// variants of K2Node methods
-	void RewireOldPinsToNewPins(TArray<UEdGraphPin*>& InOldPins);
+	void RewireOldPinsToNewPins(TArray<UEdGraphPin*>& InOldPins, const TMap<FName, FName>& PinNameRemap);
 	static void ReconstructSinglePin(UEdGraphPin* NewPin, UEdGraphPin* OldPin);
 	// --
 
@@ -131,13 +135,18 @@ protected:
 // Utils
 
 public:
+	UPROPERTY()
+	FString ErrorMessage;
+
+public:
+	UFlowGraph* GetFlowGraph() const;
+	UFlowAsset* GetFlowAsset() const;
+	
 	/* Short summary of node's content. */
 	FString GetNodeDescription() const;
 
 	/* Get flow node for the inspected asset instance. */
 	UFlowNode* GetInspectedNodeInstance() const;
-
-	UFlowAsset* GetFlowAsset() const;
 
 	/* Used for highlighting active nodes of the inspected asset instance. */
 	EFlowNodeState GetActivationState() const;
@@ -172,7 +181,7 @@ public:
 protected:
 	bool CanReconstructNode() const;
 
-	bool TryUpdateNodePins() const;
+	bool TryUpdateNodePins(TMap<FName, FName>& OutAutoDataPinNameRemap) const;
 	bool CheckGraphPinsMatchNodePins() const;
 
 //////////////////////////////////////////////////////////////////////////
@@ -229,16 +238,40 @@ public:
 	virtual bool CanSetSignalMode(const EFlowSignalMode Mode) const;
 
 //////////////////////////////////////////////////////////////////////////
-// SubNode Support
+// SubNode (Flow Node AddOn)
 
+public:
+	/* SubNodes that are owned by this UFlowGraphNode. */
+	UPROPERTY()
+	TArray<TObjectPtr<UFlowGraphNode>> SubNodes;
+
+	/* If set, this node will always be considered as subnode. */
+	UPROPERTY()
+	bool bIsSubNode = false;
+	
+	/* Guid of base Flow Node.
+	* Assigned during copy operation to connect nodes again on paste. */
+	UPROPERTY(SkipSerialization)
+	FGuid ParentGuidCopy;
+	
+private:
+	/* Parent UFlowGraphNode for this node
+	 * Note: this is not saved, and is restored in when the graph is opened in the editor via 
+	 * UFlowGraph::RecursivelySetParentNodeForAllSubNodes. */
+	UPROPERTY(Transient)
+	TObjectPtr<UFlowGraphNode> ParentNode;
+
+public:	
 	// UEdGraphNode
-	UFlowGraph* GetFlowGraph() const;
 	virtual void DestroyNode() override;
 	virtual void NodeConnectionListChanged() override;
 	virtual void FindDiffs(class UEdGraphNode* OtherNode, struct FDiffResults& Results) override;
+
+protected:
 	virtual FString GetPropertyNameAndValueForDiff(const FProperty* Prop, const uint8* PropertyAddr) const override;
 	// --
 
+public:
 	void SetParentNodeForSubNode(UFlowGraphNode* InParentNode);
 	UFlowGraphNode* GetParentNode() const { return ParentNode; }
 
@@ -257,9 +290,7 @@ public:
 	static void DiffSubNodes(const FText& NodeTypeDisplayName, const TArray<UFlowGraphNode*>& LhsSubNodes, const TArray<UFlowGraphNode*>& RhsSubNodes, FDiffResults& Results);
 
 	// UObject
-#if WITH_EDITOR
 	virtual void PostEditUndo() override;
-#endif
 	// --
 
 	virtual UEdGraphPin* GetInputPin(int32 InputIndex = 0) const;
@@ -268,7 +299,11 @@ public:
 
 	virtual FText GetDescription() const;
 
+	void AddSubNode(UFlowGraphNode* SubNode);
 	void AddSubNode(UFlowGraphNode* SubNode, class UEdGraph* ParentGraph);
+	bool AddSubNodeForRegraph(UFlowGraphNode* SubNode, UEdGraph* ParentGraph);
+	void ReparentSubNodeForRegraph(UFlowGraphNode* SubNode);
+	void RemoveSubNodeForRegraph(UFlowGraphNode* SubNode);
 	void RemoveSubNode(UFlowGraphNode* SubNode);
 	virtual void RemoveAllSubNodes();
 	virtual void OnSubNodeRemoved(UFlowGraphNode* SubNode);
@@ -276,6 +311,10 @@ public:
 
 	virtual int32 FindSubNodeDropIndex(UFlowGraphNode* SubNode) const;
 	virtual void InsertSubNodeAt(UFlowGraphNode* SubNode, const int32 DropIndex);
+
+	/* Moves all SubNodes of the given node to this node
+	 * Used when replacing a graph node with one of a different class. */
+	void MoveSubNodesFrom(UFlowGraphNode& OtherNode);
 
 	virtual bool IsSubNode() const;
 
@@ -290,34 +329,4 @@ protected:
 	virtual void ResetNodeOwner();
 
 	void LogError(const FString& MessageToLog, const UFlowNodeBase* FlowNodeBase) const;
-
-public:
-	UPROPERTY()
-	TSoftClassPtr<UFlowNodeBase> NodeInstanceClass;
-
-	/* SubNodes that are owned by this UFlowGraphNode. */
-	UPROPERTY()
-	TArray<TObjectPtr<UFlowGraphNode>> SubNodes;
-
-	/* Subnode's parent index assigned during copy operation to connect nodes again on paste. */
-	UPROPERTY()
-	int32 CopySubNodeParentIndex = INDEX_NONE;
-
-	/* Subnode index assigned during copy operation to connect nodes again on paste. */
-	UPROPERTY()
-	int32 CopySubNodeIndex = INDEX_NONE;
-
-	/* If set, this node will always be considered as subnode. */
-	UPROPERTY()
-	bool bIsSubNode = false;
-
-	UPROPERTY()
-	FString ErrorMessage;
-
-private:
-	/* Parent UFlowGraphNode for this node
-	 * Note: this is not saved, and is restored in when the graph is opened in the editor via 
-	 * UFlowGraph::RecursivelySetParentNodeForAllSubNodes. */
-	UPROPERTY(Transient)
-	TObjectPtr<UFlowGraphNode> ParentNode;
 };

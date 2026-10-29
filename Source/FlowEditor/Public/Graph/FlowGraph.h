@@ -22,7 +22,7 @@ class FLOWEDITOR_API UFlowGraph : public UEdGraph
 protected:
 	/* Graph version number. */
 	UPROPERTY()
-	int32 GraphVersion;
+	int32 GraphVersion = 0;
 
 	static constexpr int32 CurrentGraphVersion = 2;
 
@@ -45,7 +45,13 @@ protected:
 
 public:
 	static void CreateGraph(UFlowAsset* InFlowAsset);
-	static void CreateGraph(UFlowAsset* InFlowAsset, TSubclassOf<UFlowGraphSchema> FlowSchema);
+
+	// bCreateDefaultNodes: whether to seed default nodes (e.g. a Start node) via
+	// UFlowGraphSchema::CreateDefaultNodesForGraph. Only appropriate for a brand new, genuinely
+	// empty FlowAsset (the editor's "New Asset" flow) - pass false when creating the graph shell
+	// for an asset that already has real runtime nodes (for example, an external import or regraph), to
+	// avoid injecting an unwanted extra node.
+	static void CreateGraph(UFlowAsset* InFlowAsset, const TSubclassOf<UFlowGraphSchema> FlowSchema, const bool bCreateDefaultNodes = true);
 	void RefreshGraph();
 
 protected:
@@ -73,10 +79,11 @@ public:
 	// --
 
 	UFlowAsset* GetFlowAsset() const;
-	void ValidateAsset(FFlowMessageLog& MessageLog);
+	void ValidateGraphNodes(FFlowMessageLog& MessageLog) const;
 
 	// UObject
 	virtual void Serialize(FArchive& Ar) override;
+	virtual void PostLoad() override;
 	// --
 	
 public:
@@ -111,6 +118,7 @@ public:
 	bool IsLocked() const;
 	void LockUpdates();
 	void UnlockUpdates();
+	void UnlockUpdatesWithoutReconcile();
 
 	bool IsLoadingGraph() const { return bIsLoadingGraph; }
 	bool IsSavingGraph() const { return bIsSavingGraph; }

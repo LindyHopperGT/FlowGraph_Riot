@@ -1,8 +1,9 @@
 // Copyright https://github.com/MothCocoon/FlowGraph/graphs/contributors
-
 #include "AddOns/FlowNodeAddOn_SwitchCase.h"
+
 #include "AddOns/FlowNodeAddOn_PredicateAND.h"
 #include "AddOns/FlowNodeAddOn_PredicateOR.h"
+#include "FlowLogChannels.h"
 #include "FlowSettings.h"
 #include "Nodes/FlowNode.h"
 
@@ -14,13 +15,45 @@ const FName UFlowNodeAddOn_SwitchCase::DefaultCaseName = "Case";
 
 UFlowNodeAddOn_SwitchCase::UFlowNodeAddOn_SwitchCase()
 	: Super()
-	, CaseName(DefaultCaseName)
-	, OutputPinName(DefaultCaseName)
 {
 #if WITH_EDITOR
 	NodeDisplayStyle = FlowNodeStyle::AddOn_SwitchCase;
 	Category = TEXT("Switch");
 #endif
+}
+
+EFlowAddOnAcceptResult UFlowNodeAddOn_SwitchCase::AcceptFlowNodeAddOnChild_Implementation(
+	const UFlowNodeAddOn* AddOnTemplate,
+	const TArray<UFlowNodeAddOn*>& AdditionalAddOnsToAssumeAreChildren) const
+{
+	if (IFlowPredicateInterface::ImplementsInterfaceSafe(AddOnTemplate))
+	{
+		return EFlowAddOnAcceptResult::TentativeAccept;
+	}
+	else
+	{
+		// All AddOn children MUST implement IFlowPredicateInterface
+		// (so do not return Super's implementation which will return Undetermined)
+		return EFlowAddOnAcceptResult::Reject;
+	}
+}
+
+FText UFlowNodeAddOn_SwitchCase::K2_GetNodeTitle_Implementation() const
+{
+	if (GetDefault<UFlowSettings>()->bUseAdaptiveNodeTitles)
+	{
+		FLOW_ASSERT_ENUM_MAX(EFlowPredicateCombinationRule, 2);
+		if (BranchCombinationRule != EFlowPredicateCombinationRule::AND)
+		{
+			return FText::Format(LOCTEXT("SwitchCaseTitle", "{0} ({1})"), { FText::FromName(OutputPinName), UEnum::GetDisplayValueAsText(BranchCombinationRule) });
+		}
+		else
+		{
+			return FText::Format(LOCTEXT("SwitchCaseTitle", "{0}"), { FText::FromName(OutputPinName) });
+		}
+	}
+
+	return Super::K2_GetNodeTitle_Implementation();
 }
 
 #if WITH_EDITOR
@@ -42,7 +75,12 @@ void UFlowNodeAddOn_SwitchCase::PostEditChangeProperty(struct FPropertyChangedEv
 
 TArray<FFlowPin> UFlowNodeAddOn_SwitchCase::GetContextOutputs() const
 {
-	const UFlowNode* FlowNodeOwner = GetFlowNode();
+	const UFlowNode* FlowNodeOwner = IsValid(FlowNode) ? FlowNode.Get() : FindOwningFlowNode();
+	if (!IsValid(FlowNodeOwner))
+	{
+		UE_LOG(LogFlow, Error, TEXT("Flow SwitchCase context owner missing: AddOn '%s', Guid '%s', Outer '%s', CachedOwner '%s'"),
+			*GetPathName(), *GetGuid().ToString(), *GetNameSafe(GetOuter()), *GetNameSafe(FlowNode.Get()));
+	}
 	check(IsValid(FlowNodeOwner));
 
 	int32 DuplicateCount = 0;
@@ -88,22 +126,6 @@ TArray<FFlowPin> UFlowNodeAddOn_SwitchCase::GetContextOutputs() const
 }
 #endif
 
-EFlowAddOnAcceptResult UFlowNodeAddOn_SwitchCase::AcceptFlowNodeAddOnChild_Implementation(
-	const UFlowNodeAddOn* AddOnTemplate,
-	const TArray<UFlowNodeAddOn*>& AdditionalAddOnsToAssumeAreChildren) const
-{
-	if (IFlowPredicateInterface::ImplementsInterfaceSafe(AddOnTemplate))
-	{
-		return EFlowAddOnAcceptResult::TentativeAccept;
-	}
-	else
-	{
-		// All AddOn children MUST implement IFlowPredicateInterface
-		// (so do not return Super's implementation which will return Undetermined)
-		return EFlowAddOnAcceptResult::Reject;
-	}
-}
-
 bool UFlowNodeAddOn_SwitchCase::TryTriggerForCase_Implementation() const
 {
 	bool bResult = false;
@@ -128,22 +150,15 @@ bool UFlowNodeAddOn_SwitchCase::TryTriggerForCase_Implementation() const
 	return bResult;
 }
 
-FText UFlowNodeAddOn_SwitchCase::K2_GetNodeTitle_Implementation() const
-{
-	if (GetDefault<UFlowSettings>()->bUseAdaptiveNodeTitles)
-	{
-		FLOW_ASSERT_ENUM_MAX(EFlowPredicateCombinationRule, 2);
-		if (BranchCombinationRule != EFlowPredicateCombinationRule::AND)
-		{
-			return FText::Format(LOCTEXT("SwitchCaseTitle", "{0} ({1})"), { FText::FromName(OutputPinName), UEnum::GetDisplayValueAsText(BranchCombinationRule) });
-		}
-		else
-		{
-			return FText::Format(LOCTEXT("SwitchCaseTitle", "{0}"), { FText::FromName(OutputPinName) });
-		}
-	}
-
-	return Super::K2_GetNodeTitle_Implementation();
-}
-
 #undef LOCTEXT_NAMESPACE
+
+#if WITH_EDITOR
+const FFlowAgentDoc& UFlowNodeAddOn_SwitchCase::GetAgentDoc() const
+{
+	static const FFlowAgentDoc Doc = MakeAgentDoc(
+		/*Guidance*/ TEXT("BranchCombinationRule only governs this case's own child predicates, not how the owning Switch node picks among multiple passing cases - that behavior lives on the parent node. A case with no attached predicates and the default AND rule passes unconditionally."),
+		/*Tags*/     { TEXT("switch"), TEXT("case"), TEXT("predicate") },
+		/*Articles*/ {  });
+	return AgentDoc.HasDoc() ? AgentDoc : Doc;
+}
+#endif

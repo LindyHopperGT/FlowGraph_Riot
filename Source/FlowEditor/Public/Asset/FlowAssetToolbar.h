@@ -19,9 +19,7 @@ struct FFlowAssetInstanceContext
 	FText DisplayText;
 	TArray<TSharedPtr<FObjectKey>> AssetInstances;
 
-	FFlowAssetInstanceContext()
-	{
-	}
+	FFlowAssetInstanceContext() = default;
 
 	explicit FFlowAssetInstanceContext(const FText& InDisplayText)
 		: DisplayText(InDisplayText)
@@ -81,14 +79,10 @@ protected:
  */
 struct FLOWEDITOR_API FFlowBreadcrumb
 {
-	const TWeakObjectPtr<const UFlowAsset> CurrentInstance;
-	const TWeakObjectPtr<const UFlowAsset> ChildInstance;
+	const TWeakObjectPtr<const UFlowAsset> CurrentInstance = nullptr;
+	const TWeakObjectPtr<const UFlowAsset> ChildInstance = nullptr;
 
-	FFlowBreadcrumb()
-		: CurrentInstance(nullptr)
-		, ChildInstance(nullptr)
-	{
-	}
+	FFlowBreadcrumb() = default;
 
 	explicit FFlowBreadcrumb(const TWeakObjectPtr<const UFlowAsset> InCurrentInstance, const TWeakObjectPtr<const UFlowAsset> InChildInstance)
 		: CurrentInstance(InCurrentInstance)
@@ -129,10 +123,9 @@ public:
 	explicit FFlowAssetToolbar(const TSharedPtr<FFlowAssetEditor> InAssetEditor, UToolMenu* ToolbarMenu);
 
 private:
-	void BuildAssetToolbar(UToolMenu* ToolbarMenu) const;
+	static void BuildAssetToolbar(UToolMenu* ToolbarMenu);
 	static TSharedRef<SWidget> MakeDiffMenu(const UFlowAssetEditorContext* InContext);
-
-	void BuildDebuggerToolbar(UToolMenu* ToolbarMenu) const;
+	static void BuildDebuggerToolbar(UToolMenu* ToolbarMenu);
 
 private:
 	TWeakPtr<FFlowAssetEditor> FlowAssetEditor;

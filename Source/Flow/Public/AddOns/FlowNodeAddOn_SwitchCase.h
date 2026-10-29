@@ -8,6 +8,10 @@
 
 class UFlowNode;
 
+/**
+ * Defines one case for a Switch-style node, evaluating its attached child predicates as a single AND/OR combination
+ * and exposing an output pin under CaseName if the combination passes.
+ */
 UCLASS(MinimalApi, Blueprintable, meta = (DisplayName = "Case"))
 class UFlowNodeAddOn_SwitchCase
 	: public UFlowNodeAddOn
@@ -16,27 +20,29 @@ class UFlowNodeAddOn_SwitchCase
 	GENERATED_BODY()
 
 public:
+	/* The base PinName for the Switch Case output(s). */
+	static const FName DefaultCaseName;
 
 	/* The output pin for this Switch Case, if it passes. */
 	UPROPERTY(EditAnywhere, Category = "Switch")
-	FName CaseName;
+	FName CaseName = DefaultCaseName;
 
 	/* The output pin for this Switch Case, if it passes. */
 	UPROPERTY()
-	mutable FName OutputPinName;
+	mutable FName OutputPinName = DefaultCaseName;
 
 	/* For root-level predicates on this Switch Case, do we treat them as an "AND" (all must pass) or an "OR" (at least one must pass)? */
 	UPROPERTY(EditAnywhere, Category = "Switch", DisplayName = "Root Combination Rule")
 	EFlowPredicateCombinationRule BranchCombinationRule = EFlowPredicateCombinationRule::AND;
 
-	/* The base PinName for the Switch Case output(s). */
-	static const FName DefaultCaseName;
-
 public:
 	UFlowNodeAddOn_SwitchCase();
 
+protected:
 	// UFlowNodeBase
 	virtual EFlowAddOnAcceptResult AcceptFlowNodeAddOnChild_Implementation(const UFlowNodeAddOn* AddOnTemplate, const TArray<UFlowNodeAddOn*>& AdditionalAddOnsToAssumeAreChildren) const override;
+
+public:
 	virtual FText K2_GetNodeTitle_Implementation() const override;
 	// --
 
@@ -54,4 +60,9 @@ public:
 	// IFlowSwitchCaseInterface
 	virtual bool TryTriggerForCase_Implementation() const override;
 	// --
+
+#if WITH_EDITOR
+public:
+	virtual const FFlowAgentDoc& GetAgentDoc() const override;
+#endif
 };

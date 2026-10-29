@@ -8,6 +8,10 @@
 
 class UFlowNode;
 
+/**
+ * Combines all attached child predicate AddOns with logical OR, evaluating true if any one child predicate evaluates
+ * true.
+ */
 UCLASS(MinimalApi, NotBlueprintable, meta = (DisplayName = "OR"))
 class UFlowNodeAddOn_PredicateOR
 	: public UFlowNodeAddOn
@@ -18,13 +22,20 @@ class UFlowNodeAddOn_PredicateOR
 public:
 	UFlowNodeAddOn_PredicateOR();
 
+protected:
 	// UFlowNodeBase
 	virtual EFlowAddOnAcceptResult AcceptFlowNodeAddOnChild_Implementation(const UFlowNodeAddOn* AddOnTemplate, const TArray<UFlowNodeAddOn*>& AdditionalAddOnsToAssumeAreChildren) const override;
 	// --
 
+public:
 	// IFlowPredicateInterface
 	virtual bool EvaluatePredicate_Implementation() const override;
 	// --
 
 	FLOW_API static bool EvaluatePredicateOR(const TArray<UFlowNodeAddOn*>& AddOns);
+
+#if WITH_EDITOR
+public:
+	virtual const FFlowAgentDoc& GetAgentDoc() const override;
+#endif
 };

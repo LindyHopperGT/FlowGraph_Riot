@@ -19,7 +19,7 @@ enum class EFlowLogVerbosity : uint8
 };
 
 /**
- * Adds message to log
+ * Adds message to developer log
  * Optionally shows message on screen
  */
 UCLASS(NotBlueprintable, meta = (DisplayName = "Log", Keywords = "print"))
@@ -62,8 +62,15 @@ public:
 	virtual void OnEditorPinConnectionsChanged(const TArray<FFlowPinConnectionChange>& Changes) override;
 	// --
 
+protected:
 	virtual void UpdateNodeConfigText_Implementation() override;
 #endif
 
+public:
 	EFlowLogVerbosity GetVerbosity() const { return Verbosity; }
+
+#if WITH_EDITOR
+public:
+	virtual const FFlowAgentDoc& GetAgentDoc() const override;
+#endif
 };

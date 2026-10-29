@@ -16,16 +16,14 @@ class UFlowLevelSequencePlayer;
 DECLARE_MULTICAST_DELEGATE(FFlowNodeLevelSequenceEvent);
 
 /**
- * Order of triggering outputs after calling Start
- * - PreStart, just before starting playback
- * - Started
- * - Out (always, even if Sequence is invalid)
- * - Completed
+ * Plays a Level Sequence asset, firing PreStart, Started, Out, and Completed outputs in that order, and supports
+ * save/restore of playback position. Attach LevelSequenceActorBinding AddOns to override named sequence actor
+ * bindings before playback begins.
  */
-UCLASS(NotBlueprintable, meta = (DisplayName = "Play Level Sequence"))
+UCLASS(NotBlueprintable, meta = (DisplayName = "Play Level Sequence", Keywords = "cutscene"))
 class FLOW_API UFlowNode_PlayLevelSequence
 	: public UFlowNode
-	  , public IFlowPreloadableInterface
+	, public IFlowPreloadableInterface
 {
 	GENERATED_BODY()
 
@@ -38,12 +36,15 @@ public:
 	static FFlowNodeLevelSequenceEvent OnPlaybackStarted;
 	static FFlowNodeLevelSequenceEvent OnPlaybackCompleted;
 
+	/* The Level Sequence asset to play. */
 	UPROPERTY(EditAnywhere, Category = "Sequence")
 	TSoftObjectPtr<ULevelSequence> Sequence;
 
+	/* Playback settings: start/end frames, play rate, loop count, etc. */
 	UPROPERTY(EditAnywhere, Category = "Sequence")
 	FMovieSceneSequencePlaybackSettings PlaybackSettings;
 
+	/* When true, plays the sequence in reverse. */
 	UPROPERTY(EditAnywhere, Category = "Sequence")
 	bool bPlayReverse = false;
 
@@ -110,15 +111,18 @@ public:
 	virtual void FlushContent() override;
 	// --
 
+protected:
 	// UFlowNodeBase
 	virtual EFlowAddOnAcceptResult AcceptFlowNodeAddOnChild_Implementation(const UFlowNodeAddOn* AddOnTemplate, const TArray<UFlowNodeAddOn*>& AdditionalAddOnsToAssumeAreChildren) const override;
 	// --
 
+public:
 	virtual void InitializeInstance() override;
 	void CreatePlayer();
 
 	virtual void ExecuteInput(const FName& PinName) override;
 
+protected:
 	virtual void OnSave_Implementation() override;
 	virtual void OnLoad_Implementation() override;
 
@@ -151,5 +155,10 @@ protected:
 #if ENABLE_VISUAL_LOG
 public:	
 	virtual void GrabDebugSnapshot(struct FVisualLogEntry* Snapshot) const override;
+#endif
+
+#if WITH_EDITOR
+public:
+	virtual const FFlowAgentDoc& GetAgentDoc() const override;
 #endif
 };

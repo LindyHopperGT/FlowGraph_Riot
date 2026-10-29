@@ -6,9 +6,6 @@
 #include UE_INLINE_GENERATED_CPP_BY_NAME(FlowNode_ComponentObserver)
 
 UFlowNode_ComponentObserver::UFlowNode_ComponentObserver()
-	: IdentityMatchType(EFlowTagContainerMatchType::HasAnyExact)
-	, SuccessLimit(1)
-	, SuccessCount(0)
 {
 #if WITH_EDITOR
 	NodeDisplayStyle = FlowNodeStyle::Condition;
@@ -160,7 +157,7 @@ FString UFlowNode_ComponentObserver::GetNodeDescription() const
 
 FString UFlowNode_ComponentObserver::GetStatusString() const
 {
-	if (ActivationState == EFlowNodeState::Active && RegisteredActors.Num() == 0)
+	if (GetActivationState() == EFlowNodeState::Active && RegisteredActors.Num() == 0)
 	{
 		return NoActorsFound;
 	}

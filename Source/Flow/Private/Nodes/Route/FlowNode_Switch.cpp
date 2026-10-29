@@ -38,6 +38,16 @@ EFlowAddOnAcceptResult UFlowNode_Switch::AcceptFlowNodeAddOnChild_Implementation
 	return Super::AcceptFlowNodeAddOnChild_Implementation(AddOnTemplate, AdditionalAddOnsToAssumeAreChildren);
 }
 
+FText UFlowNode_Switch::K2_GetNodeTitle_Implementation() const
+{
+	if (!bOnlyTriggerFirstPassingCase && GetDefault<UFlowSettings>()->bUseAdaptiveNodeTitles)
+	{
+		return FText::Format(LOCTEXT("SwitchTitle", "{0} (All Passing)"), {Super::K2_GetNodeTitle_Implementation()});
+	}
+
+	return Super::K2_GetNodeTitle_Implementation();
+}
+
 void UFlowNode_Switch::ExecuteInput(const FName& PinName)
 {
 	int32 TriggeringCaseCount = 0;
@@ -68,14 +78,15 @@ void UFlowNode_Switch::ExecuteInput(const FName& PinName)
 	}
 }
 
-FText UFlowNode_Switch::K2_GetNodeTitle_Implementation() const
-{
-	if (!bOnlyTriggerFirstPassingCase && GetDefault<UFlowSettings>()->bUseAdaptiveNodeTitles)
-	{
-		return FText::Format(LOCTEXT("SwitchTitle", "{0} (All Passing)"), {Super::K2_GetNodeTitle_Implementation()});
-	}
-
-	return Super::K2_GetNodeTitle_Implementation();
-}
-
 #undef LOCTEXT_NAMESPACE
+
+#if WITH_EDITOR
+const FFlowAgentDoc& UFlowNode_Switch::GetAgentDoc() const
+{
+	static const FFlowAgentDoc Doc = MakeAgentDoc(
+		/*Guidance*/ TEXT("Unlike Branch (True/False only), Switch supports N named cases via attached switch-case AddOns. Set bOnlyTriggerFirstPassingCase = false to allow multiple passing cases to fire in a single Evaluate rather than stopping at the first."),
+		/*Tags*/     { TEXT("route"), TEXT("switch"), TEXT("predicate") },
+		/*Articles*/ {  });
+	return Doc;
+}
+#endif

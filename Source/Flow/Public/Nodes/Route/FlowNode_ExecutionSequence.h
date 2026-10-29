@@ -5,7 +5,9 @@
 #include "FlowNode_ExecutionSequence.generated.h"
 
 /**
- * Executes all outputs sequentially.
+ * Fires all output pins sequentially in order when its input is triggered.
+ * All connected outputs execute in the same frame unless downstream nodes suspend (async).
+ * Use bSavePinExecutionState to persist which outputs have already fired when save/load is used during gameplay.
  */
 UCLASS(NotBlueprintable, meta = (DisplayName = "Sequence"))
 class FLOW_API UFlowNode_ExecutionSequence final : public UFlowNode
@@ -37,7 +39,11 @@ public:
 #endif
 
 	virtual void ExecuteInput(const FName& PinName) override;
+
+protected:
 	virtual void OnLoad_Implementation() override;
+
+public:
 	virtual void Cleanup() override;
 
 protected:
@@ -46,5 +52,10 @@ protected:
 #if WITH_EDITOR
 public:
 	virtual FString GetNodeDescription() const override;
+#endif
+
+#if WITH_EDITOR
+public:
+	virtual const FFlowAgentDoc& GetAgentDoc() const override;
 #endif
 };

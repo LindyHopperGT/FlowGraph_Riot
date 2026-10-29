@@ -28,20 +28,18 @@ class FLOW_API UFlowSubsystem : public UGameInstanceSubsystem
 	GENERATED_BODY()
 
 public:
-	UFlowSubsystem();
-
 	friend class UFlowAsset;
 	friend class UFlowComponent;
 	friend class UFlowNode_SubGraph;
 
 	virtual bool ShouldCreateSubsystem(UObject* Outer) const override;
 	virtual UWorld* GetWorld() const override;
-	
+
 	virtual void Deinitialize() override;
 
 //////////////////////////////////////////////////////////////////////////
 // Lifetime cycle of Flow Asset instances
-	
+
 protected:
 	/* All asset templates with active instances */
 	UPROPERTY()
@@ -56,6 +54,7 @@ protected:
 	TMap<TObjectPtr<UFlowNode_SubGraph>, TObjectPtr<UFlowAsset>> InstancedSubFlows;
 
 #if !UE_BUILD_SHIPPING
+
 public:
 	/* Called after creating the first instance of given Flow Asset */
 	static FNativeFlowAssetEvent OnInstancedTemplateAdded;
@@ -78,38 +77,37 @@ public:
 	 * Nodes have opportunity to terminate themselves differently if Flow Graph has been aborted
 	 * Example: Spawn node might despawn all actors if Flow Graph is aborted, not completed */
 	UFUNCTION(BlueprintCallable, Category = "FlowSubsystem", meta = (DefaultToSelf = "Owner"))
-	virtual void FinishRootFlow(UObject* Owner, UFlowAsset* TemplateAsset, const EFlowFinishPolicy FinishPolicy);
+	virtual void FinishAndDeinitializeRootFlow(UObject* Owner, UFlowAsset* TemplateAsset, const EFlowFinishPolicy FinishPolicy);
 
 	/* Finish Policy value is read by Flow Node
 	 * Nodes have opportunity to terminate themselves differently if Flow Graph has been aborted
 	 * Example: Spawn node might despawn all actors if Flow Graph is aborted, not completed */
 	UFUNCTION(BlueprintCallable, Category = "FlowSubsystem", meta = (DefaultToSelf = "Owner"))
-	virtual void FinishAllRootFlows(UObject* Owner, const EFlowFinishPolicy FinishPolicy);
+	virtual void FinishAndDeinitializeAllRootFlows(UObject* Owner, const EFlowFinishPolicy FinishPolicy);
 
 protected:
+	virtual void FinishAndDeinitializeInstance(UFlowAsset* InstanceToFinish, const EFlowFinishPolicy FinishPolicy);
+
 	UFlowAsset* CreateSubFlow(UFlowNode_SubGraph* SubGraphNode, const FString& SavedInstanceName = FString(), const bool bPreloading = false);
-	void RemoveSubFlow(UFlowNode_SubGraph* SubGraphNode, const EFlowFinishPolicy FinishPolicy);
+
+	/* Finishes the SubFlow running in the SubGraphNode.
+	 * Optionally: deinitialize instance and remove Flow Asset instance. */
+	void FinishSubFlow(UFlowNode_SubGraph* SubGraphNode, const EFlowFinishPolicy FinishPolicy, const bool bRemoveInstance);
 
 public:
-	UFlowAsset* CreateFlowInstance(const TWeakObjectPtr<UObject> Owner, UFlowAsset* LoadedFlowAsset, FString NewInstanceName = FString());
+	/* bStartReplication registers the instance as a replicated subobject of Owner right after creation.
+	 * SubGraph instance starts replication on its activation instead, so a preloaded instance isn't sent to clients. */
+	UFlowAsset* CreateFlowInstance(const TWeakObjectPtr<UObject> Owner, UFlowAsset* LoadedFlowAsset, FString NewInstanceName = FString(), const bool bStartReplication = true, UFlowAsset* OwningFlowInstance = nullptr);
 
 protected:
 	virtual void AddInstancedTemplate(UFlowAsset* Template);
 	virtual void RemoveInstancedTemplate(UFlowAsset* Template);
 
 public:
-	/* Try to flush (and clear) all Deferred Trigger scopes.
-	 * (can fail to flush all if a FFlowExecutionGate causes a new halt) */
-	bool TryFlushAllDeferredTriggerScopes() const;
-
-	/* Clear (do not trigger) any remaining deferred transitions. (for shutdown cases) */
-	void ClearAllDeferredTriggerScopes();
-
-public:
 	/* Returns all assets instanced by object from another system like World Settings */
 	UFUNCTION(BlueprintPure, Category = "FlowSubsystem")
 	TMap<UObject*, UFlowAsset*> GetRootInstances() const;
-	
+
 	/* Returns asset instanced by specific object */
 	UFUNCTION(BlueprintPure, Category = "FlowSubsystem")
 	TSet<UFlowAsset*> GetRootInstancesByOwner(const UObject* Owner) const;
@@ -120,7 +118,6 @@ public:
 	/* Returns assets instanced by Sub Graph nodes */
 	UFUNCTION(BlueprintPure, Category = "FlowSubsystem")
 	const TMap<UFlowNode_SubGraph*, UFlowAsset*>& GetInstancedSubFlows() const { return ObjectPtrDecay(InstancedSubFlows); }
-
 
 //////////////////////////////////////////////////////////////////////////
 // SaveGame support
@@ -257,6 +254,22 @@ public:
 	TMap<AActor*, UFlowComponent*> GetFlowActorsAndComponentsByTags(const FGameplayTagContainer Tags, const EGameplayContainerMatchType MatchType, const TSubclassOf<AActor> ActorClass, const bool bExactMatch = true) const;
 
 	/**
+	 * Returns all registered Flow Components identified by given Identity.
+	 * Note: Class filters are never loaded by this query.
+	 * @param Identity Identity that describes Component and Actor pair
+	 */
+	UFUNCTION(BlueprintPure, Category = "FlowSubsystem")
+	TSet<UFlowComponent*> GetFlowComponentsByIdentity(const struct FFlowIdentity& Identity) const;
+
+	/**
+	 * Returns all registered actors with Flow Component identified by given Identity.
+	 * Note: Class filters are never loaded by this query.
+	 * @param Identity Identity that describes Component and Actor pair
+	 */
+	UFUNCTION(BlueprintPure, Category = "FlowSubsystem")
+	TSet<AActor*> GetFlowActorsByIdentity(const FFlowIdentity& Identity) const;
+
+	/**
 	 * Returns all registered Flow Components identified by given tag
 	 * 
 	 * @tparam T Only components matching this class we'll be returned
@@ -274,12 +287,9 @@ public:
 		TSet<TWeakObjectPtr<T>> Result;
 		for (const TWeakObjectPtr<UFlowComponent>& Component : FoundComponents)
 		{
-			if (Component.IsValid())
+			if (T* ComponentOfClass = Cast<T>(Component.Get()))
 			{
-				if (T* ComponentOfClass = Cast<T>(Component))
-				{
-					Result.Emplace(ComponentOfClass);
-				}
+				Result.Emplace(ComponentOfClass);
 			}
 		}
 
@@ -305,12 +315,9 @@ public:
 		TSet<TWeakObjectPtr<T>> Result;
 		for (const TWeakObjectPtr<UFlowComponent>& Component : FoundComponents)
 		{
-			if (Component.IsValid())
+			if (T* ComponentOfClass = Cast<T>(Component.Get()))
 			{
-				if (T* ComponentOfClass = Cast<T>(Component))
-				{
-					Result.Emplace(ComponentOfClass);
-				}
+				Result.Emplace(ComponentOfClass);
 			}
 		}
 
@@ -335,9 +342,9 @@ public:
 		TSet<TWeakObjectPtr<T>> Result;
 		for (const TWeakObjectPtr<UFlowComponent>& Component : FoundComponents)
 		{
-			if (Component.IsValid())
+			if (const UFlowComponent* FlowComponent = Component.Get())
 			{
-				if (T* ActorOfClass = Cast<T>(Component->GetOwner()))
+				if (T* ActorOfClass = Cast<T>(FlowComponent->GetOwner()))
 				{
 					Result.Emplace(ActorOfClass);
 				}
@@ -366,9 +373,9 @@ public:
 		TSet<TWeakObjectPtr<T>> Result;
 		for (const TWeakObjectPtr<UFlowComponent>& Component : FoundComponents)
 		{
-			if (Component.IsValid())
+			if (const UFlowComponent* FlowComponent = Component.Get())
 			{
-				if (T* ActorOfClass = Cast<T>(Component->GetOwner()))
+				if (T* ActorOfClass = Cast<T>(FlowComponent->GetOwner()))
 				{
 					Result.Emplace(ActorOfClass);
 				}
@@ -398,10 +405,10 @@ public:
 		TMap<TWeakObjectPtr<ActorT>, TWeakObjectPtr<ComponentT>> Result;
 		for (const TWeakObjectPtr<UFlowComponent>& Component : FoundComponents)
 		{
-			if (Component.IsValid())
+			if (UFlowComponent* FlowComponent = Component.Get())
 			{
-				ComponentT* ComponentOfClass = Cast<ComponentT>(Component);
-				ActorT* ActorOfClass = Cast<ActorT>(Component->GetOwner());
+				ComponentT* ComponentOfClass = Cast<ComponentT>(FlowComponent);
+				ActorT* ActorOfClass = Cast<ActorT>(FlowComponent->GetOwner());
 				if (ComponentOfClass && ActorOfClass)
 				{
 					Result.Emplace(ActorOfClass, ComponentOfClass);
@@ -433,10 +440,10 @@ public:
 		TMap<TWeakObjectPtr<ActorT>, TWeakObjectPtr<ComponentT>> Result;
 		for (const TWeakObjectPtr<UFlowComponent>& Component : FoundComponents)
 		{
-			if (Component.IsValid())
+			if (UFlowComponent* FlowComponent = Component.Get())
 			{
-				ComponentT* ComponentOfClass = Cast<ComponentT>(Component);
-				ActorT* ActorOfClass = Cast<ActorT>(Component->GetOwner());
+				ComponentT* ComponentOfClass = Cast<ComponentT>(FlowComponent);
+				ActorT* ActorOfClass = Cast<ActorT>(FlowComponent->GetOwner());
 				if (ComponentOfClass && ActorOfClass)
 				{
 					Result.Emplace(ActorOfClass, ComponentOfClass);
