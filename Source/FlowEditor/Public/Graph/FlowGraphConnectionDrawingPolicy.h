@@ -3,6 +3,7 @@
 
 #include "ConnectionDrawingPolicy.h"
 #include "EdGraphUtilities.h"
+#include "FlowGraphConnectionDrawingPolicy.generated.h"
 
 #include "FlowGraphConnectionDrawingPolicy.generated.h"
 

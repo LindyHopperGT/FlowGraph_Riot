@@ -166,6 +166,8 @@ protected:
 	virtual void CreateGraphWidget();
 
 	bool CanEdit() const;
+	void SetCanEditInPIE(bool bValue);
+
 	static bool IsPropertyVisible(const FPropertyAndParent& PropertyAndParent);
 
 public:
