@@ -1093,7 +1093,8 @@ void UFlowAsset::ClearInstances()
 	{
 		if (ActiveInstances.IsValidIndex(i) && ActiveInstances[i])
 		{
-			// FinishFlowInstance override might already deinitialize the instance, removing it from ActiveInstances
+			// NOTE - FinishFlowInstance override might already deinitialize the instance, 
+			// removing it from ActiveInstances array, so we're caching a pointer to it first.
 			UFlowAsset* Instance = ActiveInstances[i];
 			Instance->FinishFlowInstance(EFlowFinishPolicy::Keep);
 			Instance->DeinitializeInstance();
